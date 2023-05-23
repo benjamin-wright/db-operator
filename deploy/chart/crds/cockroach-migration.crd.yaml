@@ -1,0 +1,46 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cockroachmigrations.ponglehub.co.uk
+spec:
+  group: ponglehub.co.uk
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                deployment:
+                  type: string
+                database:
+                  type: string
+                migration:
+                  type: string
+                index:
+                  type: integer
+              required: [ deployment, database, migration, index ]
+            status:
+              type: object
+              properties:
+                applied:
+                  type: boolean
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+      - name: Applied
+        type: boolean
+        description: Reports whether the migration has been run
+        jsonPath: .status.applied
+  scope: Namespaced
+  names:
+    plural: cockroachmigrations
+    singular: cockroachmigration
+    kind: CockroachMigration
+    shortNames:
+    - cm
+    - cms

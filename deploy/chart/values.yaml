@@ -1,0 +1,4 @@
+# name:
+# image:
+replicas: 1
+rbacs: []
