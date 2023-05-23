@@ -22,6 +22,10 @@ type RedisSecret struct {
 	ResourceVersion string
 }
 
+func (s *RedisSecret) GetHost(namespace string) string {
+	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB, namespace)
+}
+
 func (s *RedisSecret) ToUnstructured(namespace string) *unstructured.Unstructured {
 	secret := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -35,7 +39,7 @@ func (s *RedisSecret) ToUnstructured(namespace string) *unstructured.Unstructure
 				}, LABEL_FILTERS),
 			},
 			"data": map[string]interface{}{
-				"REDIS_HOST": encode("%s.%s.svc.cluster.local", s.DB, namespace),
+				"REDIS_HOST": encode(s.GetHost(namespace)),
 				"REDIS_PORT": encode("6379"),
 				"REDIS_UNIT": encode(strconv.FormatInt(int64(s.Unit), 10)),
 			},

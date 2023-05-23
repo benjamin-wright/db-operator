@@ -23,10 +23,16 @@ type CockroachSecret struct {
 	ResourceVersion string
 }
 
-func encode(format string, args ...interface{}) string {
-	return base64.StdEncoding.EncodeToString([]byte(
-		fmt.Sprintf(format, args...),
-	))
+func encode(data string) string {
+	return base64.StdEncoding.EncodeToString([]byte(data))
+}
+
+func (s *CockroachSecret) GetHost(namespace string) string {
+	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB, namespace)
+}
+
+func (s *CockroachSecret) GetPort() string {
+	return "26257"
 }
 
 func (s *CockroachSecret) ToUnstructured(namespace string) *unstructured.Unstructured {
@@ -42,8 +48,8 @@ func (s *CockroachSecret) ToUnstructured(namespace string) *unstructured.Unstruc
 				}, LABEL_FILTERS),
 			},
 			"data": map[string]interface{}{
-				"POSTGRES_HOST": encode("%s.%s.svc.cluster.local", s.DB, namespace),
-				"POSTGRES_PORT": encode("26257"),
+				"POSTGRES_HOST": encode(s.GetHost(namespace)),
+				"POSTGRES_PORT": encode(s.GetPort()),
 				"POSTGRES_USER": encode(s.User),
 				"POSTGRES_NAME": encode(s.Database),
 			},

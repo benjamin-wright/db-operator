@@ -1,4 +1,15 @@
-# name:
 # image:
+
+name: db-operator
 replicas: 1
-rbacs: []
+
+rbacs:
+- apiGroups: ["apps", ""]
+  resources: ["statefulsets", "services", "secrets", "events"]
+  verbs: ["create", "get", "list", "watch", "update", "delete"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "delete"]
+- apiGroups: ["ponglehub.co.uk"]
+  resources: ["cockroachdbs", "cockroachmigrations", "cockroachclients", "redisdbs", "redisclients"]
+  verbs: ["get", "list", "watch", "update"]

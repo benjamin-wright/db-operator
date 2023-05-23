@@ -94,6 +94,23 @@ func (c *Client[T, PT]) Create(ctx context.Context, resource T) error {
 	return nil
 }
 
+func (c *Client[T, PT]) Get(ctx context.Context, name string) (T, error) {
+	var object T
+	ptr := PT(&object)
+
+	res, err := c.client.Resource(c.schema).Namespace(c.namespace).Get(ctx, name, v1.GetOptions{})
+	if err != nil {
+		return object, fmt.Errorf("failed to get %T: %s", object, name)
+	}
+
+	err = ptr.FromUnstructured(res)
+	if err != nil {
+		return object, fmt.Errorf("failed to parse %T: %+v", object, err)
+	}
+
+	return object, nil
+}
+
 func (c *Client[T, PT]) Delete(ctx context.Context, name string) error {
 	err := c.client.Resource(c.schema).Namespace(c.namespace).Delete(ctx, name, v1.DeleteOptions{})
 	if err != nil {

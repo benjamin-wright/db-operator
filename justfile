@@ -36,13 +36,23 @@ clear-context:
     fi
 
 crds:
-    KUBECONFIG=".scratch/kubeconfig" kubectl apply -f deploy/chart/crds
+    KUBECONFIG="$(pwd)/.scratch/kubeconfig" kubectl apply -f deploy/chart/crds
 
-run:
-    KUBECONFIG=".scratch/kubeconfig" NAMESPACE=default go run .
+tilt:
+    KUBECONFIG=.scratch/kubeconfig tilt up
 
 test:
-    KUBECONFIG=".scratch/kubeconfig" NAMESPACE=default go test -v ./...
+    go test --short -v ./...
 
-image:
-    docker build -t "{{ image_name }}" -f deploy/Dockerfile .
+int-test NAMESPACE:
+    KUBECONFIG="$(pwd)/.scratch/kubeconfig" NAMESPACE="{{NAMESPACE}}" go test -run Integration -v ./...
+
+build IMAGE_TAG:
+    mkdir -p ./dist
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ./dist/app ./cmd/operator/main.go
+    docker build -t "{{IMAGE_TAG}}" -f deploy/Dockerfile ./dist
+
+build-test IMAGE_TAG:
+    mkdir -p ./dist
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o ./dist/tests ./tests
+    docker build -t "{{IMAGE_TAG}}" -f deploy/Test.Dockerfile ./dist

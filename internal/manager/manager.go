@@ -214,7 +214,6 @@ func (m *Manager) Start() {
 }
 
 func (m *Manager) refresh() {
-
 	select {
 	case <-m.ctx.Done():
 	case update := <-m.streams.cdbs:
