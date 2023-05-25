@@ -111,6 +111,55 @@ func (c *Client[T, PT]) Get(ctx context.Context, name string) (T, error) {
 	return object, nil
 }
 
+// function to get all resources
+func (c *Client[T, PT]) GetAll(ctx context.Context) ([]T, error) {
+	var objects []T
+
+	res, err := c.client.Resource(c.schema).Namespace(c.namespace).List(ctx, v1.ListOptions{})
+	if err != nil {
+		return objects, fmt.Errorf("failed to get all %T: %+v", objects, err)
+	}
+
+	ignore := func(obj interface{}) bool {
+		if c.labelFilters == nil {
+			return false
+		}
+
+		u := obj.(*unstructured.Unstructured)
+
+		for key, value := range c.labelFilters {
+			label, err := GetProperty[string](u, "metadata", "labels", key)
+			if err != nil {
+				return true
+			}
+
+			if label != value {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	for _, item := range res.Items {
+		var object T
+		ptr := PT(&object)
+
+		if ignore(&item) {
+			continue
+		}
+
+		err = ptr.FromUnstructured(&item)
+		if err != nil {
+			return objects, fmt.Errorf("failed to parse %T: %+v", objects, err)
+		}
+
+		objects = append(objects, object)
+	}
+
+	return objects, nil
+}
+
 func (c *Client[T, PT]) Delete(ctx context.Context, name string) error {
 	err := c.client.Resource(c.schema).Namespace(c.namespace).Delete(ctx, name, v1.DeleteOptions{})
 	if err != nil {

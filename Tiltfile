@@ -55,7 +55,8 @@ k8s_yaml(helm(
 
 k8s_resource(
     'db-operator',
-    labels=["operator"]
+    labels=["operator"],
+    trigger_mode=TRIGGER_MODE_MANUAL,
 )
 
 k8s_yaml(helm(
@@ -70,5 +71,6 @@ k8s_yaml(helm(
 k8s_resource(
     'db-operator-test',
     labels=["tests"],
-    trigger_mode=TRIGGER_MODE_MANUAL
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    auto_init=False
 )

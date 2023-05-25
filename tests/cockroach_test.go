@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"ponglehub.co.uk/db-operator/internal/services/k8s/resources"
 	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
 	"ponglehub.co.uk/db-operator/pkg/postgres"
+	postgres_helpers "ponglehub.co.uk/db-operator/pkg/test_utils/postgres"
 )
 
 func makeCockroachClients(t *testing.T, namespace string) (
@@ -19,6 +21,7 @@ func makeCockroachClients(t *testing.T, namespace string) (
 	*k8s_generic.Client[crds.CockroachClient, *crds.CockroachClient],
 	*k8s_generic.Client[crds.CockroachMigration, *crds.CockroachMigration],
 	*k8s_generic.Client[resources.CockroachSecret, *resources.CockroachSecret],
+	*k8s_generic.Client[resources.CockroachStatefulSet, *resources.CockroachStatefulSet],
 ) {
 	cdbs, err := crds.NewCockroachDBClient(namespace)
 	if err != nil {
@@ -44,7 +47,13 @@ func makeCockroachClients(t *testing.T, namespace string) (
 		t.FailNow()
 	}
 
-	return cdbs, cclients, cms, csc
+	css, err := resources.NewCockroachStatefulSetClient(namespace)
+	if err != nil {
+		t.Logf("failed to create c statefule set client: %+v", err)
+		t.FailNow()
+	}
+
+	return cdbs, cclients, cms, csc, css
 }
 
 func TestCockroachIntegration(t *testing.T) {
@@ -59,11 +68,23 @@ func TestCockroachIntegration(t *testing.T) {
 
 	namespace := os.Getenv("NAMESPACE")
 
-	cdbs, cclients, cms, csc := makeCockroachClients(t, namespace)
+	cdbs, cclients, cms, csc, css := makeCockroachClients(t, namespace)
 
 	mustPass(t, cdbs.DeleteAll(context.Background()))
 	mustPass(t, cclients.DeleteAll(context.Background()))
 	mustPass(t, cms.DeleteAll(context.Background()))
+	mustPass(t, waitForFail(func() error {
+		sss, err := css.GetAll(context.Background())
+		if err != nil {
+			assert.FailNow(t, "failed to get stateful sets", err)
+		}
+
+		if len(sss) > 0 {
+			return nil
+		}
+
+		return errors.New("no stateful sets found")
+	}))
 
 	mustPass(t, cdbs.Create(context.Background(), crds.CockroachDB{
 		CockroachDBComparable: crds.CockroachDBComparable{
@@ -85,7 +106,7 @@ func TestCockroachIntegration(t *testing.T) {
 	mustPass(t, cms.Create(context.Background(), crds.CockroachMigration{
 		CockroachMigrationComparable: crds.CockroachMigrationComparable{
 			Name:       "mig1",
-			Deployment: "random-db",
+			Deployment: "different-db",
 			Database:   "new_db",
 			Migration: `
 				CREATE TABLE hithere (
@@ -104,19 +125,19 @@ func TestCockroachIntegration(t *testing.T) {
 	port, err := strconv.ParseInt(secret.GetPort(), 10, 0)
 	mustPass(t, err)
 
-	conn, err := postgres.Connect(postgres.ConnectConfig{
+	pg, err := postgres_helpers.New(postgres.ConnectConfig{
 		Host:     secret.GetHost(namespace),
 		Port:     int(port),
 		Username: secret.User,
+		Database: "new_db",
 	})
 	mustPass(t, err)
 
-	rows, err := conn.Query(context.Background(), "SHOW TABLES")
-	mustPass(t, err)
-	defer rows.Close()
+	tables := pg.GetTableNames(t)
 
-	data, err := rows.Values()
-	mustPass(t, err)
-
-	assert.Equal(t, []interface{}{}, data)
+	expected := []string{
+		"migrations",
+		"hithere",
+	}
+	assert.Equal(t, expected, tables)
 }

@@ -54,3 +54,36 @@ func waitFor[T any](f func() (T, error)) (T, error) {
 		return empty, err
 	}
 }
+
+func waitForFail(f func() error) error {
+	resultChan := make(chan struct{}, 1)
+	errorChan := make(chan struct{}, 1)
+
+	go func(resultChan chan<- struct{}, errorChan chan<- struct{}) {
+		after := time.After(time.Minute)
+
+		for {
+			select {
+			case <-after:
+				errorChan <- struct{}{}
+				return
+			default:
+			}
+
+			err := f()
+			if err == nil {
+				time.Sleep(time.Second)
+			} else {
+				resultChan <- struct{}{}
+				return
+			}
+		}
+	}(resultChan, errorChan)
+
+	select {
+	case <-errorChan:
+		return errors.New("timed out waiting for failure")
+	case <-resultChan:
+		return nil
+	}
+}
