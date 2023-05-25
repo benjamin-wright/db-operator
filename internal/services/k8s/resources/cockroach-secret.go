@@ -42,7 +42,7 @@ func (s *CockroachSecret) ToUnstructured(namespace string) *unstructured.Unstruc
 			"kind":       "Secret",
 			"metadata": map[string]interface{}{
 				"name": s.Name,
-				"labels": k8s_generic.Merge(map[string]interface{}{
+				"labels": k8s_generic.Merge(map[string]string{
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "cockroachdb",
 				}, LABEL_FILTERS),
@@ -109,7 +109,7 @@ func NewCockroachSecretClient(namespace string) (*k8s_generic.Client[CockroachSe
 		},
 		"Secret",
 		namespace,
-		k8s_generic.Merge(map[string]interface{}{
+		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "cockroachdb",
 		}, LABEL_FILTERS),
 	)

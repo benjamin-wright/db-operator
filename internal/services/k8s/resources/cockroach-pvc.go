@@ -73,7 +73,7 @@ func NewCockroachPVCClient(namespace string) (*k8s_generic.Client[CockroachPVC, 
 		},
 		"PersistentVolumeClaim",
 		namespace,
-		k8s_generic.Merge(map[string]interface{}{
+		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "cockroachdb",
 		}, LABEL_FILTERS),
 	)

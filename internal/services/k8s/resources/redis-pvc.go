@@ -72,7 +72,7 @@ func NewRedisPVCClient(namespace string) (*k8s_generic.Client[RedisPVC, *RedisPV
 		},
 		"PersistentVolumeClaim",
 		namespace,
-		k8s_generic.Merge(map[string]interface{}{
+		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "redis",
 		}, LABEL_FILTERS),
 	)

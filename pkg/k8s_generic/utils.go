@@ -64,8 +64,8 @@ func GetProperty[T BasicType](u *unstructured.Unstructured, args ...string) (T, 
 	return value, nil
 }
 
-func Merge(maps ...map[string]interface{}) map[string]interface{} {
-	output := map[string]interface{}{}
+func Merge(maps ...map[string]string) map[string]string {
+	output := map[string]string{}
 
 	for _, m := range maps {
 		for key, value := range m {

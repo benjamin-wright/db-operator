@@ -23,7 +23,7 @@ func (s *RedisService) ToUnstructured(namespace string) *unstructured.Unstructur
 			"kind":       "Service",
 			"metadata": map[string]interface{}{
 				"name": s.Name,
-				"labels": k8s_generic.Merge(map[string]interface{}{
+				"labels": k8s_generic.Merge(map[string]string{
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "redis",
 				}, LABEL_FILTERS),
@@ -79,7 +79,7 @@ func NewRedisServiceClient(namespace string) (*k8s_generic.Client[RedisService, 
 		},
 		"Service",
 		namespace,
-		k8s_generic.Merge(map[string]interface{}{
+		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "redis",
 		}, LABEL_FILTERS),
 	)

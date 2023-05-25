@@ -27,7 +27,7 @@ func (s *CockroachStatefulSet) ToUnstructured(namespace string) *unstructured.Un
 			"kind":       "StatefulSet",
 			"metadata": map[string]interface{}{
 				"name": s.Name,
-				"labels": k8s_generic.Merge(map[string]interface{}{
+				"labels": k8s_generic.Merge(map[string]string{
 					"ponglehub.co.uk/resource-type": "cockroachdb",
 				}, LABEL_FILTERS),
 			},
@@ -111,7 +111,7 @@ func (s *CockroachStatefulSet) ToUnstructured(namespace string) *unstructured.Un
 					{
 						"metadata": map[string]interface{}{
 							"name": "datadir",
-							"labels": k8s_generic.Merge(map[string]interface{}{
+							"labels": k8s_generic.Merge(map[string]string{
 								"ponglehub.co.uk/resource-type": "cockroachdb",
 							}, LABEL_FILTERS),
 						},
@@ -194,7 +194,7 @@ func NewCockroachStatefulSetClient(namespace string) (*k8s_generic.Client[Cockro
 		},
 		"StatefulSet",
 		namespace,
-		k8s_generic.Merge(map[string]interface{}{
+		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "cockroachdb",
 		}, LABEL_FILTERS),
 	)

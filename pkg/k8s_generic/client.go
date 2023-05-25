@@ -37,10 +37,10 @@ type Client[T any, PT Resource[T]] struct {
 	namespace    string
 	schema       schema.GroupVersionResource
 	kind         string
-	labelFilters map[string]interface{}
+	labelFilters map[string]string
 }
 
-func New[T any, PT Resource[T]](resourceSchema schema.GroupVersionResource, kind string, namespace string, labelFilters map[string]interface{}) (*Client[T, PT], error) {
+func New[T any, PT Resource[T]](resourceSchema schema.GroupVersionResource, kind string, namespace string, labelFilters map[string]string) (*Client[T, PT], error) {
 	kubeconfig := os.Getenv("KUBECONFIG")
 	var config *rest.Config
 	var err error
@@ -114,40 +114,21 @@ func (c *Client[T, PT]) Get(ctx context.Context, name string) (T, error) {
 // function to get all resources
 func (c *Client[T, PT]) GetAll(ctx context.Context) ([]T, error) {
 	var objects []T
-
-	res, err := c.client.Resource(c.schema).Namespace(c.namespace).List(ctx, v1.ListOptions{})
-	if err != nil {
-		return objects, fmt.Errorf("failed to get all %T: %+v", objects, err)
+	options := v1.ListOptions{}
+	if len(c.labelFilters) > 0 {
+		options.LabelSelector = v1.FormatLabelSelector(&v1.LabelSelector{
+			MatchLabels: c.labelFilters,
+		})
 	}
 
-	ignore := func(obj interface{}) bool {
-		if c.labelFilters == nil {
-			return false
-		}
-
-		u := obj.(*unstructured.Unstructured)
-
-		for key, value := range c.labelFilters {
-			label, err := GetProperty[string](u, "metadata", "labels", key)
-			if err != nil {
-				return true
-			}
-
-			if label != value {
-				return true
-			}
-		}
-
-		return false
+	res, err := c.client.Resource(c.schema).Namespace(c.namespace).List(ctx, options)
+	if err != nil {
+		return objects, fmt.Errorf("failed to get all %T: %+v", objects, err)
 	}
 
 	for _, item := range res.Items {
 		var object T
 		ptr := PT(&object)
-
-		if ignore(&item) {
-			continue
-		}
 
 		err = ptr.FromUnstructured(&item)
 		if err != nil {
@@ -196,26 +177,6 @@ type Update[T any] struct {
 
 func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<-chan Update[T], error) {
 	output := make(chan Update[T], 1)
-	ignore := func(obj interface{}) bool {
-		if c.labelFilters == nil {
-			return false
-		}
-
-		u := obj.(*unstructured.Unstructured)
-
-		for key, value := range c.labelFilters {
-			label, err := GetProperty[string](u, "metadata", "labels", key)
-			if err != nil {
-				return true
-			}
-
-			if label != value {
-				return true
-			}
-		}
-
-		return false
-	}
 
 	convert := func(obj interface{}) T {
 		var res T
@@ -227,15 +188,19 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<
 		return res
 	}
 
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(c.client, time.Minute, c.namespace, nil)
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(c.client, time.Minute, c.namespace, func(lo *v1.ListOptions) {
+		if len(c.labelFilters) == 0 {
+			return
+		}
+
+		lo.LabelSelector = v1.FormatLabelSelector(&v1.LabelSelector{
+			MatchLabels: c.labelFilters,
+		})
+	})
 	informer := factory.ForResource(c.schema).Informer()
 
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			if ignore(obj) {
-				return
-			}
-
 			res := convert(obj)
 
 			output <- Update[T]{
@@ -244,10 +209,6 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			if ignore(oldObj) || ignore(newObj) {
-				return
-			}
-
 			oldRes := convert(oldObj)
 			newRes := convert(newObj)
 
@@ -259,10 +220,6 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
-			if ignore(obj) {
-				return
-			}
-
 			res := convert(obj)
 
 			output <- Update[T]{
