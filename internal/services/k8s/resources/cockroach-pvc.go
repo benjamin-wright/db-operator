@@ -21,11 +21,7 @@ type CockroachPVC struct {
 }
 
 func (p *CockroachPVC) ToUnstructured(namespace string) *unstructured.Unstructured {
-	pvc := &unstructured.Unstructured{
-		Object: map[string]interface{}{},
-	}
-
-	return pvc
+	panic("not implemented")
 }
 
 func (p *CockroachPVC) FromUnstructured(obj *unstructured.Unstructured) error {

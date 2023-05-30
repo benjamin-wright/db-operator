@@ -56,6 +56,8 @@ func Connect(config ConnectConfig) (*pgx.Conn, error) {
 		return nil, err
 	}
 
+	pgxConfig.ConnectTimeout = time.Second * 2
+
 	conn := getConnection(pgxConfig)
 	if conn == nil {
 		return nil, errors.New("failed to create connection, exiting")

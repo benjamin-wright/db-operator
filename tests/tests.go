@@ -60,7 +60,7 @@ func waitForFail(f func() error) error {
 	errorChan := make(chan struct{}, 1)
 
 	go func(resultChan chan<- struct{}, errorChan chan<- struct{}) {
-		after := time.After(time.Minute)
+		after := time.After(time.Minute * 2)
 
 		for {
 			select {

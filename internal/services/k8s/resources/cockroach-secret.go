@@ -46,6 +46,7 @@ func (s *CockroachSecret) ToUnstructured(namespace string) *unstructured.Unstruc
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "cockroachdb",
 				}, LABEL_FILTERS),
+				"namespace": namespace,
 			},
 			"data": map[string]interface{}{
 				"POSTGRES_HOST": encode(s.GetHost(namespace)),

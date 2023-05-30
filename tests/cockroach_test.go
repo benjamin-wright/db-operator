@@ -43,13 +43,13 @@ func makeCockroachClients(t *testing.T, namespace string) (
 
 	csc, err := resources.NewCockroachSecretClient(namespace)
 	if err != nil {
-		t.Logf("failed to create cmigrations client: %+v", err)
+		t.Logf("failed to create csecret client: %+v", err)
 		t.FailNow()
 	}
 
 	css, err := resources.NewCockroachStatefulSetClient(namespace)
 	if err != nil {
-		t.Logf("failed to create c statefule set client: %+v", err)
+		t.Logf("failed to create cstateful set client: %+v", err)
 		t.FailNow()
 	}
 
