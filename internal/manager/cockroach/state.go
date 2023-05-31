@@ -19,7 +19,6 @@ type State struct {
 	cdatabases   state.Bucket[cockroach.Database, *cockroach.Database]
 	cusers       state.Bucket[cockroach.User, *cockroach.User]
 	cpermissions state.Bucket[cockroach.Permission, *cockroach.Permission]
-	capplied     state.Bucket[cockroach.Migration, *cockroach.Migration]
 }
 
 func (s *State) Apply(update interface{}) {
@@ -42,8 +41,6 @@ func (s *State) Apply(update interface{}) {
 		s.cusers.Apply(u)
 	case k8s_generic.Update[cockroach.Permission]:
 		s.cpermissions.Apply(u)
-	case k8s_generic.Update[cockroach.Migration]:
-		s.capplied.Apply(u)
 	default:
 		zap.S().Errorf("Wat dis? Unknown state update for type %T", u)
 	}

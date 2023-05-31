@@ -123,7 +123,6 @@ func New(
 		cdatabases:   state.NewBucket[cockroach.Database](),
 		cusers:       state.NewBucket[cockroach.User](),
 		cpermissions: state.NewBucket[cockroach.Permission](),
-		capplied:     state.NewBucket[cockroach.Migration](),
 	}
 
 	return &Manager{
