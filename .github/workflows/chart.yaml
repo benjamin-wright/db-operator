@@ -5,7 +5,7 @@ on:
     tags:
       - '*'
 jobs:
-  docker:
+  chart:
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -24,4 +24,4 @@ jobs:
       - name: build
         run: helm package deploy/chart --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
       - name: push to dockerhub
-        run: helm push operator-${{ github.ref_name }}.tgz oci://benwright/db-operator-chart:${{ github.ref_name }}
+        run: helm push operator-${{ github.ref_name }}.tgz oci://registry-1.docker.io/benwright
