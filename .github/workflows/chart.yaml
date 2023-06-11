@@ -24,4 +24,4 @@ jobs:
       - name: build
         run: helm package deploy/chart --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
       - name: push to dockerhub
-        run: helm push operator-${{ github.ref_name }}.tgz oci://registry-1.docker.io/benwright
+        run: helm push db-operator-chart-${{ github.ref_name }}.tgz oci://registry-1.docker.io/benwright
