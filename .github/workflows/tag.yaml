@@ -18,8 +18,16 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_HUB_USER_NAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-      - name: Build and push
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.19'
+      - name: Build
+        run: go build -v cmd/operator/main.go -o dist/app
+      - name: Image
         uses: docker/build-push-action@v4
         with:
+          context: ./dist
+          file: ./deploy/Dockerfile
           push: true
-          tags: benwright/db-operator:${{ github.tag }}
+          tags: benwright/db-operator:${{ github.ref_name }}
