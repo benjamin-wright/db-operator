@@ -22,8 +22,10 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.19'
+      - name: Install dependencies
+        run: go get .
       - name: Build
-        run: go build -v cmd/operator/main.go -o dist/app
+        run: go build -v -o ./dist/app ./cmd/operator/main.go
       - name: Image
         uses: docker/build-push-action@v4
         with:
