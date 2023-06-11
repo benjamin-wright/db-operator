@@ -44,9 +44,6 @@ tilt:
 test:
     go test --short -v ./...
 
-int-test NAMESPACE:
-    KUBECONFIG="$(pwd)/.scratch/kubeconfig" NAMESPACE="{{NAMESPACE}}" go test -run Integration -v ./...
-
 build IMAGE_TAG:
     mkdir -p ./dist
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ./dist/app ./cmd/operator/main.go
@@ -56,3 +53,7 @@ build-test IMAGE_TAG:
     mkdir -p ./dist
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o ./dist/tests ./tests
     docker build -t "{{IMAGE_TAG}}" -f deploy/Test.Dockerfile ./dist
+
+publish TAG:
+    just build benwright/db-operator:{{TAG}}
+    docker push benwright/db-operator:{{TAG}}

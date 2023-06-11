@@ -73,17 +73,17 @@ func TestCockroachIntegration(t *testing.T) {
 	mustPass(t, cdbs.DeleteAll(context.Background()))
 	mustPass(t, cclients.DeleteAll(context.Background()))
 	mustPass(t, cms.DeleteAll(context.Background()))
-	mustPass(t, waitForFail(func() error {
+	mustPass(t, waitFor(func() error {
 		sss, err := css.GetAll(context.Background())
 		if err != nil {
-			assert.FailNow(t, "failed to get stateful sets", err)
+			return err
 		}
 
 		if len(sss) > 0 {
-			return nil
+			return errors.New("stateful sets still exist")
 		}
 
-		return errors.New("no stateful sets found")
+		return nil
 	}))
 
 	mustPass(t, cdbs.Create(context.Background(), crds.CockroachDB{
@@ -117,10 +117,9 @@ func TestCockroachIntegration(t *testing.T) {
 		},
 	}))
 
-	secret, err := waitFor(func() (resources.CockroachSecret, error) {
+	secret := waitForResult(t, func() (resources.CockroachSecret, error) {
 		return csc.Get(context.Background(), "my-secret")
 	})
-	mustPass(t, err)
 
 	port, err := strconv.ParseInt(secret.GetPort(), 10, 0)
 	mustPass(t, err)
@@ -129,7 +128,7 @@ func TestCockroachIntegration(t *testing.T) {
 		Host:     secret.GetHost(namespace),
 		Port:     int(port),
 		Username: secret.User,
-		Database: "new_db",
+		Database: secret.Database,
 	})
 	mustPass(t, err)
 

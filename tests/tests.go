@@ -14,7 +14,7 @@ func mustPass(t *testing.T, err error) {
 	}
 }
 
-func waitFor[T any](f func() (T, error)) (T, error) {
+func waitForResult[T any](t *testing.T, f func() (T, error)) T {
 	resultChan := make(chan T, 1)
 	errorChan := make(chan error, 1)
 
@@ -48,30 +48,38 @@ func waitFor[T any](f func() (T, error)) (T, error) {
 
 	select {
 	case res := <-resultChan:
-		return res, nil
+		return res
 	case err := <-errorChan:
-		var empty T
-		return empty, err
+		assert.FailNow(t, err.Error())
+		var value T
+		return value
 	}
 }
 
-func waitForFail(f func() error) error {
+func waitFor(f func() error) error {
 	resultChan := make(chan struct{}, 1)
-	errorChan := make(chan struct{}, 1)
+	errorChan := make(chan error, 1)
 
-	go func(resultChan chan<- struct{}, errorChan chan<- struct{}) {
-		after := time.After(time.Minute * 2)
+	go func(resultChan chan<- struct{}, errorChan chan<- error) {
+		after := time.After(time.Minute)
+		var lastError error
 
 		for {
 			select {
 			case <-after:
-				errorChan <- struct{}{}
+				if lastError != nil {
+					errorChan <- lastError
+				} else {
+					errorChan <- errors.New("timed out waiting for secret")
+				}
+
 				return
 			default:
 			}
 
 			err := f()
-			if err == nil {
+			if err != nil {
+				lastError = err
 				time.Sleep(time.Second)
 			} else {
 				resultChan <- struct{}{}
@@ -81,9 +89,9 @@ func waitForFail(f func() error) error {
 	}(resultChan, errorChan)
 
 	select {
-	case <-errorChan:
-		return errors.New("timed out waiting for failure")
 	case <-resultChan:
 		return nil
+	case err := <-errorChan:
+		return err
 	}
 }
