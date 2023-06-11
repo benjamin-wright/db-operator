@@ -15,7 +15,7 @@ spec:
       serviceAccount: {{ .Values.name }}
       containers:
       - name: operator
-        image: {{ .Values.image }}
+        image: {{ default (printf "benwright/db-operator:%s" .Chart.AppVersion) .Values.image }}
         env:
         - name: NAMESPACE
           value: {{ .Release.Namespace }}

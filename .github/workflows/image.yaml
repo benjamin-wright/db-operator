@@ -1,5 +1,5 @@
-name: Publishing a new version
-run-name: ${{ github.actor }} is publishing a new version
+name: Image Publish
+run-name: ${{ github.actor }} is publishing a new image version
 on:
   push:
     tags:
