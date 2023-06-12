@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/benjamin-wright/db-operator/internal/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/internal/utils"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/internal/redis/k8s"
-	"ponglehub.co.uk/db-operator/internal/state"
-	"ponglehub.co.uk/db-operator/internal/utils"
 )
 
 type Manager struct {

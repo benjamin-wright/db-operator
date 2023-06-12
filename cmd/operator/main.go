@@ -5,8 +5,8 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/benjamin-wright/db-operator/internal/runtime"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/internal/runtime"
 )
 
 func Exported() bool {

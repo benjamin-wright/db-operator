@@ -1,4 +1,4 @@
-module ponglehub.co.uk/db-operator
+module github.com/benjamin-wright/db-operator
 
 go 1.19
 

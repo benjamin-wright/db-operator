@@ -1,10 +1,10 @@
 package manager
 
 import (
+	"github.com/benjamin-wright/db-operator/internal/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/internal/redis/k8s"
-	"ponglehub.co.uk/db-operator/internal/state"
-	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
 )
 
 type State struct {

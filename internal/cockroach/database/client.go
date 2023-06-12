@@ -3,8 +3,8 @@ package database
 import (
 	"fmt"
 
+	"github.com/benjamin-wright/db-operator/pkg/postgres"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/pkg/postgres"
 )
 
 type Client struct {

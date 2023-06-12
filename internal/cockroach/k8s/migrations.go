@@ -3,9 +3,9 @@ package k8s
 import (
 	"fmt"
 
+	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
 )
 
 type CockroachMigrationComparable struct {

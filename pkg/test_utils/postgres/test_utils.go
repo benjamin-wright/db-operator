@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/benjamin-wright/db-operator/pkg/postgres"
 	"github.com/jackc/pgx/v4"
-	"ponglehub.co.uk/db-operator/pkg/postgres"
 )
 
 type TestUtils struct {

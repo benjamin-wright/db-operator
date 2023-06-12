@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/benjamin-wright/db-operator/pkg/postgres"
 	"github.com/jackc/pgx/v4"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/pkg/postgres"
 )
 
 type MigrationsClient struct {

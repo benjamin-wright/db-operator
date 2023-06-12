@@ -1,11 +1,11 @@
 package database
 
 import (
+	"github.com/benjamin-wright/db-operator/internal/cockroach/database"
+	"github.com/benjamin-wright/db-operator/internal/cockroach/k8s"
+	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/internal/cockroach/database"
-	"ponglehub.co.uk/db-operator/internal/cockroach/k8s"
-	"ponglehub.co.uk/db-operator/internal/state"
-	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
 )
 
 type State struct {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
+	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 )
 
 type K8sClient[T any] interface {

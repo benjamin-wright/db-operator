@@ -1,8 +1,8 @@
 package state
 
 import (
+	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
 )
 
 type Bucket[T any, PT Nameable[T]] struct {

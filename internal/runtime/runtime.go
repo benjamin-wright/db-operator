@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"ponglehub.co.uk/db-operator/internal/cockroach/managers/database"
-	"ponglehub.co.uk/db-operator/internal/cockroach/managers/deployment"
-	redis "ponglehub.co.uk/db-operator/internal/redis/manager"
+	"github.com/benjamin-wright/db-operator/internal/cockroach/managers/database"
+	"github.com/benjamin-wright/db-operator/internal/cockroach/managers/deployment"
+	redis "github.com/benjamin-wright/db-operator/internal/redis/manager"
 )
 
 func Run(namespace string) (func(), error) {

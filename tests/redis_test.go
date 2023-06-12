@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/benjamin-wright/db-operator/internal/redis/k8s"
 	"github.com/stretchr/testify/assert"
-	"ponglehub.co.uk/db-operator/internal/redis/k8s"
 )
 
 func TestRedisIntegration(t *testing.T) {

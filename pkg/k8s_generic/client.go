@@ -226,7 +226,7 @@ func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, mes
 		FirstTimestamp: t,
 		LastTimestamp:  t,
 		Count:          1,
-		Source:         corev1.EventSource{Component: "ponglehub.co.uk/db-operator"},
+		Source:         corev1.EventSource{Component: "github.com/benjamin-wright/db-operator"},
 		Type:           eventtype,
 	}
 
