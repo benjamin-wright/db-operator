@@ -102,11 +102,10 @@ func GetStorageBound[
 	}
 }
 
-func GetServiceBound[T any, U any, V any, W any, PT Targetable[T], PU Nameable[U], PV Readyable[V], PW Nameable[W]](
+func GetServiceBound[T any, U any, V any, PT Targetable[T], PU Nameable[U], PV Readyable[V]](
 	current Bucket[T, PT],
 	existing Bucket[U, PU],
 	servers Bucket[V, PV],
-	services Bucket[W, PW],
 	transform func(T) U,
 ) Demand[T, U] {
 	d := Demand[T, U]{
@@ -121,11 +120,10 @@ func GetServiceBound[T any, U any, V any, W any, PT Targetable[T], PU Nameable[U
 		target := clientPtr.GetTarget()
 
 		ss, hasSS := servers.state[target]
-		_, hasSvc := services.state[target]
 
 		ssPtr := PV(&ss)
 
-		if !hasSS || !hasSvc || !ssPtr.IsReady() {
+		if !hasSS || !ssPtr.IsReady() {
 			continue
 		}
 

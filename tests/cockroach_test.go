@@ -9,52 +9,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
-	"ponglehub.co.uk/db-operator/internal/services/k8s/crds"
-	"ponglehub.co.uk/db-operator/internal/services/k8s/resources"
-	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
+	"ponglehub.co.uk/db-operator/internal/cockroach/k8s"
 	"ponglehub.co.uk/db-operator/pkg/postgres"
 	postgres_helpers "ponglehub.co.uk/db-operator/pkg/test_utils/postgres"
 )
-
-func makeCockroachClients(t *testing.T, namespace string) (
-	*k8s_generic.Client[crds.CockroachDB, *crds.CockroachDB],
-	*k8s_generic.Client[crds.CockroachClient, *crds.CockroachClient],
-	*k8s_generic.Client[crds.CockroachMigration, *crds.CockroachMigration],
-	*k8s_generic.Client[resources.CockroachSecret, *resources.CockroachSecret],
-	*k8s_generic.Client[resources.CockroachStatefulSet, *resources.CockroachStatefulSet],
-) {
-	cdbs, err := crds.NewCockroachDBClient(namespace)
-	if err != nil {
-		t.Logf("failed to create cdb client: %+v", err)
-		t.FailNow()
-	}
-
-	cclients, err := crds.NewCockroachClientClient(namespace)
-	if err != nil {
-		t.Logf("failed to create cclient client: %+v", err)
-		t.FailNow()
-	}
-
-	cms, err := crds.NewCockroachMigrationClient(namespace)
-	if err != nil {
-		t.Logf("failed to create cmigrations client: %+v", err)
-		t.FailNow()
-	}
-
-	csc, err := resources.NewCockroachSecretClient(namespace)
-	if err != nil {
-		t.Logf("failed to create csecret client: %+v", err)
-		t.FailNow()
-	}
-
-	css, err := resources.NewCockroachStatefulSetClient(namespace)
-	if err != nil {
-		t.Logf("failed to create cstateful set client: %+v", err)
-		t.FailNow()
-	}
-
-	return cdbs, cclients, cms, csc, css
-}
 
 func TestCockroachIntegration(t *testing.T) {
 	if testing.Short() {
@@ -68,13 +26,16 @@ func TestCockroachIntegration(t *testing.T) {
 
 	namespace := os.Getenv("NAMESPACE")
 
-	cdbs, cclients, cms, csc, css := makeCockroachClients(t, namespace)
+	client, err := k8s.New(namespace)
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
 
-	mustPass(t, cdbs.DeleteAll(context.Background()))
-	mustPass(t, cclients.DeleteAll(context.Background()))
-	mustPass(t, cms.DeleteAll(context.Background()))
+	mustPass(t, client.DBs().DeleteAll(context.Background()))
+	mustPass(t, client.Clients().DeleteAll(context.Background()))
+	mustPass(t, client.Migrations().DeleteAll(context.Background()))
 	mustPass(t, waitFor(func() error {
-		sss, err := css.GetAll(context.Background())
+		sss, err := client.StatefulSets().GetAll(context.Background())
 		if err != nil {
 			return err
 		}
@@ -86,15 +47,15 @@ func TestCockroachIntegration(t *testing.T) {
 		return nil
 	}))
 
-	mustPass(t, cdbs.Create(context.Background(), crds.CockroachDB{
-		CockroachDBComparable: crds.CockroachDBComparable{
+	mustPass(t, client.DBs().Create(context.Background(), k8s.CockroachDB{
+		CockroachDBComparable: k8s.CockroachDBComparable{
 			Name:    "different-db",
 			Storage: "256Mi",
 		},
 	}))
 
-	mustPass(t, cclients.Create(context.Background(), crds.CockroachClient{
-		CockroachClientComparable: crds.CockroachClientComparable{
+	mustPass(t, client.Clients().Create(context.Background(), k8s.CockroachClient{
+		CockroachClientComparable: k8s.CockroachClientComparable{
 			Deployment: "different-db",
 			Database:   "new_db",
 			Name:       "my-client",
@@ -103,8 +64,8 @@ func TestCockroachIntegration(t *testing.T) {
 		},
 	}))
 
-	mustPass(t, cms.Create(context.Background(), crds.CockroachMigration{
-		CockroachMigrationComparable: crds.CockroachMigrationComparable{
+	mustPass(t, client.Migrations().Create(context.Background(), k8s.CockroachMigration{
+		CockroachMigrationComparable: k8s.CockroachMigrationComparable{
 			Name:       "mig1",
 			Deployment: "different-db",
 			Database:   "new_db",
@@ -117,8 +78,8 @@ func TestCockroachIntegration(t *testing.T) {
 		},
 	}))
 
-	secret := waitForResult(t, func() (resources.CockroachSecret, error) {
-		return csc.Get(context.Background(), "my-secret")
+	secret := waitForResult(t, func() (k8s.CockroachSecret, error) {
+		return client.Secrets().Get(context.Background(), "my-secret")
 	})
 
 	port, err := strconv.ParseInt(secret.GetPort(), 10, 0)

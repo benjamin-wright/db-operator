@@ -3,7 +3,6 @@ package k8s_generic
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"go.uber.org/zap"
@@ -11,14 +10,11 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 type Resource[T any] interface {
@@ -40,47 +36,15 @@ type Client[T any, PT Resource[T]] struct {
 	labelFilters map[string]string
 }
 
-func New[T any, PT Resource[T]](resourceSchema schema.GroupVersionResource, kind string, namespace string, labelFilters map[string]string) (*Client[T, PT], error) {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	var config *rest.Config
-	var err error
-
-	if kubeconfig != "" {
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		config, err = rest.InClusterConfig()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	dynClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
-	config.GroupVersion = &schema.GroupVersion{
-		Group:   "api",
-		Version: "v1",
-	}
-	config.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: scheme.Codecs}
-
-	restClient, err := rest.RESTClientFor(config)
-	if err != nil {
-		return nil, err
-	}
-
+func NewClient[T any, PT Resource[T]](b *Builder, resourceSchema schema.GroupVersionResource, kind string, labelFilters map[string]string) *Client[T, PT] {
 	return &Client[T, PT]{
-		namespace:    namespace,
+		namespace:    b.namespace,
 		schema:       resourceSchema,
-		client:       dynClient,
-		restClient:   restClient,
+		client:       b.dynClient,
+		restClient:   b.restClient,
 		labelFilters: labelFilters,
 		kind:         kind,
-	}, nil
+	}
 }
 
 func (c *Client[T, PT]) Create(ctx context.Context, resource T) error {
@@ -175,9 +139,7 @@ type Update[T any] struct {
 	ToRemove []T
 }
 
-func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<-chan Update[T], error) {
-	output := make(chan Update[T], 1)
-
+func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc, updates chan<- any) error {
 	convert := func(obj interface{}) T {
 		var res T
 		ptr := PT(&res)
@@ -203,7 +165,7 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<
 		AddFunc: func(obj interface{}) {
 			res := convert(obj)
 
-			output <- Update[T]{
+			updates <- Update[T]{
 				ToAdd:    []T{res},
 				ToRemove: []T{},
 			}
@@ -213,7 +175,7 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<
 			newRes := convert(newObj)
 
 			if !PT(&oldRes).Equal(newRes) {
-				output <- Update[T]{
+				updates <- Update[T]{
 					ToAdd:    []T{newRes},
 					ToRemove: []T{oldRes},
 				}
@@ -222,7 +184,7 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<
 		DeleteFunc: func(obj interface{}) {
 			res := convert(obj)
 
-			output <- Update[T]{
+			updates <- Update[T]{
 				ToAdd:    []T{},
 				ToRemove: []T{res},
 			}
@@ -236,7 +198,7 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc) (<
 		}
 	}()
 
-	return output, nil
+	return nil
 }
 
 func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, message string) {

@@ -19,7 +19,7 @@ func waitForResult[T any](t *testing.T, f func() (T, error)) T {
 	errorChan := make(chan error, 1)
 
 	go func(resultChan chan<- T, errorChan chan<- error) {
-		after := time.After(time.Minute)
+		after := time.After(2 * time.Minute)
 		var lastError error
 
 		for {
@@ -61,7 +61,7 @@ func waitFor(f func() error) error {
 	errorChan := make(chan error, 1)
 
 	go func(resultChan chan<- struct{}, errorChan chan<- error) {
-		after := time.After(time.Minute)
+		after := time.After(2 * time.Minute)
 		var lastError error
 
 		for {

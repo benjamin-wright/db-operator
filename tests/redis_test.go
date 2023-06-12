@@ -5,28 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"ponglehub.co.uk/db-operator/internal/services/k8s/crds"
-	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
+	"github.com/stretchr/testify/assert"
+	"ponglehub.co.uk/db-operator/internal/redis/k8s"
 )
-
-func makeRedisClients(t *testing.T, namespace string) (
-	*k8s_generic.Client[crds.RedisDB, *crds.RedisDB],
-	*k8s_generic.Client[crds.RedisClient, *crds.RedisClient],
-) {
-	rdbs, err := crds.NewRedisDBClient(namespace)
-	if err != nil {
-		t.Logf("failed to create rdb client: %+v", err)
-		t.FailNow()
-	}
-
-	rcs, err := crds.NewRedisClientClient(namespace)
-	if err != nil {
-		t.Logf("failed to create rcs client: %+v", err)
-		t.FailNow()
-	}
-
-	return rdbs, rcs
-}
 
 func TestRedisIntegration(t *testing.T) {
 	if testing.Short() {
@@ -35,20 +16,23 @@ func TestRedisIntegration(t *testing.T) {
 
 	namespace := os.Getenv("NAMESPACE")
 
-	rdbs, rcs := makeRedisClients(t, namespace)
+	client, err := k8s.New(namespace)
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
 
-	mustPass(t, rdbs.DeleteAll(context.Background()))
-	mustPass(t, rcs.DeleteAll(context.Background()))
+	mustPass(t, client.DBs().DeleteAll(context.Background()))
+	mustPass(t, client.Clients().DeleteAll(context.Background()))
 
-	mustPass(t, rdbs.Create(context.Background(), crds.RedisDB{
-		RedisDBComparable: crds.RedisDBComparable{
+	mustPass(t, client.DBs().Create(context.Background(), k8s.RedisDB{
+		RedisDBComparable: k8s.RedisDBComparable{
 			Name:    "redis-db",
 			Storage: "256Mi",
 		},
 	}))
 
-	mustPass(t, rcs.Create(context.Background(), crds.RedisClient{
-		RedisClientComparable: crds.RedisClientComparable{
+	mustPass(t, client.Clients().Create(context.Background(), k8s.RedisClient{
+		RedisClientComparable: k8s.RedisClientComparable{
 			Name:       "my-secret",
 			Deployment: "redis-db",
 			Unit:       1,

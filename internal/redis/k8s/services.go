@@ -1,0 +1,87 @@
+package k8s
+
+import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"ponglehub.co.uk/db-operator/internal/common"
+	"ponglehub.co.uk/db-operator/pkg/k8s_generic"
+)
+
+type RedisServiceComparable struct {
+	Name string
+}
+
+type RedisService struct {
+	RedisServiceComparable
+	UID             string
+	ResourceVersion string
+}
+
+func (s *RedisService) ToUnstructured(namespace string) *unstructured.Unstructured {
+	statefulset := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Service",
+			"metadata": map[string]interface{}{
+				"name": s.Name,
+				"labels": k8s_generic.Merge(map[string]string{
+					"app":                           s.Name,
+					"ponglehub.co.uk/resource-type": "redis",
+				}, common.LABEL_FILTERS),
+			},
+			"spec": map[string]interface{}{
+				"ports": []map[string]interface{}{
+					{
+						"name":       "tcp",
+						"port":       6379,
+						"protocol":   "TCP",
+						"targetPort": "tcp",
+					},
+				},
+				"selector": map[string]interface{}{
+					"app": s.Name,
+				},
+			},
+		},
+	}
+
+	return statefulset
+}
+
+func (s *RedisService) FromUnstructured(obj *unstructured.Unstructured) error {
+	s.Name = obj.GetName()
+	s.UID = string(obj.GetUID())
+	s.ResourceVersion = obj.GetResourceVersion()
+	return nil
+}
+
+func (s *RedisService) GetName() string {
+	return s.Name
+}
+
+func (s *RedisService) GetUID() string {
+	return s.UID
+}
+
+func (s *RedisService) GetResourceVersion() string {
+	return s.ResourceVersion
+}
+
+func (s *RedisService) Equal(obj RedisService) bool {
+	return s.RedisServiceComparable == obj.RedisServiceComparable
+}
+
+func (c *Client) Services() *k8s_generic.Client[RedisService, *RedisService] {
+	return k8s_generic.NewClient[RedisService](
+		c.builder,
+		schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "services",
+		},
+		"Service",
+		k8s_generic.Merge(map[string]string{
+			"ponglehub.co.uk/resource-type": "redis",
+		}, common.LABEL_FILTERS),
+	)
+}

@@ -41,6 +41,21 @@ func (b *Bucket[T, PT]) Remove(obj T) {
 	delete(b.state, key)
 }
 
+func (b *Bucket[T, PT]) Get(name string) (T, bool) {
+	value, ok := b.state[name]
+	return value, ok
+}
+
 func (b *Bucket[T, PT]) Clear() {
 	b.state = map[string]T{}
+}
+
+func (b *Bucket[T, PT]) List() []T {
+	result := []T{}
+
+	for _, v := range b.state {
+		result = append(result, v)
+	}
+
+	return result
 }
