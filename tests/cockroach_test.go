@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/benjamin-wright/db-operator/internal/cockroach/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
 	"github.com/benjamin-wright/db-operator/pkg/postgres"
 	postgres_helpers "github.com/benjamin-wright/db-operator/pkg/test_utils/postgres"
 	"github.com/stretchr/testify/assert"

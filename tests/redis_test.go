@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/benjamin-wright/db-operator/internal/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
 	"github.com/stretchr/testify/assert"
 )
 

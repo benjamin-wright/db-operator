@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/benjamin-wright/db-operator/internal/cockroach/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"go.uber.org/zap"

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/benjamin-wright/db-operator/internal/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"go.uber.org/zap"
@@ -41,6 +41,7 @@ func New(
 		client.StatefulSets().Watch,
 		client.PVCs().Watch,
 		client.Services().Watch,
+		client.Secrets().Watch,
 	} {
 		err := f(ctx, cancel, updates)
 		if err != nil {
@@ -54,6 +55,7 @@ func New(
 		statefulSets: state.NewBucket[k8s.RedisStatefulSet](),
 		pvcs:         state.NewBucket[k8s.RedisPVC](),
 		services:     state.NewBucket[k8s.RedisService](),
+		secrets:      state.NewBucket[k8s.RedisSecret](),
 	}
 
 	return &Manager{
@@ -94,6 +96,7 @@ func (m *Manager) refresh() {
 	case <-m.debouncer.Wait():
 		zap.S().Infof("Processing Started")
 		m.processRedisDBs()
+		m.processRedisStatefulSets()
 		zap.S().Infof("Processing Done")
 	}
 }
@@ -147,6 +150,28 @@ func (m *Manager) processRedisDBs() {
 
 		if err != nil {
 			zap.S().Errorf("Failed to create redis service: %+v", err)
+		}
+	}
+}
+
+func (m *Manager) processRedisStatefulSets() {
+	secretsDemand := m.state.GetSecretsDemand()
+
+	for _, secret := range secretsDemand.ToRemove {
+		zap.S().Infof("Deleting secret: %s", secret.Target.Name)
+		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name)
+
+		if err != nil {
+			zap.S().Errorf("Failed to delete redis secret: %+v", err)
+		}
+	}
+
+	for _, secret := range secretsDemand.ToAdd {
+		zap.S().Infof("Creating secret: %s", secret.Target.Name)
+		err := m.client.Secrets().Create(m.ctx, secret.Target)
+
+		if err != nil {
+			zap.S().Errorf("Failed to create redis secret: %+v", err)
 		}
 	}
 }

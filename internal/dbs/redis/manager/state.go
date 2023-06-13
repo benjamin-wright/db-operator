@@ -1,7 +1,7 @@
 package manager
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"go.uber.org/zap"
@@ -70,6 +70,22 @@ func (s *State) GetPVCDemand() []k8s.RedisPVC {
 		s.pvcs,
 		func(ss k8s.RedisStatefulSet, pvc k8s.RedisPVC) bool {
 			return ss.Name == pvc.Database
+		},
+	)
+}
+
+func (s *State) GetSecretsDemand() state.Demand[k8s.RedisClient, k8s.RedisSecret] {
+	return state.GetServiceBound(
+		s.clients,
+		s.secrets,
+		s.statefulSets,
+		func(client k8s.RedisClient) k8s.RedisSecret {
+			return k8s.RedisSecret{
+				RedisSecretComparable: k8s.RedisSecretComparable{
+					Name: client.Secret,
+					DB:   client.Deployment,
+				},
+			}
 		},
 	)
 }
