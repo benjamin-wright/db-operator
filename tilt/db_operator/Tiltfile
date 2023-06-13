@@ -1,0 +1,18 @@
+load('ext://helm_resource', 'helm_resource')
+
+def db_operator(namespace, name, version, labels=[]):
+    helm_resource(
+        name,
+        namespace=namespace,
+        chart='oci://docker.io/benwright/db-operator-chart',
+        flags=[
+            '--version={}'.format(version),
+            '--set=image=benwright/db-operator:{}'.format(version),
+        ],
+        labels=["operator"] + labels
+    )
+
+    k8s_resource(
+        name,
+        labels=["operator"] + labels
+    )
