@@ -1,0 +1,14 @@
+def db_operator(namespace, name, version, labels=[]):
+    k8s_yaml(helm(
+        'deploy/chart',
+        name=name,
+        namespace=namespace,
+        set=[
+            'image=benwright/db-operator:{}'.format(version),
+        ]
+    ))
+
+    k8s_resource(
+        name,
+        labels=["operator"] + labels
+    )
