@@ -1,12 +1,12 @@
 package main
 
 import (
-	"log"
 	"os"
 	"os/signal"
 
 	"github.com/benjamin-wright/db-operator/internal/runtime"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func Exported() bool {
@@ -14,28 +14,37 @@ func Exported() bool {
 }
 
 func main() {
-	logger, _ := zap.NewDevelopment()
-	zap.ReplaceGlobals(logger)
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+
+	level, err := zerolog.ParseLevel(logLevel)
+	if err != nil {
+		panic(err)
+	}
+
+	zerolog.SetGlobalLevel(level)
 
 	namespace := os.Getenv("NAMESPACE")
 	if namespace == "" {
-		zap.S().Fatalf("Must set NAMESPACE environment variable")
+		log.Fatal().Msg("Must set NAMESPACE environment variable")
 	}
 
-	zap.S().Info("Starting operator...")
+	log.Info().Msg("Starting operator...")
 
 	stopper, err := runtime.Run(namespace)
 	if err != nil {
-		zap.S().Fatalf("Failed to start manager: %+v", err)
+		log.Fatal().Err(err).Msg("Failed to start manager")
 	}
 	defer stopper()
 
-	zap.S().Info("Running!")
+	log.Info().Msg("Started operator")
 
 	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt)
 	<-quit
 
-	log.Println("Shutting down server...")
+	log.Info().Msg("Received interrupt signal")
 }

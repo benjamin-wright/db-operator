@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/benjamin-wright/db-operator/pkg/postgres"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type Client struct {
@@ -31,7 +31,7 @@ func New(database string, namespace string) (*Client, error) {
 }
 
 func (c *Client) Stop() {
-	zap.S().Infof("Closing connection to DB %s", c.database)
+	log.Info().Msgf("Closing connection to DB %s", c.database)
 	c.conn.Stop()
 }
 

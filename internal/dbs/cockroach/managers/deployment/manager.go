@@ -8,7 +8,7 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/utils"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type Manager struct {
@@ -76,7 +76,7 @@ func (m *Manager) Start() {
 		for {
 			select {
 			case <-m.ctx.Done():
-				zap.S().Infof("context cancelled, exiting manager loop")
+				log.Info().Msg("context cancelled, exiting manager loop")
 				return
 			default:
 				m.refresh()
@@ -92,9 +92,9 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		zap.S().Infof("Processing Started")
+		log.Info().Msg("Processing cockroach deployments started")
 		m.processCockroachDBs()
-		zap.S().Infof("Processing Done")
+		log.Info().Msg("Processing cockroach deployments finished")
 	}
 }
 
@@ -104,37 +104,37 @@ func (m *Manager) processCockroachDBs() {
 	pvcsToRemove := m.state.GetPVCDemand()
 
 	for _, db := range ssDemand.ToRemove {
-		zap.S().Infof("Deleting db: %s", db.Target.Name)
+		log.Info().Msgf("Deleting db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete cockroachdb stateful set: %+v", err)
+			log.Error().Err(err).Msgf("Failed to delete cockroachdb stateful set: %+v", err)
 		}
 	}
 
 	for _, svc := range svcDemand.ToRemove {
-		zap.S().Infof("Deleting service: %s", svc.Target.Name)
+		log.Info().Msgf("Deleting service: %s", svc.Target.Name)
 		err := m.client.Services().Delete(m.ctx, svc.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete cockroachdb service: %+v", err)
+			log.Error().Err(err).Msgf("Failed to delete cockroachdb service: %+v", err)
 		}
 	}
 
 	for _, pvc := range pvcsToRemove {
-		zap.S().Infof("Deleting pvc: %s", pvc.Name)
+		log.Info().Msgf("Deleting pvc: %s", pvc.Name)
 		err := m.client.PVCs().Delete(m.ctx, pvc.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete cockroachdb PVC: %+v", err)
+			log.Error().Err(err).Msgf("Failed to delete cockroachdb PVC: %+v", err)
 		}
 	}
 
 	for _, db := range ssDemand.ToAdd {
-		zap.S().Infof("Creating db: %s", db.Target.Name)
+		log.Info().Msgf("Creating db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Create(m.ctx, db.Target)
 		if err != nil {
-			zap.S().Errorf("Failed to create cockroachdb stateful set: %+v", err)
+			log.Error().Err(err).Msgf("Failed to create cockroachdb stateful set: %+v", err)
 			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
 		} else {
 			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
@@ -142,11 +142,11 @@ func (m *Manager) processCockroachDBs() {
 	}
 
 	for _, svc := range svcDemand.ToAdd {
-		zap.S().Infof("Creating service: %s", svc.Target.Name)
+		log.Info().Msgf("Creating service: %s", svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
 		if err != nil {
-			zap.S().Errorf("Failed to create cockroachdb service: %+v", err)
+			log.Error().Err(err).Msgf("Failed to create cockroachdb service: %+v", err)
 		}
 	}
 }

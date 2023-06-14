@@ -1,8 +1,6 @@
 package k8s
 
 import (
-	"fmt"
-
 	"github.com/benjamin-wright/db-operator/internal/common"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -105,7 +103,7 @@ func (d *NatsDeployment) FromUnstructured(obj *unstructured.Unstructured) error 
 
 	replicas, err := k8s_generic.GetProperty[int64](obj, "status", "replicas")
 	if err != nil {
-		return fmt.Errorf("failed to get replicas: %+v", err)
+		replicas = 0
 	}
 
 	readyReplicas, err := k8s_generic.GetProperty[int64](obj, "status", "readyReplicas")
@@ -113,7 +111,7 @@ func (d *NatsDeployment) FromUnstructured(obj *unstructured.Unstructured) error 
 		readyReplicas = 0
 	}
 
-	d.Ready = replicas == readyReplicas
+	d.Ready = replicas > 0 && replicas == readyReplicas
 
 	return nil
 }

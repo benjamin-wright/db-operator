@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
+	postgres_helpers "github.com/benjamin-wright/db-operator/internal/test_utils/postgres"
 	"github.com/benjamin-wright/db-operator/pkg/postgres"
-	postgres_helpers "github.com/benjamin-wright/db-operator/pkg/test_utils/postgres"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 )
 
 func TestCockroachIntegration(t *testing.T) {
@@ -20,8 +20,9 @@ func TestCockroachIntegration(t *testing.T) {
 	}
 
 	if testing.Verbose() {
-		logger, _ := zap.NewDevelopment()
-		zap.ReplaceGlobals(logger)
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	} else {
+		zerolog.SetGlobalLevel(zerolog.Disabled)
 	}
 
 	namespace := os.Getenv("NAMESPACE")

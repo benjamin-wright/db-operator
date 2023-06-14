@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -145,7 +145,7 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc, up
 		ptr := PT(&res)
 		err := ptr.FromUnstructured(obj.(*unstructured.Unstructured))
 		if err != nil {
-			zap.S().Errorf("Failed to parse unstructured obj for %T: %+v\n %+v", res, err, obj)
+			log.Error().Err(err).Msgf("Failed to parse unstructured obj for %T", res)
 		}
 		return res
 	}
@@ -238,6 +238,6 @@ func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, mes
 		Into(nil)
 
 	if err != nil {
-		zap.S().Warnf("Failed to publish event: %+v", err)
+		log.Error().Err(err).Msg("Failed to publish event")
 	}
 }

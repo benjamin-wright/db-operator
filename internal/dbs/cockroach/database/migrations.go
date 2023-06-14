@@ -6,7 +6,7 @@ import (
 
 	"github.com/benjamin-wright/db-operator/pkg/postgres"
 	"github.com/jackc/pgx/v4"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type MigrationsClient struct {
@@ -36,14 +36,13 @@ func NewMigrations(deployment string, namespace string, database string) (*Migra
 }
 
 func (c *MigrationsClient) Stop() {
-	zap.S().Infof("Closing connection to DB %s[%s]", c.deployment, c.database)
+	log.Info().Msgf("Closing connection to DB %s[%s]", c.deployment, c.database)
 	c.conn.Close(context.TODO())
 }
 
 func (c *MigrationsClient) HasMigrationsTable() (bool, error) {
 	rows, err := c.conn.Query(context.TODO(), "SELECT DISTINCT(tablename) FROM pg_catalog.pg_tables WHERE tablename = $1", "migrations")
 	if err != nil {
-		zap.S().Errorf("failed to check migrations table: %+v", err)
 		return false, fmt.Errorf("failed to check for migrations: %+v", err)
 	}
 	defer rows.Close()

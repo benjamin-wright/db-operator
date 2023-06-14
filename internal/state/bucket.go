@@ -2,7 +2,7 @@ package state
 
 import (
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type Bucket[T any, PT Nameable[T]] struct {
@@ -17,12 +17,12 @@ func NewBucket[T any, PT Nameable[T]]() Bucket[T, PT] {
 
 func (b *Bucket[T, PT]) Apply(update k8s_generic.Update[T]) {
 	for _, toRemove := range update.ToRemove {
-		zap.S().Infof("Removing %T %s", toRemove, PT(&toRemove).GetName())
+		log.Info().Interface("toRemove", toRemove).Msg("Removing")
 		b.Remove(toRemove)
 	}
 
 	for _, toAdd := range update.ToAdd {
-		zap.S().Infof("Adding %T %s", toAdd, PT(&toAdd).GetName())
+		log.Info().Interface("toAdd", toAdd).Msg("Adding")
 		b.Add(toAdd)
 	}
 }

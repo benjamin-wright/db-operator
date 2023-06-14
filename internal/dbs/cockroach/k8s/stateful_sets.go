@@ -149,7 +149,7 @@ func (s *CockroachStatefulSet) FromUnstructured(obj *unstructured.Unstructured) 
 
 	replicas, err := k8s_generic.GetProperty[int64](obj, "status", "replicas")
 	if err != nil {
-		return fmt.Errorf("failed to get replicas: %+v", err)
+		replicas = 0
 	}
 
 	readyReplicas, err := k8s_generic.GetProperty[int64](obj, "status", "readyReplicas")
@@ -157,7 +157,7 @@ func (s *CockroachStatefulSet) FromUnstructured(obj *unstructured.Unstructured) 
 		readyReplicas = 0
 	}
 
-	s.Ready = replicas == readyReplicas && replicas > 0
+	s.Ready = replicas > 0 && replicas == readyReplicas
 
 	return nil
 }

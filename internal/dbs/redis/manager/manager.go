@@ -8,7 +8,7 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/utils"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type Manager struct {
@@ -78,7 +78,7 @@ func (m *Manager) Start() {
 		for {
 			select {
 			case <-m.ctx.Done():
-				zap.S().Infof("context cancelled, exiting manager loop")
+				log.Info().Msg("context cancelled, exiting manager loop")
 				return
 			default:
 				m.refresh()
@@ -94,10 +94,10 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		zap.S().Infof("Processing Started")
+		log.Info().Msg("Processing redis started")
 		m.processRedisDBs()
 		m.processRedisStatefulSets()
-		zap.S().Infof("Processing Done")
+		log.Info().Msg("Processing redis finished")
 	}
 }
 
@@ -107,37 +107,37 @@ func (m *Manager) processRedisDBs() {
 	pvcsToRemove := m.state.GetPVCDemand()
 
 	for _, db := range ssDemand.ToRemove {
-		zap.S().Infof("Deleting db: %s", db.Target.Name)
+		log.Info().Msgf("Deleting db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete redis stateful set: %+v", err)
+			log.Error().Err(err).Msg("Failed to delete redis stateful set")
 		}
 	}
 
 	for _, svc := range svcDemand.ToRemove {
-		zap.S().Infof("Deleting service: %s", svc.Target.Name)
+		log.Info().Msgf("Deleting service: %s", svc.Target.Name)
 		err := m.client.Services().Delete(m.ctx, svc.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete redis service: %+v", err)
+			log.Error().Err(err).Msg("Failed to delete redis service")
 		}
 	}
 
 	for _, pvc := range pvcsToRemove {
-		zap.S().Infof("Deleting pvc: %s", pvc.Name)
+		log.Info().Msgf("Deleting pvc: %s", pvc.Name)
 		err := m.client.PVCs().Delete(m.ctx, pvc.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete redis PVC: %+v", err)
+			log.Error().Err(err).Msg("Failed to delete redis PVC")
 		}
 	}
 
 	for _, db := range ssDemand.ToAdd {
-		zap.S().Infof("Creating db: %s", db.Target.Name)
+		log.Info().Msgf("Creating db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Create(m.ctx, db.Target)
 		if err != nil {
-			zap.S().Errorf("Failed to create redis stateful set: %+v", err)
+			log.Error().Err(err).Msg("Failed to create redis stateful set")
 			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
 		} else {
 			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
@@ -145,11 +145,11 @@ func (m *Manager) processRedisDBs() {
 	}
 
 	for _, svc := range svcDemand.ToAdd {
-		zap.S().Infof("Creating service: %s", svc.Target.Name)
+		log.Info().Msgf("Creating service: %s", svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
 		if err != nil {
-			zap.S().Errorf("Failed to create redis service: %+v", err)
+			log.Error().Err(err).Msg("Failed to create redis service")
 		}
 	}
 }
@@ -158,20 +158,20 @@ func (m *Manager) processRedisStatefulSets() {
 	secretsDemand := m.state.GetSecretsDemand()
 
 	for _, secret := range secretsDemand.ToRemove {
-		zap.S().Infof("Deleting secret: %s", secret.Target.Name)
+		log.Info().Msgf("Deleting secret: %s", secret.Target.Name)
 		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete redis secret: %+v", err)
+			log.Error().Err(err).Msg("Failed to delete redis secret")
 		}
 	}
 
 	for _, secret := range secretsDemand.ToAdd {
-		zap.S().Infof("Creating secret: %s", secret.Target.Name)
+		log.Info().Msgf("Creating secret: %s", secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 
 		if err != nil {
-			zap.S().Errorf("Failed to create redis secret: %+v", err)
+			log.Error().Err(err).Msg("Failed to create redis secret")
 		}
 	}
 }

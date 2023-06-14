@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 func parsePGXError(err error) error {
@@ -64,7 +64,7 @@ func (d *AdminConn) ListUsers() ([]string, error) {
 }
 
 func (d *AdminConn) CreateUser(username string) error {
-	zap.S().Infof("Creating user %s", username)
+	log.Info().Msgf("Creating user %s", username)
 	if _, err := d.conn.Exec(context.Background(), "CREATE USER "+sanitize(username)); err != nil {
 		return fmt.Errorf("failed to create database user: %+v", err)
 	}
@@ -73,7 +73,7 @@ func (d *AdminConn) CreateUser(username string) error {
 }
 
 func (d *AdminConn) DropUser(username string) error {
-	zap.S().Infof("Deleting user %s", username)
+	log.Info().Msgf("Dropping user %s", username)
 	if _, err := d.conn.Exec(context.Background(), "DROP USER "+sanitize(username)); err != nil {
 		return fmt.Errorf("failed to drop database user: %+v", err)
 	}
@@ -106,7 +106,7 @@ func sanitize(name string) string {
 }
 
 func (d *AdminConn) CreateDatabase(database string) error {
-	zap.S().Infof("Creating database %s", database)
+	log.Info().Msgf("Creating database %s", database)
 	if _, err := d.conn.Exec(context.Background(), "CREATE DATABASE "+sanitize(database)); err != nil {
 		return fmt.Errorf("failed to create database: %+v", err)
 	}
@@ -115,7 +115,7 @@ func (d *AdminConn) CreateDatabase(database string) error {
 }
 
 func (d *AdminConn) DropDatabase(database string) error {
-	zap.S().Infof("Dropping database %s", database)
+	log.Info().Msgf("Dropping database %s", database)
 	if _, err := d.conn.Exec(context.Background(), "DROP DATABASE "+sanitize(database)); err != nil {
 		return fmt.Errorf("failed to drop database: %+v", err)
 	}
@@ -170,7 +170,7 @@ func (d *AdminConn) GrantPermissions(username string, database string) error {
 		return fmt.Errorf("failed to grant existing table permissions: %+v", err)
 	}
 
-	zap.S().Infof("Granted '%s' permission to read/write to '%s'", username, database)
+	log.Info().Msgf("Granted '%s' permission to read/write to '%s'", username, database)
 
 	return nil
 }
@@ -191,7 +191,7 @@ func (d *AdminConn) RevokePermissions(username string, database string) error {
 		return fmt.Errorf("failed to revoke permissions: %+v", err)
 	}
 
-	zap.S().Infof("Revoked '%s' permission to read/write from '%s'", username, database)
+	log.Info().Msgf("Revoked '%s' permission to read/write from '%s'", username, database)
 
 	return nil
 }

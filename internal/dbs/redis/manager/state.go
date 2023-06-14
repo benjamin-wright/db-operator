@@ -4,7 +4,7 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type State struct {
@@ -31,7 +31,7 @@ func (s *State) Apply(update interface{}) {
 	case k8s_generic.Update[k8s.RedisSecret]:
 		s.secrets.Apply(u)
 	default:
-		zap.S().Errorf("Wat dis? Unknown state update for type %T", u)
+		log.Error().Interface("update", u).Msg("wat dis? Unknown state update")
 	}
 }
 

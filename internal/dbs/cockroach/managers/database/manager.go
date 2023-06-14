@@ -10,7 +10,7 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type Manager struct {
@@ -80,7 +80,7 @@ func (m *Manager) Start() {
 		for {
 			select {
 			case <-m.ctx.Done():
-				zap.S().Infof("context cancelled, exiting manager loop")
+				log.Info().Msg("context cancelled, exiting manager loop")
 				return
 			default:
 				m.refresh()
@@ -96,12 +96,12 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		zap.S().Infof("Database state update")
+		log.Info().Msg("Updating cockroach database state")
 		m.refreshDatabaseState()
-		zap.S().Infof("Processing Started")
+		log.Info().Msg("Processing cockroach databases started")
 		m.processCockroachClients()
 		m.processCockroachMigrations()
-		zap.S().Infof("Processing Done")
+		log.Info().Msg("Processing cockroach databases finished")
 	}
 }
 
@@ -111,14 +111,14 @@ func (m *Manager) refreshDatabaseState() {
 	for _, client := range m.state.GetActiveClients() {
 		cli, err := database.New(client.Deployment, m.namespace)
 		if err != nil {
-			zap.S().Errorf("Failed to create client for database %s: %w", client.Deployment, err)
+			log.Error().Err(err).Msgf("Failed to create client for database %s", client.Deployment)
 			continue
 		}
 		defer cli.Stop()
 
 		users, err := cli.ListUsers()
 		if err != nil {
-			zap.S().Errorf("Failed to list users in %s: %w", client.Database, err)
+			log.Error().Err(err).Msgf("Failed to list users in %s", client.Database)
 			continue
 		}
 
@@ -126,7 +126,7 @@ func (m *Manager) refreshDatabaseState() {
 
 		names, err := cli.ListDBs()
 		if err != nil {
-			zap.S().Errorf("Failed to list databases in %s: %w", client.Database, err)
+			log.Error().Err(err).Msgf("Failed to list databases in %s", client.Database)
 			continue
 		}
 
@@ -135,7 +135,7 @@ func (m *Manager) refreshDatabaseState() {
 
 			permissions, err := cli.ListPermitted(db)
 			if err != nil {
-				zap.S().Errorf("Failed to list permissions in %s: %w", db.Name, err)
+				log.Error().Err(err).Msgf("Failed to list permissions in %s", db.Name)
 				continue
 			}
 
@@ -143,25 +143,25 @@ func (m *Manager) refreshDatabaseState() {
 
 			mClient, err := database.NewMigrations(db.DB, m.namespace, db.Name)
 			if err != nil {
-				zap.S().Errorf("Failed to get migration client in %s: %w", db.Name, err)
+				log.Error().Err(err).Msgf("Failed to get migration client in %s", db.Name)
 				continue
 			}
 			defer mClient.Stop()
 
 			if ok, err := mClient.HasMigrationsTable(); err != nil {
-				zap.S().Errorf("Failed to check for existing migrations table in %s: %w", db.Name, err)
+				log.Error().Err(err).Msgf("Failed to check for existing migrations table in %s", db.Name)
 				continue
 			} else if !ok {
 				err = mClient.CreateMigrationsTable()
 				if err != nil {
-					zap.S().Errorf("Failed to get create migrations table %s: %w", db.Name, err)
+					log.Error().Err(err).Msgf("Failed to create migrations table in %s", db.Name)
 					continue
 				}
 			}
 
 			migrations, err := mClient.AppliedMigrations()
 			if err != nil {
-				zap.S().Errorf("Failed to get migrations for %s: %w", db.Name, err)
+				log.Error().Err(err).Msgf("Failed to get applied migrations in %s", db.Name)
 				continue
 			}
 
@@ -197,17 +197,17 @@ func (m *Manager) processCockroachClients() {
 	}
 
 	for _, secret := range secretsDemand.ToRemove {
-		zap.S().Infof("Removing secret %s", secret.Target.Name)
+		log.Info().Msgf("Removing secret %s", secret.Target.Name)
 		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name)
 		if err != nil {
-			zap.S().Errorf("Failed to delete secret %s: %w", secret.Target.Name, err)
+			log.Error().Err(err).Msgf("Failed to delete secret %s", secret.Target.Name)
 		}
 	}
 
 	for db := range dbs {
 		cli, err := database.New(db, m.namespace)
 		if err != nil {
-			zap.S().Errorf("Failed to create database client for %s: %w", db, err)
+			log.Error().Err(err).Msgf("Failed to create database client for %s", db)
 			continue
 		}
 		defer cli.Stop()
@@ -217,10 +217,10 @@ func (m *Manager) processCockroachClients() {
 				continue
 			}
 
-			zap.S().Infof("Dropping permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.DB)
+			log.Info().Msgf("Dropping permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.DB)
 			err = cli.RevokePermission(perm.Target)
 			if err != nil {
-				zap.S().Errorf("Failed to revoke permission: %w", err)
+				log.Error().Err(err).Msgf("Failed to revoke permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.DB)
 			}
 		}
 
@@ -229,10 +229,10 @@ func (m *Manager) processCockroachClients() {
 				continue
 			}
 
-			zap.S().Infof("Dropping database %s in db %s", toRemove.Target.Name, toRemove.Target.DB)
+			log.Info().Msgf("Dropping database %s in db %s", toRemove.Target.Name, toRemove.Target.DB)
 			err = cli.DeleteDB(toRemove.Target)
 			if err != nil {
-				zap.S().Errorf("Failed to delete database: %w", err)
+				log.Error().Err(err).Msgf("Failed to delete database %s in db %s", toRemove.Target.Name, toRemove.Target.DB)
 			}
 		}
 
@@ -241,10 +241,10 @@ func (m *Manager) processCockroachClients() {
 				continue
 			}
 
-			zap.S().Infof("Dropping user %s in db %s", user.Target.Name, user.Target.DB)
+			log.Info().Msgf("Dropping user %s in db %s", user.Target.Name, user.Target.DB)
 			err = cli.DeleteUser(user.Target)
 			if err != nil {
-				zap.S().Errorf("Failed to delete user: %w", err)
+				log.Error().Err(err).Msgf("Failed to delete user %s in db %s", user.Target.Name, user.Target.DB)
 			}
 		}
 
@@ -253,11 +253,10 @@ func (m *Manager) processCockroachClients() {
 				continue
 			}
 
-			zap.S().Infof("Creating database %s in db %s", toAdd.Target.Name, toAdd.Target.DB)
-
+			log.Info().Msgf("Creating database %s in db %s", toAdd.Target.Name, toAdd.Target.DB)
 			err := cli.CreateDB(toAdd.Target)
 			if err != nil {
-				zap.S().Errorf("Failed to create database: %w", err)
+				log.Error().Err(err).Msgf("Failed to create database %s in db %s", toAdd.Target.Name, toAdd.Target.DB)
 			}
 		}
 
@@ -266,11 +265,11 @@ func (m *Manager) processCockroachClients() {
 				continue
 			}
 
-			zap.S().Infof("Creating user %s in db %s", user.Target.Name, user.Target.DB)
+			log.Info().Msgf("Creating user %s in db %s", user.Target.Name, user.Target.DB)
 
 			err := cli.CreateUser(user.Target)
 			if err != nil {
-				zap.S().Errorf("Failed to create user: %w", err)
+				log.Error().Err(err).Msgf("Failed to create user %s in db %s", user.Target.Name, user.Target.DB)
 			}
 		}
 
@@ -279,19 +278,19 @@ func (m *Manager) processCockroachClients() {
 				continue
 			}
 
-			zap.S().Infof("Adding permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.DB)
+			log.Info().Msgf("Adding permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.DB)
 			err := cli.GrantPermission(perm.Target)
 			if err != nil {
-				zap.S().Errorf("Failed to grant permission: %w", err)
+				log.Error().Err(err).Msgf("Failed to grant permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.DB)
 			}
 		}
 	}
 
 	for _, secret := range secretsDemand.ToAdd {
-		zap.S().Infof("Adding secret %s", secret.Target.Name)
+		log.Info().Msgf("Adding secret %s", secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 		if err != nil {
-			zap.S().Errorf("Failed to create secret %s: %w", secret.Target.Name, err)
+			log.Error().Err(err).Msgf("Failed to create secret %s", secret.Target.Name)
 		}
 	}
 }
@@ -307,18 +306,18 @@ func (m *Manager) processCockroachMigrations() {
 
 			client, err := database.NewMigrations(deployment, m.namespace, db)
 			if err != nil {
-				zap.S().Errorf("Failed to create migrations client: %w", err)
+				log.Error().Err(err).Msgf("Failed to create migrations client for %s", db)
 				continue
 			}
 			defer client.Stop()
 
 			if ok, err := client.HasMigrationsTable(); err != nil {
-				zap.S().Errorf("Failed to check for existing migrations table in %s: %w", db, err)
+				log.Error().Err(err).Msgf("Failed to check for existing migrations table in %s", db)
 				continue
 			} else if !ok {
 				err = client.CreateMigrationsTable()
 				if err != nil {
-					zap.S().Errorf("Failed to get create migrations table %s: %w", db, err)
+					log.Error().Err(err).Msgf("Failed to create migrations table in %s", db)
 					continue
 				}
 			}
@@ -326,11 +325,11 @@ func (m *Manager) processCockroachMigrations() {
 			for demand.Next(deployment, db) {
 				migration, index := demand.GetNextMigration(deployment, db)
 
-				zap.S().Infof("Running migration %s [%s] %d", deployment, db, index)
+				log.Info().Msgf("Running migration %s [%s] %d", deployment, db, index)
 
 				err := client.RunMigration(index, migration)
 				if err != nil {
-					zap.S().Errorf("Failed to run migration %d: %w", index, err)
+					log.Error().Err(err).Msgf("Failed to run migration %s [%s] %d", deployment, db, index)
 					break
 				}
 			}

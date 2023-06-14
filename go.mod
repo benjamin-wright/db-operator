@@ -6,6 +6,7 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/jackc/pgconn v1.14.0
 	github.com/jackc/pgx/v4 v4.18.1
+	github.com/rs/zerolog v1.15.0
 	github.com/stretchr/testify v1.8.1
 	go.uber.org/zap v1.24.0
 	k8s.io/api v0.27.2

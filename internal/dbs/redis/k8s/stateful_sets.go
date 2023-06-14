@@ -137,7 +137,7 @@ func (s *RedisStatefulSet) FromUnstructured(obj *unstructured.Unstructured) erro
 
 	replicas, err := k8s_generic.GetProperty[int64](obj, "status", "replicas")
 	if err != nil {
-		return fmt.Errorf("failed to get replicas: %+v", err)
+		replicas = 0
 	}
 
 	readyReplicas, err := k8s_generic.GetProperty[int64](obj, "status", "readyReplicas")
@@ -145,7 +145,7 @@ func (s *RedisStatefulSet) FromUnstructured(obj *unstructured.Unstructured) erro
 		readyReplicas = 0
 	}
 
-	s.Ready = replicas == readyReplicas
+	s.Ready = replicas > 0 && replicas == readyReplicas
 
 	return nil
 }

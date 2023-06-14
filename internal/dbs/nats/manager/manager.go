@@ -8,7 +8,7 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/utils"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog/log"
 )
 
 type Manager struct {
@@ -76,7 +76,7 @@ func (m *Manager) Start() {
 		for {
 			select {
 			case <-m.ctx.Done():
-				zap.S().Infof("context cancelled, exiting manager loop")
+				log.Info().Msg("context cancelled, exiting manager loop")
 				return
 			default:
 				m.refresh()
@@ -92,10 +92,10 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		zap.S().Infof("Processing Started")
+		log.Info().Msg("Processing nats started")
 		m.processNatsDBs()
 		m.processNatsDeployments()
-		zap.S().Infof("Processing Done")
+		log.Info().Msg("Processing nats finished")
 	}
 }
 
@@ -104,28 +104,28 @@ func (m *Manager) processNatsDBs() {
 	svcDemand := m.state.GetServiceDemand()
 
 	for _, db := range dDemand.ToRemove {
-		zap.S().Infof("Deleting db: %s", db.Target.Name)
+		log.Info().Msgf("Deleting db: %s", db.Target.Name)
 		err := m.client.Deployments().Delete(m.ctx, db.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete nats deployment: %+v", err)
+			log.Error().Err(err).Msg("Failed to delete nats deployment")
 		}
 	}
 
 	for _, svc := range svcDemand.ToRemove {
-		zap.S().Infof("Deleting service: %s", svc.Target.Name)
+		log.Info().Msgf("Deleting service: %s", svc.Target.Name)
 		err := m.client.Services().Delete(m.ctx, svc.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete nats service: %+v", err)
+			log.Error().Err(err).Msg("Failed to delete nats service")
 		}
 	}
 
 	for _, db := range dDemand.ToAdd {
-		zap.S().Infof("Creating db: %s", db.Target.Name)
+		log.Info().Msgf("Creating db: %s", db.Target.Name)
 		err := m.client.Deployments().Create(m.ctx, db.Target)
 		if err != nil {
-			zap.S().Errorf("Failed to create nats deployment: %+v", err)
+			log.Error().Err(err).Msg("Failed to create nats deployment")
 			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create deployment: %s", err.Error()))
 		} else {
 			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created deployment")
@@ -133,11 +133,11 @@ func (m *Manager) processNatsDBs() {
 	}
 
 	for _, svc := range svcDemand.ToAdd {
-		zap.S().Infof("Creating service: %s", svc.Target.Name)
+		log.Info().Msgf("Creating service: %s", svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
 		if err != nil {
-			zap.S().Errorf("Failed to create nats service: %+v", err)
+			log.Error().Err(err).Msg("Failed to create nats service")
 		}
 	}
 }
@@ -146,20 +146,20 @@ func (m *Manager) processNatsDeployments() {
 	secretsDemand := m.state.GetSecretsDemand()
 
 	for _, secret := range secretsDemand.ToRemove {
-		zap.S().Infof("Deleting secret: %s", secret.Target.Name)
+		log.Info().Msgf("Deleting secret: %s", secret.Target.Name)
 		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name)
 
 		if err != nil {
-			zap.S().Errorf("Failed to delete nats secret: %+v", err)
+			log.Error().Err(err).Msg("Failed to delete nats secret")
 		}
 	}
 
 	for _, secret := range secretsDemand.ToAdd {
-		zap.S().Infof("Creating secret: %s", secret.Target.Name)
+		log.Info().Msgf("Creating secret: %s", secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 
 		if err != nil {
-			zap.S().Errorf("Failed to create nats secret: %+v", err)
+			log.Error().Err(err).Msg("Failed to create nats secret")
 		}
 	}
 }
