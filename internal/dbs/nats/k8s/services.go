@@ -8,7 +8,8 @@ import (
 )
 
 type NatsServiceComparable struct {
-	Name string
+	Name      string
+	Namespace string
 }
 
 type NatsService struct {
@@ -17,13 +18,14 @@ type NatsService struct {
 	ResourceVersion string
 }
 
-func (s *NatsService) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (s *NatsService) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "Service",
 			"metadata": map[string]interface{}{
-				"name": s.Name,
+				"name":      s.Name,
+				"namespace": s.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "nats",
@@ -50,6 +52,7 @@ func (s *NatsService) ToUnstructured(namespace string) *unstructured.Unstructure
 
 func (s *NatsService) FromUnstructured(obj *unstructured.Unstructured) error {
 	s.Name = obj.GetName()
+	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
 	return nil
@@ -57,6 +60,10 @@ func (s *NatsService) FromUnstructured(obj *unstructured.Unstructured) error {
 
 func (s *NatsService) GetName() string {
 	return s.Name
+}
+
+func (s *NatsService) GetNamespace() string {
+	return s.Namespace
 }
 
 func (s *NatsService) GetUID() string {

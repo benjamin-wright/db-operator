@@ -15,15 +15,21 @@ spec:
             spec:
               type: object
               properties:
-                deployment:
-                  type: string
+                dbRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  required: [ name, namespace ]
                 database:
                   type: string
                 username:
                   type: string
                 secret:
                   type: string
-              required: [ deployment, database, username, secret ]
+              required: [ dbRef, database, username, secret ]
             status:
               type: object
               properties:

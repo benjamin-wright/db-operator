@@ -1,8 +1,9 @@
-package state
+package types
 
 type Nameable[T any] interface {
 	*T
 	GetName() string
+	GetNamespace() string
 }
 
 type HasStorage[T any] interface {
@@ -18,4 +19,5 @@ type Readyable[T any] interface {
 type Targetable[T any] interface {
 	Nameable[T]
 	GetTarget() string
+	GetTargetNamespace() string
 }

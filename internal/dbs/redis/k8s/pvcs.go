@@ -10,9 +10,10 @@ import (
 )
 
 type RedisPVCComparable struct {
-	Name     string
-	Database string
-	Storage  string
+	Name      string
+	Namespace string
+	Database  string
+	Storage   string
 }
 
 type RedisPVC struct {
@@ -21,18 +22,15 @@ type RedisPVC struct {
 	ResourceVersion string
 }
 
-func (p *RedisPVC) ToUnstructured(namespace string) *unstructured.Unstructured {
-	pvc := &unstructured.Unstructured{
-		Object: map[string]interface{}{},
-	}
-
-	return pvc
+func (p *RedisPVC) ToUnstructured() *unstructured.Unstructured {
+	panic("not implemented")
 }
 
 func (p *RedisPVC) FromUnstructured(obj *unstructured.Unstructured) error {
 	var err error
 
 	p.Name = obj.GetName()
+	p.Namespace = obj.GetNamespace()
 	p.UID = string(obj.GetUID())
 	p.ResourceVersion = obj.GetResourceVersion()
 	p.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "resources", "requests", "storage")
@@ -50,6 +48,10 @@ func (p *RedisPVC) FromUnstructured(obj *unstructured.Unstructured) error {
 
 func (p *RedisPVC) GetName() string {
 	return p.Name
+}
+
+func (p *RedisPVC) GetNamespace() string {
+	return p.Namespace
 }
 
 func (p *RedisPVC) GetUID() string {

@@ -10,28 +10,28 @@ import (
 	redis "github.com/benjamin-wright/db-operator/internal/dbs/redis/manager"
 )
 
-func Run(namespace string) (func(), error) {
-	cockroachDeployManager, err := deployment.New(namespace, 5*time.Second)
+func Run() (func(), error) {
+	cockroachDeployManager, err := deployment.New(5 * time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach deployment manager: %w", err)
+		return nil, fmt.Errorf("failed to create cockroach deployment manager: %+v", err)
 	}
 	cockroachDeployManager.Start()
 
-	cockroachDBManager, err := database.New(namespace, 5*time.Second)
+	cockroachDBManager, err := database.New(5 * time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach database manager: %w", err)
+		return nil, fmt.Errorf("failed to create cockroach database manager: %+v", err)
 	}
 	cockroachDBManager.Start()
 
-	redisDeployManager, err := redis.New(namespace, 5*time.Second)
+	redisDeployManager, err := redis.New(5 * time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create redis deployment manager: %w", err)
+		return nil, fmt.Errorf("failed to create redis deployment manager: %+v", err)
 	}
 	redisDeployManager.Start()
 
-	natsDeployManager, err := nats.New(namespace, 5*time.Second)
+	natsDeployManager, err := nats.New(5 * time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create nats deployment manager: %w", err)
+		return nil, fmt.Errorf("failed to create nats deployment manager: %+v", err)
 	}
 	natsDeployManager.Start()
 

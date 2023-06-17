@@ -9,11 +9,12 @@ import (
 )
 
 type CockroachClientComparable struct {
-	Name       string
-	Deployment string
-	Database   string
-	Username   string
-	Secret     string
+	Name      string
+	Namespace string
+	DBRef     DBRef
+	Database  string
+	Username  string
+	Secret    string
 }
 
 type CockroachClient struct {
@@ -22,19 +23,23 @@ type CockroachClient struct {
 	ResourceVersion string
 }
 
-func (cli *CockroachClient) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (cli *CockroachClient) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "CockroachClient",
 		"metadata": map[string]interface{}{
-			"name": cli.Name,
+			"name":      cli.Name,
+			"namespace": cli.Namespace,
 		},
 		"spec": map[string]interface{}{
-			"deployment": cli.Deployment,
-			"database":   cli.Database,
-			"username":   cli.Username,
-			"secret":     cli.Secret,
+			"dbRef": map[string]interface{}{
+				"name":      cli.DBRef.Name,
+				"namespace": cli.DBRef.Namespace,
+			},
+			"database": cli.Database,
+			"username": cli.Username,
+			"secret":   cli.Secret,
 		},
 	})
 
@@ -44,17 +49,18 @@ func (cli *CockroachClient) ToUnstructured(namespace string) *unstructured.Unstr
 func (cli *CockroachClient) FromUnstructured(obj *unstructured.Unstructured) error {
 	var err error
 	cli.Name = obj.GetName()
+	cli.Namespace = obj.GetNamespace()
 	cli.UID = string(obj.GetUID())
 	cli.ResourceVersion = obj.GetResourceVersion()
 
-	cli.Deployment, err = k8s_generic.GetProperty[string](obj, "spec", "deployment")
+	cli.DBRef.Name, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "name")
 	if err != nil {
-		return fmt.Errorf("failed to get deployment: %+v", err)
+		return fmt.Errorf("failed to get db ref name: %+v", err)
 	}
 
-	cli.Deployment, err = k8s_generic.GetProperty[string](obj, "spec", "deployment")
+	cli.DBRef.Namespace, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "namespace")
 	if err != nil {
-		return fmt.Errorf("failed to get deployment: %+v", err)
+		return fmt.Errorf("failed to get db ref namespace: %+v", err)
 	}
 
 	cli.Database, err = k8s_generic.GetProperty[string](obj, "spec", "database")
@@ -79,6 +85,10 @@ func (cli *CockroachClient) GetName() string {
 	return cli.Name
 }
 
+func (cli *CockroachClient) GetNamespace() string {
+	return cli.Namespace
+}
+
 func (cli *CockroachClient) GetUID() string {
 	return cli.UID
 }
@@ -88,7 +98,11 @@ func (cli *CockroachClient) GetResourceVersion() string {
 }
 
 func (cli *CockroachClient) GetTarget() string {
-	return cli.Deployment
+	return cli.DBRef.Name
+}
+
+func (cli *CockroachClient) GetTargetNamespace() string {
+	return cli.DBRef.Namespace
 }
 
 func (cli *CockroachClient) Equal(obj CockroachClient) bool {

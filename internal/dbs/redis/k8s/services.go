@@ -8,7 +8,8 @@ import (
 )
 
 type RedisServiceComparable struct {
-	Name string
+	Name      string
+	Namespace string
 }
 
 type RedisService struct {
@@ -17,13 +18,14 @@ type RedisService struct {
 	ResourceVersion string
 }
 
-func (s *RedisService) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (s *RedisService) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "Service",
 			"metadata": map[string]interface{}{
-				"name": s.Name,
+				"name":      s.Name,
+				"namespace": s.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "redis",
@@ -50,6 +52,7 @@ func (s *RedisService) ToUnstructured(namespace string) *unstructured.Unstructur
 
 func (s *RedisService) FromUnstructured(obj *unstructured.Unstructured) error {
 	s.Name = obj.GetName()
+	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
 	return nil
@@ -57,6 +60,10 @@ func (s *RedisService) FromUnstructured(obj *unstructured.Unstructured) error {
 
 func (s *RedisService) GetName() string {
 	return s.Name
+}
+
+func (s *RedisService) GetNamespace() string {
+	return s.Namespace
 }
 
 func (s *RedisService) GetUID() string {

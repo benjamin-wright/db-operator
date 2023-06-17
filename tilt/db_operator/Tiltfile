@@ -1,18 +1,24 @@
 load('ext://helm_resource', 'helm_resource')
 
-def db_operator(namespace, name, version, labels=[]):
-    helm_resource(
-        name,
-        namespace=namespace,
-        chart='oci://docker.io/benwright/db-operator-chart',
-        flags=[
-            '--version={}'.format(version),
-            '--set=image=benwright/db-operator:{}'.format(version),
-        ],
-        labels=["operator"] + labels
-    )
+def db(namespace, name, db_type, storage):
+    kinds = {
+        'redis': 'RedisDB',
+        'cockroach': 'CockroachDB',
+    }
+    
+    k8s_yaml(blob("""
+        apiVersion: ponglehub.co.uk/v1alpha1
+        kind: {}
+        metadata:
+            name: {}
+            namespace: {}
+        spec:
+            storage: {}
+    """.format(kinds[db_type], name, namespace, storage)))
 
     k8s_resource(
-        name,
-        labels=["operator"] + labels
+        new_name=name,
+        objects=['%s:%sdb' % (name, db_type)],
+        extra_pod_selectors=[{'app': name}],
+        labels=['infra'],
     )

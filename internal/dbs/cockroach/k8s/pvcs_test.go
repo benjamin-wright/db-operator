@@ -34,6 +34,7 @@ func TestCockroachPVCFromUnstructured(t *testing.T) {
 	assert.NoError(t, cockroachPVC.FromUnstructured(pvc))
 
 	assert.Equal(t, "test-name", cockroachPVC.Name)
+	assert.Equal(t, "test-namespace", cockroachPVC.Namespace)
 	assert.Equal(t, "test-uid", cockroachPVC.UID)
 	assert.Equal(t, "test-resource-version", cockroachPVC.ResourceVersion)
 	assert.Equal(t, "test-storage", cockroachPVC.Storage)

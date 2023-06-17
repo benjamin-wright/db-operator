@@ -10,9 +10,10 @@ import (
 )
 
 type CockroachStatefulSetComparable struct {
-	Name    string
-	Storage string
-	Ready   bool
+	Name      string
+	Namespace string
+	Storage   string
+	Ready     bool
 }
 
 type CockroachStatefulSet struct {
@@ -21,13 +22,14 @@ type CockroachStatefulSet struct {
 	ResourceVersion string
 }
 
-func (s *CockroachStatefulSet) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (s *CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
 			"kind":       "StatefulSet",
 			"metadata": map[string]interface{}{
-				"name": s.Name,
+				"name":      s.Name,
+				"namespace": s.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"ponglehub.co.uk/resource-type": "cockroachdb",
 				}, common.LABEL_FILTERS),
@@ -139,6 +141,7 @@ func (s *CockroachStatefulSet) FromUnstructured(obj *unstructured.Unstructured) 
 	var err error
 
 	s.Name = obj.GetName()
+	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
 
@@ -164,6 +167,10 @@ func (s *CockroachStatefulSet) FromUnstructured(obj *unstructured.Unstructured) 
 
 func (db *CockroachStatefulSet) GetName() string {
 	return db.Name
+}
+
+func (db *CockroachStatefulSet) GetNamespace() string {
+	return db.Namespace
 }
 
 func (db *CockroachStatefulSet) GetUID() string {

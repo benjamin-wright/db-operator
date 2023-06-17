@@ -15,13 +15,19 @@ spec:
             spec:
               type: object
               properties:
-                deployment:
-                  type: string
+                dbRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  required: [ name, namespace ]
                 unit:
                   type: integer
                 secret:
                   type: string
-              required: [ deployment, unit, secret ]
+              required: [ dbRef, unit, secret ]
             status:
               type: object
               properties:

@@ -20,9 +20,10 @@ import (
 type Resource[T any] interface {
 	*T
 	GetName() string
+	GetNamespace() string
 	GetUID() string
 	GetResourceVersion() string
-	ToUnstructured(namespace string) *unstructured.Unstructured
+	ToUnstructured() *unstructured.Unstructured
 	FromUnstructured(obj *unstructured.Unstructured) error
 	Equal(obj T) bool
 }
@@ -30,7 +31,6 @@ type Resource[T any] interface {
 type Client[T any, PT Resource[T]] struct {
 	client       dynamic.Interface
 	restClient   *rest.RESTClient
-	namespace    string
 	schema       schema.GroupVersionResource
 	kind         string
 	labelFilters map[string]string
@@ -38,7 +38,6 @@ type Client[T any, PT Resource[T]] struct {
 
 func NewClient[T any, PT Resource[T]](b *Builder, resourceSchema schema.GroupVersionResource, kind string, labelFilters map[string]string) *Client[T, PT] {
 	return &Client[T, PT]{
-		namespace:    b.namespace,
 		schema:       resourceSchema,
 		client:       b.dynClient,
 		restClient:   b.restClient,
@@ -50,7 +49,7 @@ func NewClient[T any, PT Resource[T]](b *Builder, resourceSchema schema.GroupVer
 func (c *Client[T, PT]) Create(ctx context.Context, resource T) error {
 	ptr := PT(&resource)
 
-	_, err := c.client.Resource(c.schema).Namespace(c.namespace).Create(ctx, ptr.ToUnstructured(c.namespace), v1.CreateOptions{})
+	_, err := c.client.Resource(c.schema).Namespace(ptr.GetNamespace()).Create(ctx, ptr.ToUnstructured(), v1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create %T: %+v", resource, err)
 	}
@@ -58,11 +57,11 @@ func (c *Client[T, PT]) Create(ctx context.Context, resource T) error {
 	return nil
 }
 
-func (c *Client[T, PT]) Get(ctx context.Context, name string) (T, error) {
+func (c *Client[T, PT]) Get(ctx context.Context, name string, namespace string) (T, error) {
 	var object T
 	ptr := PT(&object)
 
-	res, err := c.client.Resource(c.schema).Namespace(c.namespace).Get(ctx, name, v1.GetOptions{})
+	res, err := c.client.Resource(c.schema).Namespace(namespace).Get(ctx, name, v1.GetOptions{})
 	if err != nil {
 		return object, fmt.Errorf("failed to get %T: %s", object, name)
 	}
@@ -85,7 +84,7 @@ func (c *Client[T, PT]) GetAll(ctx context.Context) ([]T, error) {
 		})
 	}
 
-	res, err := c.client.Resource(c.schema).Namespace(c.namespace).List(ctx, options)
+	res, err := c.client.Resource(c.schema).List(ctx, options)
 	if err != nil {
 		return objects, fmt.Errorf("failed to get all %T: %+v", objects, err)
 	}
@@ -105,8 +104,8 @@ func (c *Client[T, PT]) GetAll(ctx context.Context) ([]T, error) {
 	return objects, nil
 }
 
-func (c *Client[T, PT]) Delete(ctx context.Context, name string) error {
-	err := c.client.Resource(c.schema).Namespace(c.namespace).Delete(ctx, name, v1.DeleteOptions{})
+func (c *Client[T, PT]) Delete(ctx context.Context, name string, namespace string) error {
+	err := c.client.Resource(c.schema).Namespace(namespace).Delete(ctx, name, v1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete %T: %+v", name, err)
 	}
@@ -114,8 +113,8 @@ func (c *Client[T, PT]) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *Client[T, PT]) DeleteAll(ctx context.Context) error {
-	err := c.client.Resource(c.schema).Namespace(c.namespace).DeleteCollection(ctx, v1.DeleteOptions{}, v1.ListOptions{})
+func (c *Client[T, PT]) DeleteAll(ctx context.Context, namespace string) error {
+	err := c.client.Resource(c.schema).Namespace(namespace).DeleteCollection(ctx, v1.DeleteOptions{}, v1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete all resources: %+v", err)
 	}
@@ -126,7 +125,7 @@ func (c *Client[T, PT]) DeleteAll(ctx context.Context) error {
 func (c *Client[T, PT]) Update(ctx context.Context, resource T) error {
 	ptr := PT(&resource)
 
-	_, err := c.client.Resource(c.schema).Namespace(c.namespace).Update(ctx, ptr.ToUnstructured(c.namespace), v1.UpdateOptions{})
+	_, err := c.client.Resource(c.schema).Namespace(ptr.GetNamespace()).Update(ctx, ptr.ToUnstructured(), v1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed up update resource %s: %+v", ptr.GetName(), err)
 	}
@@ -150,7 +149,7 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc, up
 		return res
 	}
 
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(c.client, time.Minute, c.namespace, func(lo *v1.ListOptions) {
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(c.client, time.Minute, "", func(lo *v1.ListOptions) {
 		if len(c.labelFilters) == 0 {
 			return
 		}
@@ -208,7 +207,7 @@ func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, mes
 		Kind:            c.kind,
 		APIVersion:      c.schema.Group + "/" + c.schema.Version,
 		Name:            ptr.GetName(),
-		Namespace:       c.namespace,
+		Namespace:       ptr.GetNamespace(),
 		UID:             types.UID(ptr.GetUID()),
 		ResourceVersion: ptr.GetResourceVersion(),
 	}
@@ -218,7 +217,7 @@ func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, mes
 	e := &corev1.Event{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      fmt.Sprintf("%v.%x", ref.Name, t.UnixNano()),
-			Namespace: c.namespace,
+			Namespace: ptr.GetNamespace(),
 		},
 		InvolvedObject: ref,
 		Reason:         reason,
@@ -231,7 +230,7 @@ func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, mes
 	}
 
 	err := c.restClient.Post().
-		Namespace(c.namespace).
+		Namespace(ptr.GetNamespace()).
 		Resource("events").
 		Body(e).
 		Do(ctx).

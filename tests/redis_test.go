@@ -16,27 +16,32 @@ func TestRedisIntegration(t *testing.T) {
 
 	namespace := os.Getenv("NAMESPACE")
 
-	client, err := k8s.New(namespace)
+	client, err := k8s.New()
 	if !assert.NoError(t, err) {
 		t.FailNow()
 	}
 
-	mustPass(t, client.DBs().DeleteAll(context.Background()))
-	mustPass(t, client.Clients().DeleteAll(context.Background()))
+	mustPass(t, client.DBs().DeleteAll(context.Background(), namespace))
+	mustPass(t, client.Clients().DeleteAll(context.Background(), namespace))
 
 	mustPass(t, client.DBs().Create(context.Background(), k8s.RedisDB{
 		RedisDBComparable: k8s.RedisDBComparable{
-			Name:    "redis-db",
-			Storage: "256Mi",
+			Name:      "redis-db",
+			Namespace: namespace,
+			Storage:   "256Mi",
 		},
 	}))
 
 	mustPass(t, client.Clients().Create(context.Background(), k8s.RedisClient{
 		RedisClientComparable: k8s.RedisClientComparable{
-			Name:       "my-secret",
-			Deployment: "redis-db",
-			Unit:       1,
-			Secret:     "rdb-secret",
+			Name:      "my-secret",
+			Namespace: namespace,
+			DBRef: k8s.DBRef{
+				Name:      "redis-db",
+				Namespace: namespace,
+			},
+			Unit:   1,
+			Secret: "rdb-secret",
 		},
 	}))
 }

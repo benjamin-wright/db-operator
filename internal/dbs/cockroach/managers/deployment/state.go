@@ -3,17 +3,18 @@ package deployment
 import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 
 type State struct {
-	dbs          state.Bucket[k8s.CockroachDB, *k8s.CockroachDB]
-	clients      state.Bucket[k8s.CockroachClient, *k8s.CockroachClient]
-	statefulSets state.Bucket[k8s.CockroachStatefulSet, *k8s.CockroachStatefulSet]
-	pvcs         state.Bucket[k8s.CockroachPVC, *k8s.CockroachPVC]
-	services     state.Bucket[k8s.CockroachService, *k8s.CockroachService]
-	secrets      state.Bucket[k8s.CockroachSecret, *k8s.CockroachSecret]
+	dbs          bucket.Bucket[k8s.CockroachDB, *k8s.CockroachDB]
+	clients      bucket.Bucket[k8s.CockroachClient, *k8s.CockroachClient]
+	statefulSets bucket.Bucket[k8s.CockroachStatefulSet, *k8s.CockroachStatefulSet]
+	pvcs         bucket.Bucket[k8s.CockroachPVC, *k8s.CockroachPVC]
+	services     bucket.Bucket[k8s.CockroachService, *k8s.CockroachService]
+	secrets      bucket.Bucket[k8s.CockroachSecret, *k8s.CockroachSecret]
 }
 
 func (s *State) Apply(update interface{}) {
@@ -42,8 +43,9 @@ func (s *State) GetStatefulSetDemand() state.Demand[k8s.CockroachDB, k8s.Cockroa
 		func(db k8s.CockroachDB) k8s.CockroachStatefulSet {
 			return k8s.CockroachStatefulSet{
 				CockroachStatefulSetComparable: k8s.CockroachStatefulSetComparable{
-					Name:    db.Name,
-					Storage: db.Storage,
+					Name:      db.Name,
+					Namespace: db.Namespace,
+					Storage:   db.Storage,
 				},
 			}
 		},
@@ -57,7 +59,8 @@ func (s *State) GetServiceDemand() state.Demand[k8s.CockroachDB, k8s.CockroachSe
 		func(db k8s.CockroachDB) k8s.CockroachService {
 			return k8s.CockroachService{
 				CockroachServiceComparable: k8s.CockroachServiceComparable{
-					Name: db.Name,
+					Name:      db.Name,
+					Namespace: db.Namespace,
 				},
 			}
 		},

@@ -10,9 +10,10 @@ import (
 )
 
 type CockroachPVCComparable struct {
-	Name     string
-	Database string
-	Storage  string
+	Name      string
+	Namespace string
+	Database  string
+	Storage   string
 }
 
 type CockroachPVC struct {
@@ -21,7 +22,7 @@ type CockroachPVC struct {
 	ResourceVersion string
 }
 
-func (p *CockroachPVC) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (p *CockroachPVC) ToUnstructured() *unstructured.Unstructured {
 	panic("not implemented")
 }
 
@@ -29,6 +30,7 @@ func (p *CockroachPVC) FromUnstructured(obj *unstructured.Unstructured) error {
 	var err error
 
 	p.Name = obj.GetName()
+	p.Namespace = obj.GetNamespace()
 	p.UID = string(obj.GetUID())
 	p.ResourceVersion = obj.GetResourceVersion()
 
@@ -47,6 +49,10 @@ func (p *CockroachPVC) FromUnstructured(obj *unstructured.Unstructured) error {
 
 func (p *CockroachPVC) GetName() string {
 	return p.Name
+}
+
+func (p *CockroachPVC) GetNamespace() string {
+	return p.Namespace
 }
 
 func (p *CockroachPVC) GetUID() string {

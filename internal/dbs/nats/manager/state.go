@@ -3,16 +3,17 @@ package manager
 import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 
 type State struct {
-	dbs          state.Bucket[k8s.NatsDB, *k8s.NatsDB]
-	clients      state.Bucket[k8s.NatsClient, *k8s.NatsClient]
-	statefulSets state.Bucket[k8s.NatsDeployment, *k8s.NatsDeployment]
-	services     state.Bucket[k8s.NatsService, *k8s.NatsService]
-	secrets      state.Bucket[k8s.NatsSecret, *k8s.NatsSecret]
+	dbs          bucket.Bucket[k8s.NatsDB, *k8s.NatsDB]
+	clients      bucket.Bucket[k8s.NatsClient, *k8s.NatsClient]
+	statefulSets bucket.Bucket[k8s.NatsDeployment, *k8s.NatsDeployment]
+	services     bucket.Bucket[k8s.NatsService, *k8s.NatsService]
+	secrets      bucket.Bucket[k8s.NatsSecret, *k8s.NatsSecret]
 }
 
 func (s *State) Apply(update interface{}) {
@@ -39,7 +40,8 @@ func (s *State) GetDeploymentDemand() state.Demand[k8s.NatsDB, k8s.NatsDeploymen
 		func(db k8s.NatsDB) k8s.NatsDeployment {
 			return k8s.NatsDeployment{
 				NatsDeploymentComparable: k8s.NatsDeploymentComparable{
-					Name: db.Name,
+					Name:      db.Name,
+					Namespace: db.Namespace,
 				},
 			}
 		},
@@ -53,7 +55,8 @@ func (s *State) GetServiceDemand() state.Demand[k8s.NatsDB, k8s.NatsService] {
 		func(db k8s.NatsDB) k8s.NatsService {
 			return k8s.NatsService{
 				NatsServiceComparable: k8s.NatsServiceComparable{
-					Name: db.Name,
+					Name:      db.Name,
+					Namespace: db.Namespace,
 				},
 			}
 		},
@@ -68,8 +71,9 @@ func (s *State) GetSecretsDemand() state.Demand[k8s.NatsClient, k8s.NatsSecret] 
 		func(client k8s.NatsClient) k8s.NatsSecret {
 			return k8s.NatsSecret{
 				NatsSecretComparable: k8s.NatsSecretComparable{
-					Name: client.Secret,
-					DB:   client.Deployment,
+					Name:      client.Secret,
+					Namespace: client.Namespace,
+					DB:        client.DBRef,
 				},
 			}
 		},

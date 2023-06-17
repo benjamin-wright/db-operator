@@ -12,6 +12,7 @@ import (
 type MigrationsClient struct {
 	conn       *pgx.Conn
 	deployment string
+	namespace  string
 	database   string
 }
 
@@ -31,6 +32,7 @@ func NewMigrations(deployment string, namespace string, database string) (*Migra
 	return &MigrationsClient{
 		conn:       conn,
 		deployment: deployment,
+		namespace:  namespace,
 		database:   database,
 	}, nil
 }
@@ -80,7 +82,10 @@ func (c *MigrationsClient) AppliedMigrations() ([]Migration, error) {
 		}
 
 		migrations = append(migrations, Migration{
-			DB:       c.deployment,
+			DB: DBRef{
+				Name:      c.deployment,
+				Namespace: c.namespace,
+			},
 			Database: c.database,
 			Index:    id,
 		})

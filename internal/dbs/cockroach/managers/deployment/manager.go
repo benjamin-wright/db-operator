@@ -6,13 +6,12 @@ import (
 	"time"
 
 	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
-	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/rs/zerolog/log"
 )
 
 type Manager struct {
-	namespace string
 	ctx       context.Context
 	cancel    context.CancelFunc
 	client    *k8s.Client
@@ -24,12 +23,11 @@ type Manager struct {
 type WatchFunc func(context.Context, context.CancelFunc, chan<- any) error
 
 func New(
-	namespace string,
 	debounce time.Duration,
 ) (*Manager, error) {
-	client, err := k8s.New(namespace)
+	client, err := k8s.New()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach client: %w", err)
+		return nil, fmt.Errorf("failed to create cockroach client: %+v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,15 +47,14 @@ func New(
 	}
 
 	state := State{
-		dbs:          state.NewBucket[k8s.CockroachDB](),
-		clients:      state.NewBucket[k8s.CockroachClient](),
-		statefulSets: state.NewBucket[k8s.CockroachStatefulSet](),
-		pvcs:         state.NewBucket[k8s.CockroachPVC](),
-		services:     state.NewBucket[k8s.CockroachService](),
+		dbs:          bucket.NewBucket[k8s.CockroachDB](),
+		clients:      bucket.NewBucket[k8s.CockroachClient](),
+		statefulSets: bucket.NewBucket[k8s.CockroachStatefulSet](),
+		pvcs:         bucket.NewBucket[k8s.CockroachPVC](),
+		services:     bucket.NewBucket[k8s.CockroachService](),
 	}
 
 	return &Manager{
-		namespace: namespace,
 		ctx:       ctx,
 		cancel:    cancel,
 		client:    client,
@@ -105,7 +102,7 @@ func (m *Manager) processCockroachDBs() {
 
 	for _, db := range ssDemand.ToRemove {
 		log.Info().Msgf("Deleting db: %s", db.Target.Name)
-		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name)
+		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name, db.Target.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to delete cockroachdb stateful set: %+v", err)
@@ -114,7 +111,7 @@ func (m *Manager) processCockroachDBs() {
 
 	for _, svc := range svcDemand.ToRemove {
 		log.Info().Msgf("Deleting service: %s", svc.Target.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Target.Name)
+		err := m.client.Services().Delete(m.ctx, svc.Target.Name, svc.Target.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to delete cockroachdb service: %+v", err)
@@ -123,7 +120,7 @@ func (m *Manager) processCockroachDBs() {
 
 	for _, pvc := range pvcsToRemove {
 		log.Info().Msgf("Deleting pvc: %s", pvc.Name)
-		err := m.client.PVCs().Delete(m.ctx, pvc.Name)
+		err := m.client.PVCs().Delete(m.ctx, pvc.Name, pvc.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to delete cockroachdb PVC: %+v", err)

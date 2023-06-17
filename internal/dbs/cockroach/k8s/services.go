@@ -8,7 +8,8 @@ import (
 )
 
 type CockroachServiceComparable struct {
-	Name string
+	Name      string
+	Namespace string
 }
 
 type CockroachService struct {
@@ -17,13 +18,14 @@ type CockroachService struct {
 	ResourceVersion string
 }
 
-func (s *CockroachService) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (s *CockroachService) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "Service",
 			"metadata": map[string]interface{}{
-				"name": s.Name,
+				"name":      s.Name,
+				"namespace": s.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "cockroachdb",
@@ -50,6 +52,7 @@ func (s *CockroachService) ToUnstructured(namespace string) *unstructured.Unstru
 
 func (s *CockroachService) FromUnstructured(obj *unstructured.Unstructured) error {
 	s.Name = obj.GetName()
+	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
 	return nil
@@ -57,6 +60,10 @@ func (s *CockroachService) FromUnstructured(obj *unstructured.Unstructured) erro
 
 func (s *CockroachService) GetName() string {
 	return s.Name
+}
+
+func (s *CockroachService) GetNamespace() string {
+	return s.Namespace
 }
 
 func (s *CockroachService) GetUID() string {

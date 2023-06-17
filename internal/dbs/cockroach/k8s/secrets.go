@@ -12,10 +12,11 @@ import (
 )
 
 type CockroachSecretComparable struct {
-	Name     string
-	DB       string
-	Database string
-	User     string
+	Name      string
+	Namespace string
+	DB        DBRef
+	Database  string
+	User      string
 }
 
 type CockroachSecret struct {
@@ -28,15 +29,15 @@ func encode(data string) string {
 	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
-func (s *CockroachSecret) GetHost(namespace string) string {
-	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB, namespace)
+func (s *CockroachSecret) GetHost() string {
+	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB.Name, s.DB.Namespace)
 }
 
 func (s *CockroachSecret) GetPort() string {
 	return "26257"
 }
 
-func (s *CockroachSecret) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (s *CockroachSecret) ToUnstructured() *unstructured.Unstructured {
 	secret := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -47,10 +48,10 @@ func (s *CockroachSecret) ToUnstructured(namespace string) *unstructured.Unstruc
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "cockroachdb",
 				}, common.LABEL_FILTERS),
-				"namespace": namespace,
+				"namespace": s.Namespace,
 			},
 			"data": map[string]interface{}{
-				"POSTGRES_HOST": encode(s.GetHost(namespace)),
+				"POSTGRES_HOST": encode(s.GetHost()),
 				"POSTGRES_PORT": encode(s.GetPort()),
 				"POSTGRES_USER": encode(s.User),
 				"POSTGRES_NAME": encode(s.Database),
@@ -63,6 +64,7 @@ func (s *CockroachSecret) ToUnstructured(namespace string) *unstructured.Unstruc
 
 func (s *CockroachSecret) FromUnstructured(obj *unstructured.Unstructured) error {
 	s.Name = obj.GetName()
+	s.Namespace = obj.GetNamespace()
 
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
@@ -71,7 +73,8 @@ func (s *CockroachSecret) FromUnstructured(obj *unstructured.Unstructured) error
 	if err != nil {
 		return fmt.Errorf("failed to get POSTGRES_HOST: %+v", err)
 	}
-	s.DB = strings.Split(hostname, ".")[0]
+	s.DB.Name = strings.Split(hostname, ".")[0]
+	s.DB.Namespace = strings.Split(hostname, ".")[1]
 
 	s.User, err = k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_USER")
 	if err != nil {
@@ -88,6 +91,10 @@ func (s *CockroachSecret) FromUnstructured(obj *unstructured.Unstructured) error
 
 func (s *CockroachSecret) GetName() string {
 	return s.Name
+}
+
+func (s *CockroachSecret) GetNamespace() string {
+	return s.Namespace
 }
 
 func (s *CockroachSecret) GetUID() string {

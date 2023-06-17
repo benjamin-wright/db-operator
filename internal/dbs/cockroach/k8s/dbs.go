@@ -9,8 +9,9 @@ import (
 )
 
 type CockroachDBComparable struct {
-	Name    string
-	Storage string
+	Name      string
+	Namespace string
+	Storage   string
 }
 
 type CockroachDB struct {
@@ -19,13 +20,14 @@ type CockroachDB struct {
 	ResourceVersion string
 }
 
-func (db *CockroachDB) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (db *CockroachDB) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "CockroachDB",
 		"metadata": map[string]interface{}{
-			"name": db.Name,
+			"name":      db.Name,
+			"namespace": db.Namespace,
 		},
 		"spec": map[string]interface{}{
 			"storage": db.Storage,
@@ -39,6 +41,7 @@ func (db *CockroachDB) FromUnstructured(obj *unstructured.Unstructured) error {
 	var err error
 
 	db.Name = obj.GetName()
+	db.Namespace = obj.GetNamespace()
 	db.UID = string(obj.GetUID())
 	db.ResourceVersion = obj.GetResourceVersion()
 	db.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "storage")
@@ -51,6 +54,10 @@ func (db *CockroachDB) FromUnstructured(obj *unstructured.Unstructured) error {
 
 func (db *CockroachDB) GetName() string {
 	return db.Name
+}
+
+func (db *CockroachDB) GetNamespace() string {
+	return db.Namespace
 }
 
 func (db *CockroachDB) GetStorage() string {

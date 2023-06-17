@@ -8,8 +8,9 @@ import (
 )
 
 type Client struct {
-	conn     *postgres.AdminConn
-	database string
+	conn      *postgres.AdminConn
+	database  string
+	namespace string
 }
 
 func New(database string, namespace string) (*Client, error) {
@@ -25,8 +26,9 @@ func New(database string, namespace string) (*Client, error) {
 	}
 
 	return &Client{
-		conn:     conn,
-		database: database,
+		conn:      conn,
+		database:  database,
+		namespace: namespace,
 	}, nil
 }
 
@@ -52,7 +54,10 @@ func (c *Client) ListDBs() ([]Database, error) {
 		}
 
 		databases = append(databases, Database{
-			DB:   c.database,
+			DB: DBRef{
+				Name:      c.database,
+				Namespace: c.namespace,
+			},
 			Name: name,
 		})
 	}
@@ -95,7 +100,10 @@ func (c *Client) ListUsers() ([]User, error) {
 		}
 
 		users = append(users, User{
-			DB:   c.database,
+			DB: DBRef{
+				Name:      c.database,
+				Namespace: c.namespace,
+			},
 			Name: name,
 		})
 	}
@@ -134,7 +142,10 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 		}
 
 		permissions = append(permissions, Permission{
-			DB:       c.database,
+			DB: DBRef{
+				Name:      c.database,
+				Namespace: c.namespace,
+			},
 			Database: db.Name,
 			User:     user,
 		})

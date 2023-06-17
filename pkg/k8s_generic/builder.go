@@ -15,10 +15,9 @@ type Builder struct {
 	config     *rest.Config
 	dynClient  *dynamic.DynamicClient
 	restClient *rest.RESTClient
-	namespace  string
 }
 
-func NewBuilder(namespace string) (*Builder, error) {
+func NewBuilder() (*Builder, error) {
 	kubeconfig := os.Getenv("KUBECONFIG")
 	var config *rest.Config
 	var err error
@@ -52,7 +51,6 @@ func NewBuilder(namespace string) (*Builder, error) {
 	}
 
 	return &Builder{
-		namespace:  namespace,
 		dynClient:  dynClient,
 		restClient: restClient,
 		config:     config,

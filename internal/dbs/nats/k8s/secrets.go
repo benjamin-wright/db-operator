@@ -12,8 +12,9 @@ import (
 )
 
 type NatsSecretComparable struct {
-	Name string
-	DB   string
+	Name      string
+	Namespace string
+	DB        DBRef
 }
 
 type NatsSecret struct {
@@ -22,28 +23,29 @@ type NatsSecret struct {
 	ResourceVersion string
 }
 
-func (s *NatsSecret) GetHost(namespace string) string {
-	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB, namespace)
+func (s *NatsSecret) GetHost() string {
+	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB.Name, s.DB.Namespace)
 }
 
 func encode(data string) string {
 	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
-func (s *NatsSecret) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (s *NatsSecret) ToUnstructured() *unstructured.Unstructured {
 	secret := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "Secret",
 			"metadata": map[string]interface{}{
-				"name": s.Name,
+				"name":      s.Name,
+				"namespace": s.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"app":                           s.Name,
 					"ponglehub.co.uk/resource-type": "nats",
 				}, common.LABEL_FILTERS),
 			},
 			"data": map[string]interface{}{
-				"NATS_HOST": encode(s.GetHost(namespace)),
+				"NATS_HOST": encode(s.GetHost()),
 				"NATS_PORT": encode("4222"),
 			},
 		},
@@ -54,6 +56,7 @@ func (s *NatsSecret) ToUnstructured(namespace string) *unstructured.Unstructured
 
 func (s *NatsSecret) FromUnstructured(obj *unstructured.Unstructured) error {
 	s.Name = obj.GetName()
+	s.Namespace = obj.GetNamespace()
 
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
@@ -62,13 +65,18 @@ func (s *NatsSecret) FromUnstructured(obj *unstructured.Unstructured) error {
 	if err != nil {
 		return fmt.Errorf("failed to get NATS_HOST: %+v", err)
 	}
-	s.DB = strings.Split(hostname, ".")[0]
+	s.DB.Name = strings.Split(hostname, ".")[0]
+	s.DB.Namespace = strings.Split(hostname, ".")[1]
 
 	return nil
 }
 
 func (s *NatsSecret) GetName() string {
 	return s.Name
+}
+
+func (s *NatsSecret) GetNamespace() string {
+	return s.Namespace
 }
 
 func (s *NatsSecret) GetUID() string {

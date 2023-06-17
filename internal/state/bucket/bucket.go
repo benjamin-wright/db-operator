@@ -1,15 +1,16 @@
-package state
+package bucket
 
 import (
+	"github.com/benjamin-wright/db-operator/internal/state/types"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 
-type Bucket[T any, PT Nameable[T]] struct {
+type Bucket[T any, PT types.Nameable[T]] struct {
 	state map[string]T
 }
 
-func NewBucket[T any, PT Nameable[T]]() Bucket[T, PT] {
+func NewBucket[T any, PT types.Nameable[T]]() Bucket[T, PT] {
 	return Bucket[T, PT]{
 		state: map[string]T{},
 	}
@@ -29,20 +30,20 @@ func (b *Bucket[T, PT]) Apply(update k8s_generic.Update[T]) {
 
 func (b *Bucket[T, PT]) Add(obj T) {
 	ptr := PT(&obj)
-	key := ptr.GetName()
+	key := ptr.GetName() + ":" + ptr.GetNamespace()
 
 	b.state[key] = obj
 }
 
 func (b *Bucket[T, PT]) Remove(obj T) {
 	ptr := PT(&obj)
-	key := ptr.GetName()
+	key := ptr.GetName() + ":" + ptr.GetNamespace()
 
 	delete(b.state, key)
 }
 
-func (b *Bucket[T, PT]) Get(name string) (T, bool) {
-	value, ok := b.state[name]
+func (b *Bucket[T, PT]) Get(name string, namespace string) (T, bool) {
+	value, ok := b.state[name+":"+namespace]
 	return value, ok
 }
 

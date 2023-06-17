@@ -10,9 +10,10 @@ import (
 )
 
 type RedisStatefulSetComparable struct {
-	Name    string
-	Storage string
-	Ready   bool
+	Name      string
+	Namespace string
+	Storage   string
+	Ready     bool
 }
 
 type RedisStatefulSet struct {
@@ -21,13 +22,14 @@ type RedisStatefulSet struct {
 	ResourceVersion string
 }
 
-func (s *RedisStatefulSet) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (s *RedisStatefulSet) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
 			"kind":       "StatefulSet",
 			"metadata": map[string]interface{}{
-				"name": s.Name,
+				"name":      s.Name,
+				"namespace": s.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"ponglehub.co.uk/resource-type": "redis",
 				}, common.LABEL_FILTERS),
@@ -127,6 +129,7 @@ func (s *RedisStatefulSet) FromUnstructured(obj *unstructured.Unstructured) erro
 	var err error
 
 	s.Name = obj.GetName()
+	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
 
@@ -152,6 +155,10 @@ func (s *RedisStatefulSet) FromUnstructured(obj *unstructured.Unstructured) erro
 
 func (db *RedisStatefulSet) GetName() string {
 	return db.Name
+}
+
+func (db *RedisStatefulSet) GetNamespace() string {
+	return db.Namespace
 }
 
 func (db *RedisStatefulSet) GetUID() string {

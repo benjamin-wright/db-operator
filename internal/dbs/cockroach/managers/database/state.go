@@ -4,19 +4,20 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/database"
 	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 
 type State struct {
-	clients      state.Bucket[k8s.CockroachClient, *k8s.CockroachClient]
-	statefulSets state.Bucket[k8s.CockroachStatefulSet, *k8s.CockroachStatefulSet]
-	secrets      state.Bucket[k8s.CockroachSecret, *k8s.CockroachSecret]
-	migrations   state.Bucket[k8s.CockroachMigration, *k8s.CockroachMigration]
-	databases    state.Bucket[database.Database, *database.Database]
-	users        state.Bucket[database.User, *database.User]
-	permissions  state.Bucket[database.Permission, *database.Permission]
-	applied      state.Bucket[database.Migration, *database.Migration]
+	clients      bucket.Bucket[k8s.CockroachClient, *k8s.CockroachClient]
+	statefulSets bucket.Bucket[k8s.CockroachStatefulSet, *k8s.CockroachStatefulSet]
+	secrets      bucket.Bucket[k8s.CockroachSecret, *k8s.CockroachSecret]
+	migrations   bucket.Bucket[k8s.CockroachMigration, *k8s.CockroachMigration]
+	databases    bucket.Bucket[database.Database, *database.Database]
+	users        bucket.Bucket[database.User, *database.User]
+	permissions  bucket.Bucket[database.Permission, *database.Permission]
+	applied      bucket.Bucket[database.Migration, *database.Migration]
 }
 
 func (s *State) Apply(update interface{}) {
@@ -54,7 +55,8 @@ func (s *State) GetActiveClients() []k8s.CockroachClient {
 
 	for _, client := range s.clients.List() {
 		target := client.GetTarget()
-		statefulSet, hasSS := s.statefulSets.Get(target)
+		targetNamespace := client.GetTargetNamespace()
+		statefulSet, hasSS := s.statefulSets.Get(target, targetNamespace)
 
 		if !hasSS || !statefulSet.IsReady() {
 			continue
@@ -74,7 +76,10 @@ func (s *State) GetDBDemand() state.Demand[k8s.CockroachClient, database.Databas
 		func(client k8s.CockroachClient) database.Database {
 			return database.Database{
 				Name: client.Database,
-				DB:   client.Deployment,
+				DB: database.DBRef{
+					Name:      client.DBRef.Name,
+					Namespace: client.DBRef.Namespace,
+				},
 			}
 		},
 	)
@@ -88,7 +93,10 @@ func (s *State) GetUserDemand() state.Demand[k8s.CockroachClient, database.User]
 		func(client k8s.CockroachClient) database.User {
 			return database.User{
 				Name: client.Username,
-				DB:   client.Deployment,
+				DB: database.DBRef{
+					Name:      client.DBRef.Name,
+					Namespace: client.DBRef.Namespace,
+				},
 			}
 		},
 	)
@@ -103,7 +111,10 @@ func (s *State) GetPermissionDemand() state.Demand[k8s.CockroachClient, database
 			return database.Permission{
 				User:     client.Username,
 				Database: client.Database,
-				DB:       client.Deployment,
+				DB: database.DBRef{
+					Name:      client.DBRef.Name,
+					Namespace: client.DBRef.Namespace,
+				},
 			}
 		},
 	)
@@ -117,10 +128,11 @@ func (s *State) GetSecretsDemand() state.Demand[k8s.CockroachClient, k8s.Cockroa
 		func(client k8s.CockroachClient) k8s.CockroachSecret {
 			return k8s.CockroachSecret{
 				CockroachSecretComparable: k8s.CockroachSecretComparable{
-					Name:     client.Secret,
-					DB:       client.Deployment,
-					Database: client.Database,
-					User:     client.Username,
+					Name:      client.Secret,
+					Namespace: client.Namespace,
+					DB:        client.DBRef,
+					Database:  client.Database,
+					User:      client.Username,
 				},
 			}
 		},
@@ -130,20 +142,20 @@ func (s *State) GetSecretsDemand() state.Demand[k8s.CockroachClient, k8s.Cockroa
 func (s *State) GetMigrationsDemand() state.DBMigrations {
 	migrations := state.NewMigrations()
 
-	isReady := func(db string) bool {
-		ss, hasSS := s.statefulSets.Get(db)
+	isReady := func(db string, namespace string) bool {
+		ss, hasSS := s.statefulSets.Get(db, namespace)
 
 		return hasSS && ss.Ready
 	}
 
 	for _, m := range s.migrations.List() {
-		if isReady(m.Deployment) {
-			migrations.AddRequest(m.Deployment, m.Database, m.Index, m.Migration)
+		if isReady(m.DBRef.Name, m.DBRef.Namespace) {
+			migrations.AddRequest(m.DBRef.Namespace, m.DBRef.Name, m.Database, m.Index, m.Migration)
 		}
 	}
 
 	for _, m := range s.applied.List() {
-		migrations.AddApplied(m.DB, m.Database, m.Index)
+		migrations.AddApplied(m.DB.Namespace, m.DB.Name, m.Database, m.Index)
 	}
 
 	return migrations

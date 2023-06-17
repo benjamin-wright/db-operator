@@ -3,17 +3,18 @@ package manager
 import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
 	"github.com/benjamin-wright/db-operator/internal/state"
+	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 
 type State struct {
-	dbs          state.Bucket[k8s.RedisDB, *k8s.RedisDB]
-	clients      state.Bucket[k8s.RedisClient, *k8s.RedisClient]
-	statefulSets state.Bucket[k8s.RedisStatefulSet, *k8s.RedisStatefulSet]
-	pvcs         state.Bucket[k8s.RedisPVC, *k8s.RedisPVC]
-	services     state.Bucket[k8s.RedisService, *k8s.RedisService]
-	secrets      state.Bucket[k8s.RedisSecret, *k8s.RedisSecret]
+	dbs          bucket.Bucket[k8s.RedisDB, *k8s.RedisDB]
+	clients      bucket.Bucket[k8s.RedisClient, *k8s.RedisClient]
+	statefulSets bucket.Bucket[k8s.RedisStatefulSet, *k8s.RedisStatefulSet]
+	pvcs         bucket.Bucket[k8s.RedisPVC, *k8s.RedisPVC]
+	services     bucket.Bucket[k8s.RedisService, *k8s.RedisService]
+	secrets      bucket.Bucket[k8s.RedisSecret, *k8s.RedisSecret]
 }
 
 func (s *State) Apply(update interface{}) {
@@ -42,8 +43,9 @@ func (s *State) GetStatefulSetDemand() state.Demand[k8s.RedisDB, k8s.RedisStatef
 		func(db k8s.RedisDB) k8s.RedisStatefulSet {
 			return k8s.RedisStatefulSet{
 				RedisStatefulSetComparable: k8s.RedisStatefulSetComparable{
-					Name:    db.Name,
-					Storage: db.Storage,
+					Name:      db.Name,
+					Namespace: db.Namespace,
+					Storage:   db.Storage,
 				},
 			}
 		},
@@ -57,7 +59,8 @@ func (s *State) GetServiceDemand() state.Demand[k8s.RedisDB, k8s.RedisService] {
 		func(db k8s.RedisDB) k8s.RedisService {
 			return k8s.RedisService{
 				RedisServiceComparable: k8s.RedisServiceComparable{
-					Name: db.Name,
+					Name:      db.Name,
+					Namespace: db.Namespace,
 				},
 			}
 		},
@@ -82,8 +85,9 @@ func (s *State) GetSecretsDemand() state.Demand[k8s.RedisClient, k8s.RedisSecret
 		func(client k8s.RedisClient) k8s.RedisSecret {
 			return k8s.RedisSecret{
 				RedisSecretComparable: k8s.RedisSecretComparable{
-					Name: client.Secret,
-					DB:   client.Deployment,
+					Name:      client.Secret,
+					Namespace: client.Namespace,
+					DB:        client.DBRef,
 				},
 			}
 		},

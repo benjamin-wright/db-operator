@@ -9,9 +9,10 @@ import (
 )
 
 type NatsClientComparable struct {
-	Name       string
-	Deployment string
-	Secret     string
+	Name      string
+	Namespace string
+	DBRef     DBRef
+	Secret    string
 }
 
 type NatsClient struct {
@@ -20,17 +21,21 @@ type NatsClient struct {
 	ResourceVersion string
 }
 
-func (cli *NatsClient) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (cli *NatsClient) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "NatsClient",
 		"metadata": map[string]interface{}{
-			"name": cli.Name,
+			"name":      cli.Name,
+			"namespace": cli.Namespace,
 		},
 		"spec": map[string]interface{}{
-			"deployment": cli.Deployment,
-			"secret":     cli.Secret,
+			"dbRef": map[string]interface{}{
+				"name":      cli.DBRef.Name,
+				"namespace": cli.DBRef.Namespace,
+			},
+			"secret": cli.Secret,
 		},
 	})
 
@@ -40,17 +45,18 @@ func (cli *NatsClient) ToUnstructured(namespace string) *unstructured.Unstructur
 func (cli *NatsClient) FromUnstructured(obj *unstructured.Unstructured) error {
 	var err error
 	cli.Name = obj.GetName()
+	cli.Namespace = obj.GetNamespace()
 	cli.UID = string(obj.GetUID())
 	cli.ResourceVersion = obj.GetResourceVersion()
 
-	cli.Deployment, err = k8s_generic.GetProperty[string](obj, "spec", "deployment")
+	cli.DBRef.Name, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "name")
 	if err != nil {
-		return fmt.Errorf("failed to get deployment: %+v", err)
+		return fmt.Errorf("failed to get db ref name: %+v", err)
 	}
 
-	cli.Deployment, err = k8s_generic.GetProperty[string](obj, "spec", "deployment")
+	cli.DBRef.Namespace, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "namespace")
 	if err != nil {
-		return fmt.Errorf("failed to get deployment: %+v", err)
+		return fmt.Errorf("failed to get db ref namespace: %+v", err)
 	}
 
 	cli.Secret, err = k8s_generic.GetProperty[string](obj, "spec", "secret")
@@ -65,6 +71,10 @@ func (cli *NatsClient) GetName() string {
 	return cli.Name
 }
 
+func (cli *NatsClient) GetNamespace() string {
+	return cli.Namespace
+}
+
 func (cli *NatsClient) GetUID() string {
 	return cli.UID
 }
@@ -74,7 +84,11 @@ func (cli *NatsClient) GetResourceVersion() string {
 }
 
 func (cli *NatsClient) GetTarget() string {
-	return cli.Deployment
+	return cli.DBRef.Name
+}
+
+func (cli *NatsClient) GetTargetNamespace() string {
+	return cli.DBRef.Namespace
 }
 
 func (cli *NatsClient) Equal(obj NatsClient) bool {

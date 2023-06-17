@@ -7,7 +7,8 @@ import (
 )
 
 type NatsDBComparable struct {
-	Name string
+	Name      string
+	Namespace string
 }
 
 type NatsDB struct {
@@ -16,13 +17,14 @@ type NatsDB struct {
 	ResourceVersion string
 }
 
-func (db *NatsDB) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (db *NatsDB) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "NatsDB",
 		"metadata": map[string]interface{}{
-			"name": db.Name,
+			"name":      db.Name,
+			"namespace": db.Namespace,
 		},
 	})
 
@@ -31,6 +33,7 @@ func (db *NatsDB) ToUnstructured(namespace string) *unstructured.Unstructured {
 
 func (db *NatsDB) FromUnstructured(obj *unstructured.Unstructured) error {
 	db.Name = obj.GetName()
+	db.Namespace = obj.GetNamespace()
 	db.UID = string(obj.GetUID())
 	db.ResourceVersion = obj.GetResourceVersion()
 
@@ -39,6 +42,10 @@ func (db *NatsDB) FromUnstructured(obj *unstructured.Unstructured) error {
 
 func (db *NatsDB) GetName() string {
 	return db.Name
+}
+
+func (db *NatsDB) GetNamespace() string {
+	return db.Namespace
 }
 
 func (db *NatsDB) GetUID() string {

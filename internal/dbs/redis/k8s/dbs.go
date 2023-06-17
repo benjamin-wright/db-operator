@@ -9,8 +9,9 @@ import (
 )
 
 type RedisDBComparable struct {
-	Name    string
-	Storage string
+	Name      string
+	Namespace string
+	Storage   string
 }
 
 type RedisDB struct {
@@ -19,13 +20,14 @@ type RedisDB struct {
 	ResourceVersion string
 }
 
-func (db *RedisDB) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (db *RedisDB) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "RedisDB",
 		"metadata": map[string]interface{}{
-			"name": db.Name,
+			"name":      db.Name,
+			"namespace": db.Namespace,
 		},
 		"spec": map[string]interface{}{
 			"storage": db.Storage,
@@ -39,6 +41,7 @@ func (db *RedisDB) FromUnstructured(obj *unstructured.Unstructured) error {
 	var err error
 
 	db.Name = obj.GetName()
+	db.Namespace = obj.GetNamespace()
 	db.UID = string(obj.GetUID())
 	db.ResourceVersion = obj.GetResourceVersion()
 	db.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "storage")
@@ -51,6 +54,10 @@ func (db *RedisDB) FromUnstructured(obj *unstructured.Unstructured) error {
 
 func (db *RedisDB) GetName() string {
 	return db.Name
+}
+
+func (db *RedisDB) GetNamespace() string {
+	return db.Namespace
 }
 
 func (db *RedisDB) GetStorage() string {

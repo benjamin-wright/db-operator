@@ -8,8 +8,9 @@ import (
 )
 
 type NatsDeploymentComparable struct {
-	Name  string
-	Ready bool
+	Name      string
+	Namespace string
+	Ready     bool
 }
 
 type NatsDeployment struct {
@@ -18,13 +19,14 @@ type NatsDeployment struct {
 	ResourceVersion string
 }
 
-func (d *NatsDeployment) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (d *NatsDeployment) ToUnstructured() *unstructured.Unstructured {
 	deployment := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]interface{}{
-				"name": d.Name,
+				"name":      d.Name,
+				"namespace": d.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"ponglehub.co.uk/resource-type": "nats",
 				}, common.LABEL_FILTERS),
@@ -98,6 +100,7 @@ func (d *NatsDeployment) FromUnstructured(obj *unstructured.Unstructured) error 
 	var err error
 
 	d.Name = obj.GetName()
+	d.Namespace = obj.GetNamespace()
 	d.UID = string(obj.GetUID())
 	d.ResourceVersion = obj.GetResourceVersion()
 
@@ -118,6 +121,10 @@ func (d *NatsDeployment) FromUnstructured(obj *unstructured.Unstructured) error 
 
 func (d *NatsDeployment) GetName() string {
 	return d.Name
+}
+
+func (d *NatsDeployment) GetNamespace() string {
+	return d.Namespace
 }
 
 func (d *NatsDeployment) GetUID() string {

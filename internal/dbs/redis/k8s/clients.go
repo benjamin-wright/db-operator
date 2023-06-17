@@ -9,10 +9,11 @@ import (
 )
 
 type RedisClientComparable struct {
-	Name       string
-	Deployment string
-	Unit       int64
-	Secret     string
+	Name      string
+	Namespace string
+	DBRef     DBRef
+	Unit      int64
+	Secret    string
 }
 
 type RedisClient struct {
@@ -21,18 +22,22 @@ type RedisClient struct {
 	ResourceVersion string
 }
 
-func (cli *RedisClient) ToUnstructured(namespace string) *unstructured.Unstructured {
+func (cli *RedisClient) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "RedisClient",
 		"metadata": map[string]interface{}{
-			"name": cli.Name,
+			"name":      cli.Name,
+			"namespace": cli.Namespace,
 		},
 		"spec": map[string]interface{}{
-			"deployment": cli.Deployment,
-			"unit":       cli.Unit,
-			"secret":     cli.Secret,
+			"dbRef": map[string]interface{}{
+				"name":      cli.DBRef.Name,
+				"namespace": cli.DBRef.Namespace,
+			},
+			"unit":   cli.Unit,
+			"secret": cli.Secret,
 		},
 	})
 
@@ -42,17 +47,18 @@ func (cli *RedisClient) ToUnstructured(namespace string) *unstructured.Unstructu
 func (cli *RedisClient) FromUnstructured(obj *unstructured.Unstructured) error {
 	var err error
 	cli.Name = obj.GetName()
+	cli.Namespace = obj.GetNamespace()
 	cli.UID = string(obj.GetUID())
 	cli.ResourceVersion = obj.GetResourceVersion()
 
-	cli.Deployment, err = k8s_generic.GetProperty[string](obj, "spec", "deployment")
+	cli.DBRef.Name, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "name")
 	if err != nil {
-		return fmt.Errorf("failed to get deployment: %+v", err)
+		return fmt.Errorf("failed to get db ref name: %+v", err)
 	}
 
-	cli.Deployment, err = k8s_generic.GetProperty[string](obj, "spec", "deployment")
+	cli.DBRef.Namespace, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "namespace")
 	if err != nil {
-		return fmt.Errorf("failed to get deployment: %+v", err)
+		return fmt.Errorf("failed to get db ref namespace: %+v", err)
 	}
 
 	cli.Unit, err = k8s_generic.GetProperty[int64](obj, "spec", "unit")
@@ -72,6 +78,10 @@ func (cli *RedisClient) GetName() string {
 	return cli.Name
 }
 
+func (cli *RedisClient) GetNamespace() string {
+	return cli.Namespace
+}
+
 func (cli *RedisClient) GetUID() string {
 	return cli.UID
 }
@@ -81,7 +91,11 @@ func (cli *RedisClient) GetResourceVersion() string {
 }
 
 func (cli *RedisClient) GetTarget() string {
-	return cli.Deployment
+	return cli.DBRef.Name
+}
+
+func (cli *RedisClient) GetTargetNamespace() string {
+	return cli.DBRef.Namespace
 }
 
 func (cli *RedisClient) Equal(obj RedisClient) bool {

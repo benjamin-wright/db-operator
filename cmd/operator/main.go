@@ -26,14 +26,9 @@ func main() {
 
 	zerolog.SetGlobalLevel(level)
 
-	namespace := os.Getenv("NAMESPACE")
-	if namespace == "" {
-		log.Fatal().Msg("Must set NAMESPACE environment variable")
-	}
-
 	log.Info().Msg("Starting operator...")
 
-	stopper, err := runtime.Run(namespace)
+	stopper, err := runtime.Run()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to start manager")
 	}
