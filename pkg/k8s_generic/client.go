@@ -17,39 +17,39 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-type Resource[T any] interface {
-	*T
+type Resource interface {
 	GetName() string
 	GetNamespace() string
 	GetUID() string
 	GetResourceVersion() string
 	ToUnstructured() *unstructured.Unstructured
-	FromUnstructured(obj *unstructured.Unstructured) error
-	Equal(obj T) bool
+	Equal(obj Resource) bool
 }
 
-type Client[T any, PT Resource[T]] struct {
-	client       dynamic.Interface
-	restClient   *rest.RESTClient
-	schema       schema.GroupVersionResource
-	kind         string
-	labelFilters map[string]string
+type FromUnstructured[T Resource] func(obj *unstructured.Unstructured) (T, error)
+
+type Client[T Resource] struct {
+	client           dynamic.Interface
+	restClient       *rest.RESTClient
+	schema           schema.GroupVersionResource
+	kind             string
+	labelFilters     map[string]string
+	fromUnstructured FromUnstructured[T]
 }
 
-func NewClient[T any, PT Resource[T]](b *Builder, resourceSchema schema.GroupVersionResource, kind string, labelFilters map[string]string) *Client[T, PT] {
-	return &Client[T, PT]{
-		schema:       resourceSchema,
-		client:       b.dynClient,
-		restClient:   b.restClient,
-		labelFilters: labelFilters,
-		kind:         kind,
+func NewClient[T Resource](b *Builder, resourceSchema schema.GroupVersionResource, kind string, labelFilters map[string]string, fromUnstructured FromUnstructured[T]) *Client[T] {
+	return &Client[T]{
+		schema:           resourceSchema,
+		client:           b.dynClient,
+		restClient:       b.restClient,
+		labelFilters:     labelFilters,
+		kind:             kind,
+		fromUnstructured: fromUnstructured,
 	}
 }
 
-func (c *Client[T, PT]) Create(ctx context.Context, resource T) error {
-	ptr := PT(&resource)
-
-	_, err := c.client.Resource(c.schema).Namespace(ptr.GetNamespace()).Create(ctx, ptr.ToUnstructured(), v1.CreateOptions{})
+func (c *Client[T]) Create(ctx context.Context, resource T) error {
+	_, err := c.client.Resource(c.schema).Namespace(resource.GetNamespace()).Create(ctx, resource.ToUnstructured(), v1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create %T: %+v", resource, err)
 	}
@@ -57,16 +57,14 @@ func (c *Client[T, PT]) Create(ctx context.Context, resource T) error {
 	return nil
 }
 
-func (c *Client[T, PT]) Get(ctx context.Context, name string, namespace string) (T, error) {
-	var object T
-	ptr := PT(&object)
-
+func (c *Client[T]) Get(ctx context.Context, name string, namespace string) (T, error) {
 	res, err := c.client.Resource(c.schema).Namespace(namespace).Get(ctx, name, v1.GetOptions{})
 	if err != nil {
+		var object T
 		return object, fmt.Errorf("failed to get %T: %s", object, name)
 	}
 
-	err = ptr.FromUnstructured(res)
+	object, err := c.fromUnstructured(res)
 	if err != nil {
 		return object, fmt.Errorf("failed to parse %T: %+v", object, err)
 	}
@@ -75,7 +73,7 @@ func (c *Client[T, PT]) Get(ctx context.Context, name string, namespace string) 
 }
 
 // function to get all resources
-func (c *Client[T, PT]) GetAll(ctx context.Context) ([]T, error) {
+func (c *Client[T]) GetAll(ctx context.Context) ([]T, error) {
 	var objects []T
 	options := v1.ListOptions{}
 	if len(c.labelFilters) > 0 {
@@ -90,10 +88,7 @@ func (c *Client[T, PT]) GetAll(ctx context.Context) ([]T, error) {
 	}
 
 	for _, item := range res.Items {
-		var object T
-		ptr := PT(&object)
-
-		err = ptr.FromUnstructured(&item)
+		object, err := c.fromUnstructured(&item)
 		if err != nil {
 			return objects, fmt.Errorf("failed to parse %T: %+v", objects, err)
 		}
@@ -104,7 +99,7 @@ func (c *Client[T, PT]) GetAll(ctx context.Context) ([]T, error) {
 	return objects, nil
 }
 
-func (c *Client[T, PT]) Delete(ctx context.Context, name string, namespace string) error {
+func (c *Client[T]) Delete(ctx context.Context, name string, namespace string) error {
 	err := c.client.Resource(c.schema).Namespace(namespace).Delete(ctx, name, v1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete %T: %+v", name, err)
@@ -113,7 +108,7 @@ func (c *Client[T, PT]) Delete(ctx context.Context, name string, namespace strin
 	return nil
 }
 
-func (c *Client[T, PT]) DeleteAll(ctx context.Context, namespace string) error {
+func (c *Client[T]) DeleteAll(ctx context.Context, namespace string) error {
 	err := c.client.Resource(c.schema).Namespace(namespace).DeleteCollection(ctx, v1.DeleteOptions{}, v1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete all resources: %+v", err)
@@ -122,12 +117,10 @@ func (c *Client[T, PT]) DeleteAll(ctx context.Context, namespace string) error {
 	return nil
 }
 
-func (c *Client[T, PT]) Update(ctx context.Context, resource T) error {
-	ptr := PT(&resource)
-
-	_, err := c.client.Resource(c.schema).Namespace(ptr.GetNamespace()).Update(ctx, ptr.ToUnstructured(), v1.UpdateOptions{})
+func (c *Client[T]) Update(ctx context.Context, resource T) error {
+	_, err := c.client.Resource(c.schema).Namespace(resource.GetNamespace()).Update(ctx, resource.ToUnstructured(), v1.UpdateOptions{})
 	if err != nil {
-		return fmt.Errorf("failed up update resource %s: %+v", ptr.GetName(), err)
+		return fmt.Errorf("failed up update resource %s: %+v", resource.GetName(), err)
 	}
 
 	return nil
@@ -138,11 +131,9 @@ type Update[T any] struct {
 	ToRemove []T
 }
 
-func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc, updates chan<- any) error {
+func (c *Client[T]) Watch(ctx context.Context, cancel context.CancelFunc, updates chan<- any) error {
 	convert := func(obj interface{}) T {
-		var res T
-		ptr := PT(&res)
-		err := ptr.FromUnstructured(obj.(*unstructured.Unstructured))
+		res, err := c.fromUnstructured(obj.(*unstructured.Unstructured))
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to parse unstructured obj for %T", res)
 		}
@@ -173,7 +164,7 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc, up
 			oldRes := convert(oldObj)
 			newRes := convert(newObj)
 
-			if !PT(&oldRes).Equal(newRes) {
+			if !oldRes.Equal(newRes) {
 				updates <- Update[T]{
 					ToAdd:    []T{newRes},
 					ToRemove: []T{oldRes},
@@ -200,16 +191,14 @@ func (c *Client[T, PT]) Watch(ctx context.Context, cancel context.CancelFunc, up
 	return nil
 }
 
-func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, message string) {
-	ptr := PT(&obj)
-
+func (c *Client[T]) Event(ctx context.Context, obj T, eventtype, reason, message string) {
 	ref := corev1.ObjectReference{
 		Kind:            c.kind,
 		APIVersion:      c.schema.Group + "/" + c.schema.Version,
-		Name:            ptr.GetName(),
-		Namespace:       ptr.GetNamespace(),
-		UID:             types.UID(ptr.GetUID()),
-		ResourceVersion: ptr.GetResourceVersion(),
+		Name:            obj.GetName(),
+		Namespace:       obj.GetNamespace(),
+		UID:             types.UID(obj.GetUID()),
+		ResourceVersion: obj.GetResourceVersion(),
 	}
 
 	t := v1.Time{Time: time.Now()}
@@ -217,7 +206,7 @@ func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, mes
 	e := &corev1.Event{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      fmt.Sprintf("%v.%x", ref.Name, t.UnixNano()),
-			Namespace: ptr.GetNamespace(),
+			Namespace: obj.GetNamespace(),
 		},
 		InvolvedObject: ref,
 		Reason:         reason,
@@ -230,7 +219,7 @@ func (c *Client[T, PT]) Event(ctx context.Context, obj T, eventtype, reason, mes
 	}
 
 	err := c.restClient.Post().
-		Namespace(ptr.GetNamespace()).
+		Namespace(obj.GetNamespace()).
 		Resource("events").
 		Body(e).
 		Do(ctx).

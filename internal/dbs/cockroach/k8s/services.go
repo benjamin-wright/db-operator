@@ -18,7 +18,7 @@ type CockroachService struct {
 	ResourceVersion string
 }
 
-func (s *CockroachService) ToUnstructured() *unstructured.Unstructured {
+func (s CockroachService) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -50,36 +50,43 @@ func (s *CockroachService) ToUnstructured() *unstructured.Unstructured {
 	return statefulset
 }
 
-func (s *CockroachService) FromUnstructured(obj *unstructured.Unstructured) error {
+func cockroachServiceFromUnstructured(obj *unstructured.Unstructured) (CockroachService, error) {
+	s := CockroachService{}
+
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
-	return nil
+
+	return s, nil
 }
 
-func (s *CockroachService) GetName() string {
+func (s CockroachService) GetName() string {
 	return s.Name
 }
 
-func (s *CockroachService) GetNamespace() string {
+func (s CockroachService) GetNamespace() string {
 	return s.Namespace
 }
 
-func (s *CockroachService) GetUID() string {
+func (s CockroachService) GetUID() string {
 	return s.UID
 }
 
-func (s *CockroachService) GetResourceVersion() string {
+func (s CockroachService) GetResourceVersion() string {
 	return s.ResourceVersion
 }
 
-func (s *CockroachService) Equal(obj CockroachService) bool {
-	return s.CockroachServiceComparable == obj.CockroachServiceComparable
+func (s CockroachService) Equal(obj k8s_generic.Resource) bool {
+	cockroachService, ok := obj.(*CockroachService)
+	if !ok {
+		return false
+	}
+	return s.CockroachServiceComparable == cockroachService.CockroachServiceComparable
 }
 
-func (c *Client) Services() *k8s_generic.Client[CockroachService, *CockroachService] {
-	return k8s_generic.NewClient[CockroachService](
+func (c *Client) Services() *k8s_generic.Client[CockroachService] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -90,5 +97,6 @@ func (c *Client) Services() *k8s_generic.Client[CockroachService, *CockroachServ
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "cockroachdb",
 		}, common.LABEL_FILTERS),
+		cockroachServiceFromUnstructured,
 	)
 }

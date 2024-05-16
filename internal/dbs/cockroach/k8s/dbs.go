@@ -20,7 +20,7 @@ type CockroachDB struct {
 	ResourceVersion string
 }
 
-func (db *CockroachDB) ToUnstructured() *unstructured.Unstructured {
+func (db CockroachDB) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
@@ -37,8 +37,9 @@ func (db *CockroachDB) ToUnstructured() *unstructured.Unstructured {
 	return result
 }
 
-func (db *CockroachDB) FromUnstructured(obj *unstructured.Unstructured) error {
+func cockroachDBFromUnstructured(obj *unstructured.Unstructured) (CockroachDB, error) {
 	var err error
+	db := CockroachDB{}
 
 	db.Name = obj.GetName()
 	db.Namespace = obj.GetNamespace()
@@ -46,38 +47,42 @@ func (db *CockroachDB) FromUnstructured(obj *unstructured.Unstructured) error {
 	db.ResourceVersion = obj.GetResourceVersion()
 	db.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "storage")
 	if err != nil {
-		return fmt.Errorf("failed to get storage: %+v", err)
+		return db, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
-	return nil
+	return db, nil
 }
 
-func (db *CockroachDB) GetName() string {
+func (db CockroachDB) GetName() string {
 	return db.Name
 }
 
-func (db *CockroachDB) GetNamespace() string {
+func (db CockroachDB) GetNamespace() string {
 	return db.Namespace
 }
 
-func (db *CockroachDB) GetStorage() string {
+func (db CockroachDB) GetStorage() string {
 	return db.Storage
 }
 
-func (db *CockroachDB) GetUID() string {
+func (db CockroachDB) GetUID() string {
 	return db.UID
 }
 
-func (db *CockroachDB) GetResourceVersion() string {
+func (db CockroachDB) GetResourceVersion() string {
 	return db.ResourceVersion
 }
 
-func (db *CockroachDB) Equal(obj CockroachDB) bool {
-	return db.CockroachDBComparable == obj.CockroachDBComparable
+func (db CockroachDB) Equal(obj k8s_generic.Resource) bool {
+	if other, ok := obj.(CockroachDB); ok {
+		return db.CockroachDBComparable == other.CockroachDBComparable
+	}
+
+	return false
 }
 
-func (c *Client) DBs() *k8s_generic.Client[CockroachDB, *CockroachDB] {
-	return k8s_generic.NewClient[CockroachDB](
+func (c *Client) DBs() *k8s_generic.Client[CockroachDB] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "ponglehub.co.uk",
@@ -86,5 +91,6 @@ func (c *Client) DBs() *k8s_generic.Client[CockroachDB, *CockroachDB] {
 		},
 		"CockroachDB",
 		nil,
+		cockroachDBFromUnstructured,
 	)
 }

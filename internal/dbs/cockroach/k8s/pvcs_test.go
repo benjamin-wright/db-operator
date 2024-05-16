@@ -30,8 +30,8 @@ func TestCockroachPVCFromUnstructured(t *testing.T) {
 		},
 	}
 
-	cockroachPVC := &CockroachPVC{}
-	assert.NoError(t, cockroachPVC.FromUnstructured(pvc))
+	cockroachPVC, err := cockroachPVCFromUnstructured(pvc)
+	assert.NoError(t, err)
 
 	assert.Equal(t, "test-name", cockroachPVC.Name)
 	assert.Equal(t, "test-namespace", cockroachPVC.Namespace)

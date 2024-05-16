@@ -17,7 +17,7 @@ type NatsDB struct {
 	ResourceVersion string
 }
 
-func (db *NatsDB) ToUnstructured() *unstructured.Unstructured {
+func (db NatsDB) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
@@ -31,37 +31,43 @@ func (db *NatsDB) ToUnstructured() *unstructured.Unstructured {
 	return result
 }
 
-func (db *NatsDB) FromUnstructured(obj *unstructured.Unstructured) error {
+func natsDBFromUnstructured(obj *unstructured.Unstructured) (NatsDB, error) {
+	db := NatsDB{}
+
 	db.Name = obj.GetName()
 	db.Namespace = obj.GetNamespace()
 	db.UID = string(obj.GetUID())
 	db.ResourceVersion = obj.GetResourceVersion()
 
-	return nil
+	return db, nil
 }
 
-func (db *NatsDB) GetName() string {
+func (db NatsDB) GetName() string {
 	return db.Name
 }
 
-func (db *NatsDB) GetNamespace() string {
+func (db NatsDB) GetNamespace() string {
 	return db.Namespace
 }
 
-func (db *NatsDB) GetUID() string {
+func (db NatsDB) GetUID() string {
 	return db.UID
 }
 
-func (db *NatsDB) GetResourceVersion() string {
+func (db NatsDB) GetResourceVersion() string {
 	return db.ResourceVersion
 }
 
-func (db *NatsDB) Equal(obj NatsDB) bool {
-	return db.NatsDBComparable == obj.NatsDBComparable
+func (db NatsDB) Equal(obj k8s_generic.Resource) bool {
+	natsDB, ok := obj.(*NatsDB)
+	if !ok {
+		return false
+	}
+	return db.NatsDBComparable == natsDB.NatsDBComparable
 }
 
-func (c *Client) DBs() *k8s_generic.Client[NatsDB, *NatsDB] {
-	return k8s_generic.NewClient[NatsDB](
+func (c *Client) DBs() *k8s_generic.Client[NatsDB] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "ponglehub.co.uk",
@@ -70,5 +76,6 @@ func (c *Client) DBs() *k8s_generic.Client[NatsDB, *NatsDB] {
 		},
 		"NatsDB",
 		nil,
+		natsDBFromUnstructured,
 	)
 }

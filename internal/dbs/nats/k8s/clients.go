@@ -21,7 +21,7 @@ type NatsClient struct {
 	ResourceVersion string
 }
 
-func (cli *NatsClient) ToUnstructured() *unstructured.Unstructured {
+func (cli NatsClient) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
@@ -42,8 +42,10 @@ func (cli *NatsClient) ToUnstructured() *unstructured.Unstructured {
 	return result
 }
 
-func (cli *NatsClient) FromUnstructured(obj *unstructured.Unstructured) error {
+func natsClientFromUnstructured(obj *unstructured.Unstructured) (NatsClient, error) {
 	var err error
+	cli := NatsClient{}
+
 	cli.Name = obj.GetName()
 	cli.Namespace = obj.GetNamespace()
 	cli.UID = string(obj.GetUID())
@@ -51,52 +53,55 @@ func (cli *NatsClient) FromUnstructured(obj *unstructured.Unstructured) error {
 
 	cli.DBRef.Name, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "name")
 	if err != nil {
-		return fmt.Errorf("failed to get db ref name: %+v", err)
+		return cli, fmt.Errorf("failed to get db ref name: %+v", err)
 	}
 
 	cli.DBRef.Namespace, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "namespace")
 	if err != nil {
-		return fmt.Errorf("failed to get db ref namespace: %+v", err)
+		return cli, fmt.Errorf("failed to get db ref namespace: %+v", err)
 	}
 
 	cli.Secret, err = k8s_generic.GetProperty[string](obj, "spec", "secret")
 	if err != nil {
-		return fmt.Errorf("failed to get secret: %+v", err)
+		return cli, fmt.Errorf("failed to get secret: %+v", err)
 	}
 
-	return nil
+	return cli, nil
 }
 
-func (cli *NatsClient) GetName() string {
+func (cli NatsClient) GetName() string {
 	return cli.Name
 }
 
-func (cli *NatsClient) GetNamespace() string {
+func (cli NatsClient) GetNamespace() string {
 	return cli.Namespace
 }
 
-func (cli *NatsClient) GetUID() string {
+func (cli NatsClient) GetUID() string {
 	return cli.UID
 }
 
-func (cli *NatsClient) GetResourceVersion() string {
+func (cli NatsClient) GetResourceVersion() string {
 	return cli.ResourceVersion
 }
 
-func (cli *NatsClient) GetTarget() string {
+func (cli NatsClient) GetTarget() string {
 	return cli.DBRef.Name
 }
 
-func (cli *NatsClient) GetTargetNamespace() string {
+func (cli NatsClient) GetTargetNamespace() string {
 	return cli.DBRef.Namespace
 }
 
-func (cli *NatsClient) Equal(obj NatsClient) bool {
-	return cli.NatsClientComparable == obj.NatsClientComparable
+func (cli NatsClient) Equal(obj k8s_generic.Resource) bool {
+	if other, ok := obj.(NatsClient); ok {
+		return cli.NatsClientComparable == other.NatsClientComparable
+	}
+	return false
 }
 
-func (c *Client) Clients() *k8s_generic.Client[NatsClient, *NatsClient] {
-	return k8s_generic.NewClient[NatsClient](
+func (c *Client) Clients() *k8s_generic.Client[NatsClient] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "ponglehub.co.uk",
@@ -105,5 +110,6 @@ func (c *Client) Clients() *k8s_generic.Client[NatsClient, *NatsClient] {
 		},
 		"NatsClient",
 		nil,
+		natsClientFromUnstructured,
 	)
 }

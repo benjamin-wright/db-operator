@@ -22,13 +22,14 @@ type CockroachPVC struct {
 	ResourceVersion string
 }
 
-func (p *CockroachPVC) ToUnstructured() *unstructured.Unstructured {
+func (p CockroachPVC) ToUnstructured() *unstructured.Unstructured {
 	panic("not implemented")
 }
 
-func (p *CockroachPVC) FromUnstructured(obj *unstructured.Unstructured) error {
-	var err error
+func cockroachPVCFromUnstructured(obj *unstructured.Unstructured) (CockroachPVC, error) {
+	p := CockroachPVC{}
 
+	var err error
 	p.Name = obj.GetName()
 	p.Namespace = obj.GetNamespace()
 	p.UID = string(obj.GetUID())
@@ -36,39 +37,43 @@ func (p *CockroachPVC) FromUnstructured(obj *unstructured.Unstructured) error {
 
 	p.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "resources", "requests", "storage")
 	if err != nil {
-		return fmt.Errorf("failed to get storage: %+v", err)
+		return p, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
 	p.Database, err = k8s_generic.GetProperty[string](obj, "metadata", "labels", "app")
 	if err != nil {
-		return fmt.Errorf("failed to get database from app label: %+v", err)
+		return p, fmt.Errorf("failed to get database from app label: %+v", err)
 	}
 
-	return nil
+	return p, nil
 }
 
-func (p *CockroachPVC) GetName() string {
+func (p CockroachPVC) GetName() string {
 	return p.Name
 }
 
-func (p *CockroachPVC) GetNamespace() string {
+func (p CockroachPVC) GetNamespace() string {
 	return p.Namespace
 }
 
-func (p *CockroachPVC) GetUID() string {
+func (p CockroachPVC) GetUID() string {
 	return p.UID
 }
 
-func (p *CockroachPVC) GetResourceVersion() string {
+func (p CockroachPVC) GetResourceVersion() string {
 	return p.ResourceVersion
 }
 
-func (p *CockroachPVC) Equal(obj CockroachPVC) bool {
-	return p.CockroachPVCComparable == obj.CockroachPVCComparable
+func (p CockroachPVC) Equal(obj k8s_generic.Resource) bool {
+	cockroachPVC, ok := obj.(*CockroachPVC)
+	if !ok {
+		return false
+	}
+	return p.CockroachPVCComparable == cockroachPVC.CockroachPVCComparable
 }
 
-func (c *Client) PVCs() *k8s_generic.Client[CockroachPVC, *CockroachPVC] {
-	return k8s_generic.NewClient[CockroachPVC](
+func (c *Client) PVCs() *k8s_generic.Client[CockroachPVC] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -79,5 +84,6 @@ func (c *Client) PVCs() *k8s_generic.Client[CockroachPVC, *CockroachPVC] {
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "cockroachdb",
 		}, common.LABEL_FILTERS),
+		cockroachPVCFromUnstructured,
 	)
 }

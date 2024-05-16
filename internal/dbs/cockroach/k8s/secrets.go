@@ -29,15 +29,15 @@ func encode(data string) string {
 	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
-func (s *CockroachSecret) GetHost() string {
+func (s CockroachSecret) GetHost() string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB.Name, s.DB.Namespace)
 }
 
-func (s *CockroachSecret) GetPort() string {
+func (s CockroachSecret) GetPort() string {
 	return "26257"
 }
 
-func (s *CockroachSecret) ToUnstructured() *unstructured.Unstructured {
+func (s CockroachSecret) ToUnstructured() *unstructured.Unstructured {
 	secret := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -62,7 +62,9 @@ func (s *CockroachSecret) ToUnstructured() *unstructured.Unstructured {
 	return secret
 }
 
-func (s *CockroachSecret) FromUnstructured(obj *unstructured.Unstructured) error {
+func cockroachSecretFromUnstructured(obj *unstructured.Unstructured) (CockroachSecret, error) {
+	s := CockroachSecret{}
+
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
 
@@ -71,46 +73,50 @@ func (s *CockroachSecret) FromUnstructured(obj *unstructured.Unstructured) error
 
 	hostname, err := k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_HOST")
 	if err != nil {
-		return fmt.Errorf("failed to get POSTGRES_HOST: %+v", err)
+		return s, fmt.Errorf("failed to get POSTGRES_HOST: %+v", err)
 	}
 	s.DB.Name = strings.Split(hostname, ".")[0]
 	s.DB.Namespace = strings.Split(hostname, ".")[1]
 
 	s.User, err = k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_USER")
 	if err != nil {
-		return fmt.Errorf("failed to get POSTGRES_USER: %+v", err)
+		return s, fmt.Errorf("failed to get POSTGRES_USER: %+v", err)
 	}
 
 	s.Database, err = k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_NAME")
 	if err != nil {
-		return fmt.Errorf("failed to get POSTGRES_NAME: %+v", err)
+		return s, fmt.Errorf("failed to get POSTGRES_NAME: %+v", err)
 	}
 
-	return nil
+	return s, nil
 }
 
-func (s *CockroachSecret) GetName() string {
+func (s CockroachSecret) GetName() string {
 	return s.Name
 }
 
-func (s *CockroachSecret) GetNamespace() string {
+func (s CockroachSecret) GetNamespace() string {
 	return s.Namespace
 }
 
-func (s *CockroachSecret) GetUID() string {
+func (s CockroachSecret) GetUID() string {
 	return s.UID
 }
 
-func (s *CockroachSecret) GetResourceVersion() string {
+func (s CockroachSecret) GetResourceVersion() string {
 	return s.ResourceVersion
 }
 
-func (s *CockroachSecret) Equal(obj CockroachSecret) bool {
-	return s.CockroachSecretComparable == obj.CockroachSecretComparable
+func (s CockroachSecret) Equal(obj k8s_generic.Resource) bool {
+	if other, ok := obj.(*CockroachSecret); ok {
+		return s.CockroachSecretComparable == other.CockroachSecretComparable
+	}
+
+	return false
 }
 
-func (c *Client) Secrets() *k8s_generic.Client[CockroachSecret, *CockroachSecret] {
-	return k8s_generic.NewClient[CockroachSecret](
+func (c *Client) Secrets() *k8s_generic.Client[CockroachSecret] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -121,5 +127,6 @@ func (c *Client) Secrets() *k8s_generic.Client[CockroachSecret, *CockroachSecret
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "cockroachdb",
 		}, common.LABEL_FILTERS),
+		cockroachSecretFromUnstructured,
 	)
 }

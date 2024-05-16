@@ -22,7 +22,7 @@ type CockroachStatefulSet struct {
 	ResourceVersion string
 }
 
-func (s *CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
+func (s CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
@@ -137,8 +137,9 @@ func (s *CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
 	return statefulset
 }
 
-func (s *CockroachStatefulSet) FromUnstructured(obj *unstructured.Unstructured) error {
+func cockroachStatefulSetFromUnstructured(obj *unstructured.Unstructured) (CockroachStatefulSet, error) {
 	var err error
+	s := CockroachStatefulSet{}
 
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
@@ -147,7 +148,7 @@ func (s *CockroachStatefulSet) FromUnstructured(obj *unstructured.Unstructured) 
 
 	s.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "volumeClaimTemplates", "0", "spec", "resources", "requests", "storage")
 	if err != nil {
-		return fmt.Errorf("failed to get storage: %+v", err)
+		return s, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
 	replicas, err := k8s_generic.GetProperty[int64](obj, "status", "replicas")
@@ -162,39 +163,43 @@ func (s *CockroachStatefulSet) FromUnstructured(obj *unstructured.Unstructured) 
 
 	s.Ready = replicas > 0 && replicas == readyReplicas
 
-	return nil
+	return s, nil
 }
 
-func (db *CockroachStatefulSet) GetName() string {
-	return db.Name
+func (s CockroachStatefulSet) GetName() string {
+	return s.Name
 }
 
-func (db *CockroachStatefulSet) GetNamespace() string {
-	return db.Namespace
+func (s CockroachStatefulSet) GetNamespace() string {
+	return s.Namespace
 }
 
-func (db *CockroachStatefulSet) GetUID() string {
-	return db.UID
+func (s CockroachStatefulSet) GetUID() string {
+	return s.UID
 }
 
-func (db *CockroachStatefulSet) GetResourceVersion() string {
-	return db.ResourceVersion
+func (s CockroachStatefulSet) GetResourceVersion() string {
+	return s.ResourceVersion
 }
 
-func (db *CockroachStatefulSet) GetStorage() string {
-	return db.Storage
+func (s CockroachStatefulSet) GetStorage() string {
+	return s.Storage
 }
 
-func (db *CockroachStatefulSet) IsReady() bool {
-	return db.Ready
+func (s CockroachStatefulSet) IsReady() bool {
+	return s.Ready
 }
 
-func (db *CockroachStatefulSet) Equal(obj CockroachStatefulSet) bool {
-	return db.CockroachStatefulSetComparable == obj.CockroachStatefulSetComparable
+func (s CockroachStatefulSet) Equal(obj k8s_generic.Resource) bool {
+	other, ok := obj.(CockroachStatefulSet)
+	if !ok {
+		return false
+	}
+	return s.CockroachStatefulSetComparable == other.CockroachStatefulSetComparable
 }
 
-func (c *Client) StatefulSets() *k8s_generic.Client[CockroachStatefulSet, *CockroachStatefulSet] {
-	return k8s_generic.NewClient[CockroachStatefulSet](
+func (c *Client) StatefulSets() *k8s_generic.Client[CockroachStatefulSet] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "apps",
@@ -205,5 +210,6 @@ func (c *Client) StatefulSets() *k8s_generic.Client[CockroachStatefulSet, *Cockr
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "cockroachdb",
 		}, common.LABEL_FILTERS),
+		cockroachStatefulSetFromUnstructured,
 	)
 }
