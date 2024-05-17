@@ -23,7 +23,7 @@ type NatsSecret struct {
 	ResourceVersion string
 }
 
-func (s *NatsSecret) GetHost() string {
+func (s NatsSecret) GetHost() string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB.Name, s.DB.Namespace)
 }
 
@@ -31,7 +31,7 @@ func encode(data string) string {
 	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
-func (s *NatsSecret) ToUnstructured() *unstructured.Unstructured {
+func (s NatsSecret) ToUnstructured() *unstructured.Unstructured {
 	secret := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -54,7 +54,9 @@ func (s *NatsSecret) ToUnstructured() *unstructured.Unstructured {
 	return secret
 }
 
-func (s *NatsSecret) FromUnstructured(obj *unstructured.Unstructured) error {
+func natsSecretFromUnstructured(obj *unstructured.Unstructured) (NatsSecret, error) {
+	s := NatsSecret{}
+
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
 
@@ -63,36 +65,40 @@ func (s *NatsSecret) FromUnstructured(obj *unstructured.Unstructured) error {
 
 	hostname, err := k8s_generic.GetEncodedProperty(obj, "data", "NATS_HOST")
 	if err != nil {
-		return fmt.Errorf("failed to get NATS_HOST: %+v", err)
+		return s, fmt.Errorf("failed to get NATS_HOST: %+v", err)
 	}
 	s.DB.Name = strings.Split(hostname, ".")[0]
 	s.DB.Namespace = strings.Split(hostname, ".")[1]
 
-	return nil
+	return s, nil
 }
 
-func (s *NatsSecret) GetName() string {
+func (s NatsSecret) GetName() string {
 	return s.Name
 }
 
-func (s *NatsSecret) GetNamespace() string {
+func (s NatsSecret) GetNamespace() string {
 	return s.Namespace
 }
 
-func (s *NatsSecret) GetUID() string {
+func (s NatsSecret) GetUID() string {
 	return s.UID
 }
 
-func (s *NatsSecret) GetResourceVersion() string {
+func (s NatsSecret) GetResourceVersion() string {
 	return s.ResourceVersion
 }
 
-func (s *NatsSecret) Equal(obj NatsSecret) bool {
-	return s.NatsSecretComparable == obj.NatsSecretComparable
+func (s NatsSecret) Equal(obj k8s_generic.Resource) bool {
+	other, ok := obj.(NatsSecret)
+	if !ok {
+		return false
+	}
+	return s.NatsSecretComparable == other.NatsSecretComparable
 }
 
-func (c *Client) Secrets() *k8s_generic.Client[NatsSecret, *NatsSecret] {
-	return k8s_generic.NewClient[NatsSecret](
+func (c *Client) Secrets() *k8s_generic.Client[NatsSecret] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -103,5 +109,6 @@ func (c *Client) Secrets() *k8s_generic.Client[NatsSecret, *NatsSecret] {
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "nats",
 		}, common.LABEL_FILTERS),
+		natsSecretFromUnstructured,
 	)
 }

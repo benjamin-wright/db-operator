@@ -22,7 +22,7 @@ type RedisStatefulSet struct {
 	ResourceVersion string
 }
 
-func (s *RedisStatefulSet) ToUnstructured() *unstructured.Unstructured {
+func (s RedisStatefulSet) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
@@ -125,8 +125,9 @@ func (s *RedisStatefulSet) ToUnstructured() *unstructured.Unstructured {
 	return statefulset
 }
 
-func (s *RedisStatefulSet) FromUnstructured(obj *unstructured.Unstructured) error {
+func redisStatefulSetFromUnstructured(obj *unstructured.Unstructured) (RedisStatefulSet, error) {
 	var err error
+	s := RedisStatefulSet{}
 
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
@@ -135,7 +136,7 @@ func (s *RedisStatefulSet) FromUnstructured(obj *unstructured.Unstructured) erro
 
 	s.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "volumeClaimTemplates", "0", "spec", "resources", "requests", "storage")
 	if err != nil {
-		return fmt.Errorf("failed to get storage: %+v", err)
+		return s, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
 	replicas, err := k8s_generic.GetProperty[int64](obj, "status", "replicas")
@@ -150,39 +151,43 @@ func (s *RedisStatefulSet) FromUnstructured(obj *unstructured.Unstructured) erro
 
 	s.Ready = replicas > 0 && replicas == readyReplicas
 
-	return nil
+	return s, nil
 }
 
-func (db *RedisStatefulSet) GetName() string {
+func (db RedisStatefulSet) GetName() string {
 	return db.Name
 }
 
-func (db *RedisStatefulSet) GetNamespace() string {
+func (db RedisStatefulSet) GetNamespace() string {
 	return db.Namespace
 }
 
-func (db *RedisStatefulSet) GetUID() string {
+func (db RedisStatefulSet) GetUID() string {
 	return db.UID
 }
 
-func (db *RedisStatefulSet) GetResourceVersion() string {
+func (db RedisStatefulSet) GetResourceVersion() string {
 	return db.ResourceVersion
 }
 
-func (db *RedisStatefulSet) GetStorage() string {
+func (db RedisStatefulSet) GetStorage() string {
 	return db.Storage
 }
 
-func (db *RedisStatefulSet) IsReady() bool {
+func (db RedisStatefulSet) IsReady() bool {
 	return db.Ready
 }
 
-func (db *RedisStatefulSet) Equal(obj RedisStatefulSet) bool {
-	return db.RedisStatefulSetComparable == obj.RedisStatefulSetComparable
+func (db RedisStatefulSet) Equal(obj k8s_generic.Resource) bool {
+	other, ok := obj.(*RedisStatefulSet)
+	if !ok {
+		return false
+	}
+	return db.RedisStatefulSetComparable == other.RedisStatefulSetComparable
 }
 
-func (c *Client) StatefulSets() *k8s_generic.Client[RedisStatefulSet, *RedisStatefulSet] {
-	return k8s_generic.NewClient[RedisStatefulSet](
+func (c *Client) StatefulSets() *k8s_generic.Client[RedisStatefulSet] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "apps",
@@ -193,5 +198,6 @@ func (c *Client) StatefulSets() *k8s_generic.Client[RedisStatefulSet, *RedisStat
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "redis",
 		}, common.LABEL_FILTERS),
+		redisStatefulSetFromUnstructured,
 	)
 }

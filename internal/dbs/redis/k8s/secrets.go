@@ -25,7 +25,7 @@ type RedisSecret struct {
 	ResourceVersion string
 }
 
-func (s *RedisSecret) GetHost() string {
+func (s RedisSecret) GetHost() string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local", s.DB.Name, s.DB.Namespace)
 }
 
@@ -33,7 +33,7 @@ func encode(data string) string {
 	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
-func (s *RedisSecret) ToUnstructured() *unstructured.Unstructured {
+func (s RedisSecret) ToUnstructured() *unstructured.Unstructured {
 	secret := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -57,7 +57,9 @@ func (s *RedisSecret) ToUnstructured() *unstructured.Unstructured {
 	return secret
 }
 
-func (s *RedisSecret) FromUnstructured(obj *unstructured.Unstructured) error {
+func redisSecretFromUnstructured(obj *unstructured.Unstructured) (RedisSecret, error) {
+	s := RedisSecret{}
+
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
 
@@ -66,46 +68,50 @@ func (s *RedisSecret) FromUnstructured(obj *unstructured.Unstructured) error {
 
 	hostname, err := k8s_generic.GetEncodedProperty(obj, "data", "REDIS_HOST")
 	if err != nil {
-		return fmt.Errorf("failed to get REDIS_HOST: %+v", err)
+		return s, fmt.Errorf("failed to get REDIS_HOST: %+v", err)
 	}
 	s.DB.Name = strings.Split(hostname, ".")[0]
 	s.DB.Namespace = strings.Split(hostname, ".")[1]
 
 	unit, err := k8s_generic.GetEncodedProperty(obj, "data", "REDIS_UNIT")
 	if err != nil {
-		return fmt.Errorf("failed to get REDIS_UNIT: %+v", err)
+		return s, fmt.Errorf("failed to get REDIS_UNIT: %+v", err)
 	}
 
 	s.Unit, err = strconv.Atoi(unit)
 	if err != nil {
-		return fmt.Errorf("failed to parse REDIS_UNIT: %+v", err)
+		return s, fmt.Errorf("failed to parse REDIS_UNIT: %+v", err)
 	}
 
-	return nil
+	return s, nil
 }
 
-func (s *RedisSecret) GetName() string {
+func (s RedisSecret) GetName() string {
 	return s.Name
 }
 
-func (s *RedisSecret) GetNamespace() string {
+func (s RedisSecret) GetNamespace() string {
 	return s.Namespace
 }
 
-func (s *RedisSecret) GetUID() string {
+func (s RedisSecret) GetUID() string {
 	return s.UID
 }
 
-func (s *RedisSecret) GetResourceVersion() string {
+func (s RedisSecret) GetResourceVersion() string {
 	return s.ResourceVersion
 }
 
-func (s *RedisSecret) Equal(obj RedisSecret) bool {
-	return s.RedisSecretComparable == obj.RedisSecretComparable
+func (s RedisSecret) Equal(obj k8s_generic.Resource) bool {
+	redisSecret, ok := obj.(*RedisSecret)
+	if !ok {
+		return false
+	}
+	return s.RedisSecretComparable == redisSecret.RedisSecretComparable
 }
 
-func (c *Client) Secrets() *k8s_generic.Client[RedisSecret, *RedisSecret] {
-	return k8s_generic.NewClient[RedisSecret](
+func (c *Client) Secrets() *k8s_generic.Client[RedisSecret] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -116,5 +122,6 @@ func (c *Client) Secrets() *k8s_generic.Client[RedisSecret, *RedisSecret] {
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "redis",
 		}, common.LABEL_FILTERS),
+		redisSecretFromUnstructured,
 	)
 }

@@ -18,7 +18,7 @@ type NatsService struct {
 	ResourceVersion string
 }
 
-func (s *NatsService) ToUnstructured() *unstructured.Unstructured {
+func (s NatsService) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -50,36 +50,42 @@ func (s *NatsService) ToUnstructured() *unstructured.Unstructured {
 	return statefulset
 }
 
-func (s *NatsService) FromUnstructured(obj *unstructured.Unstructured) error {
+func natsServiceFromUnstructured(obj *unstructured.Unstructured) (NatsService, error) {
+	s := NatsService{}
+
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
-	return nil
+
+	return s, nil
 }
 
-func (s *NatsService) GetName() string {
+func (s NatsService) GetName() string {
 	return s.Name
 }
 
-func (s *NatsService) GetNamespace() string {
+func (s NatsService) GetNamespace() string {
 	return s.Namespace
 }
 
-func (s *NatsService) GetUID() string {
+func (s NatsService) GetUID() string {
 	return s.UID
 }
 
-func (s *NatsService) GetResourceVersion() string {
+func (s NatsService) GetResourceVersion() string {
 	return s.ResourceVersion
 }
 
-func (s *NatsService) Equal(obj NatsService) bool {
-	return s.NatsServiceComparable == obj.NatsServiceComparable
+func (s NatsService) Equal(obj k8s_generic.Resource) bool {
+	if natsService, ok := obj.(*NatsService); ok {
+		return s.NatsServiceComparable == natsService.NatsServiceComparable
+	}
+	return false
 }
 
-func (c *Client) Services() *k8s_generic.Client[NatsService, *NatsService] {
-	return k8s_generic.NewClient[NatsService](
+func (c *Client) Services() *k8s_generic.Client[NatsService] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -90,5 +96,6 @@ func (c *Client) Services() *k8s_generic.Client[NatsService, *NatsService] {
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "nats",
 		}, common.LABEL_FILTERS),
+		natsServiceFromUnstructured,
 	)
 }

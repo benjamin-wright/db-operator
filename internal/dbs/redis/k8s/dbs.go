@@ -20,7 +20,7 @@ type RedisDB struct {
 	ResourceVersion string
 }
 
-func (db *RedisDB) ToUnstructured() *unstructured.Unstructured {
+func (db RedisDB) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
@@ -37,8 +37,9 @@ func (db *RedisDB) ToUnstructured() *unstructured.Unstructured {
 	return result
 }
 
-func (db *RedisDB) FromUnstructured(obj *unstructured.Unstructured) error {
+func redisDBFromUnstructured(obj *unstructured.Unstructured) (RedisDB, error) {
 	var err error
+	db := RedisDB{}
 
 	db.Name = obj.GetName()
 	db.Namespace = obj.GetNamespace()
@@ -46,38 +47,42 @@ func (db *RedisDB) FromUnstructured(obj *unstructured.Unstructured) error {
 	db.ResourceVersion = obj.GetResourceVersion()
 	db.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "storage")
 	if err != nil {
-		return fmt.Errorf("failed to get storage: %+v", err)
+		return db, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
-	return nil
+	return db, nil
 }
 
-func (db *RedisDB) GetName() string {
+func (db RedisDB) GetName() string {
 	return db.Name
 }
 
-func (db *RedisDB) GetNamespace() string {
+func (db RedisDB) GetNamespace() string {
 	return db.Namespace
 }
 
-func (db *RedisDB) GetStorage() string {
+func (db RedisDB) GetStorage() string {
 	return db.Storage
 }
 
-func (db *RedisDB) GetUID() string {
+func (db RedisDB) GetUID() string {
 	return db.UID
 }
 
-func (db *RedisDB) GetResourceVersion() string {
+func (db RedisDB) GetResourceVersion() string {
 	return db.ResourceVersion
 }
 
-func (db *RedisDB) Equal(obj RedisDB) bool {
-	return db.RedisDBComparable == obj.RedisDBComparable
+func (db RedisDB) Equal(obj k8s_generic.Resource) bool {
+	redisDB, ok := obj.(*RedisDB)
+	if !ok {
+		return false
+	}
+	return db.RedisDBComparable == redisDB.RedisDBComparable
 }
 
-func (c *Client) DBs() *k8s_generic.Client[RedisDB, *RedisDB] {
-	return k8s_generic.NewClient[RedisDB](
+func (c *Client) DBs() *k8s_generic.Client[RedisDB] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "ponglehub.co.uk",
@@ -86,5 +91,6 @@ func (c *Client) DBs() *k8s_generic.Client[RedisDB, *RedisDB] {
 		},
 		"RedisDB",
 		nil,
+		redisDBFromUnstructured,
 	)
 }

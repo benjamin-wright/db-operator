@@ -18,7 +18,7 @@ type RedisService struct {
 	ResourceVersion string
 }
 
-func (s *RedisService) ToUnstructured() *unstructured.Unstructured {
+func (s RedisService) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "v1",
@@ -50,36 +50,43 @@ func (s *RedisService) ToUnstructured() *unstructured.Unstructured {
 	return statefulset
 }
 
-func (s *RedisService) FromUnstructured(obj *unstructured.Unstructured) error {
+func redisServiceFromUnstructured(obj *unstructured.Unstructured) (RedisService, error) {
+	s := RedisService{}
+
 	s.Name = obj.GetName()
 	s.Namespace = obj.GetNamespace()
 	s.UID = string(obj.GetUID())
 	s.ResourceVersion = obj.GetResourceVersion()
-	return nil
+
+	return s, nil
 }
 
-func (s *RedisService) GetName() string {
+func (s RedisService) GetName() string {
 	return s.Name
 }
 
-func (s *RedisService) GetNamespace() string {
+func (s RedisService) GetNamespace() string {
 	return s.Namespace
 }
 
-func (s *RedisService) GetUID() string {
+func (s RedisService) GetUID() string {
 	return s.UID
 }
 
-func (s *RedisService) GetResourceVersion() string {
+func (s RedisService) GetResourceVersion() string {
 	return s.ResourceVersion
 }
 
-func (s *RedisService) Equal(obj RedisService) bool {
-	return s.RedisServiceComparable == obj.RedisServiceComparable
+func (s RedisService) Equal(obj k8s_generic.Resource) bool {
+	redisService, ok := obj.(*RedisService)
+	if !ok {
+		return false
+	}
+	return s.RedisServiceComparable == redisService.RedisServiceComparable
 }
 
-func (c *Client) Services() *k8s_generic.Client[RedisService, *RedisService] {
-	return k8s_generic.NewClient[RedisService](
+func (c *Client) Services() *k8s_generic.Client[RedisService] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -90,5 +97,6 @@ func (c *Client) Services() *k8s_generic.Client[RedisService, *RedisService] {
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "redis",
 		}, common.LABEL_FILTERS),
+		redisServiceFromUnstructured,
 	)
 }

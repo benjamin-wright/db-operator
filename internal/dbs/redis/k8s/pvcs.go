@@ -22,12 +22,13 @@ type RedisPVC struct {
 	ResourceVersion string
 }
 
-func (p *RedisPVC) ToUnstructured() *unstructured.Unstructured {
+func (p RedisPVC) ToUnstructured() *unstructured.Unstructured {
 	panic("not implemented")
 }
 
-func (p *RedisPVC) FromUnstructured(obj *unstructured.Unstructured) error {
+func redisPVCFromUnstructured(obj *unstructured.Unstructured) (RedisPVC, error) {
 	var err error
+	p := RedisPVC{}
 
 	p.Name = obj.GetName()
 	p.Namespace = obj.GetNamespace()
@@ -35,39 +36,43 @@ func (p *RedisPVC) FromUnstructured(obj *unstructured.Unstructured) error {
 	p.ResourceVersion = obj.GetResourceVersion()
 	p.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "resources", "requests", "storage")
 	if err != nil {
-		return fmt.Errorf("failed to get storage: %+v", err)
+		return p, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
 	p.Database, err = k8s_generic.GetProperty[string](obj, "metadata", "labels", "app")
 	if err != nil {
-		return fmt.Errorf("failed to get database from app label: %+v", err)
+		return p, fmt.Errorf("failed to get database from app label: %+v", err)
 	}
 
-	return nil
+	return p, nil
 }
 
-func (p *RedisPVC) GetName() string {
+func (p RedisPVC) GetName() string {
 	return p.Name
 }
 
-func (p *RedisPVC) GetNamespace() string {
+func (p RedisPVC) GetNamespace() string {
 	return p.Namespace
 }
 
-func (p *RedisPVC) GetUID() string {
+func (p RedisPVC) GetUID() string {
 	return p.UID
 }
 
-func (p *RedisPVC) GetResourceVersion() string {
+func (p RedisPVC) GetResourceVersion() string {
 	return p.ResourceVersion
 }
 
-func (p *RedisPVC) Equal(obj RedisPVC) bool {
-	return p.RedisPVCComparable == obj.RedisPVCComparable
+func (p RedisPVC) Equal(obj k8s_generic.Resource) bool {
+	redisPVC, ok := obj.(*RedisPVC)
+	if !ok {
+		return false
+	}
+	return p.RedisPVCComparable == redisPVC.RedisPVCComparable
 }
 
-func (c *Client) PVCs() *k8s_generic.Client[RedisPVC, *RedisPVC] {
-	return k8s_generic.NewClient[RedisPVC](
+func (c *Client) PVCs() *k8s_generic.Client[RedisPVC] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "",
@@ -78,5 +83,6 @@ func (c *Client) PVCs() *k8s_generic.Client[RedisPVC, *RedisPVC] {
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "redis",
 		}, common.LABEL_FILTERS),
+		redisPVCFromUnstructured,
 	)
 }

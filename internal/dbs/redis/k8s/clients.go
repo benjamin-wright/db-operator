@@ -22,7 +22,7 @@ type RedisClient struct {
 	ResourceVersion string
 }
 
-func (cli *RedisClient) ToUnstructured() *unstructured.Unstructured {
+func (cli RedisClient) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
@@ -44,8 +44,10 @@ func (cli *RedisClient) ToUnstructured() *unstructured.Unstructured {
 	return result
 }
 
-func (cli *RedisClient) FromUnstructured(obj *unstructured.Unstructured) error {
+func redisClientFromUnstructured(obj *unstructured.Unstructured) (RedisClient, error) {
 	var err error
+	cli := RedisClient{}
+
 	cli.Name = obj.GetName()
 	cli.Namespace = obj.GetNamespace()
 	cli.UID = string(obj.GetUID())
@@ -53,57 +55,61 @@ func (cli *RedisClient) FromUnstructured(obj *unstructured.Unstructured) error {
 
 	cli.DBRef.Name, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "name")
 	if err != nil {
-		return fmt.Errorf("failed to get db ref name: %+v", err)
+		return cli, fmt.Errorf("failed to get db ref name: %+v", err)
 	}
 
 	cli.DBRef.Namespace, err = k8s_generic.GetProperty[string](obj, "spec", "dbRef", "namespace")
 	if err != nil {
-		return fmt.Errorf("failed to get db ref namespace: %+v", err)
+		return cli, fmt.Errorf("failed to get db ref namespace: %+v", err)
 	}
 
 	cli.Unit, err = k8s_generic.GetProperty[int64](obj, "spec", "unit")
 	if err != nil {
-		return fmt.Errorf("failed to get unit: %+v", err)
+		return cli, fmt.Errorf("failed to get unit: %+v", err)
 	}
 
 	cli.Secret, err = k8s_generic.GetProperty[string](obj, "spec", "secret")
 	if err != nil {
-		return fmt.Errorf("failed to get secret: %+v", err)
+		return cli, fmt.Errorf("failed to get secret: %+v", err)
 	}
 
-	return nil
+	return cli, nil
 }
 
-func (cli *RedisClient) GetName() string {
+func (cli RedisClient) GetName() string {
 	return cli.Name
 }
 
-func (cli *RedisClient) GetNamespace() string {
+func (cli RedisClient) GetNamespace() string {
 	return cli.Namespace
 }
 
-func (cli *RedisClient) GetUID() string {
+func (cli RedisClient) GetUID() string {
 	return cli.UID
 }
 
-func (cli *RedisClient) GetResourceVersion() string {
+func (cli RedisClient) GetResourceVersion() string {
 	return cli.ResourceVersion
 }
 
-func (cli *RedisClient) GetTarget() string {
+func (cli RedisClient) GetTarget() string {
 	return cli.DBRef.Name
 }
 
-func (cli *RedisClient) GetTargetNamespace() string {
+func (cli RedisClient) GetTargetNamespace() string {
 	return cli.DBRef.Namespace
 }
 
-func (cli *RedisClient) Equal(obj RedisClient) bool {
-	return cli.RedisClientComparable == obj.RedisClientComparable
+func (cli RedisClient) Equal(obj k8s_generic.Resource) bool {
+	redisObj, ok := obj.(*RedisClient)
+	if !ok {
+		return false
+	}
+	return cli.RedisClientComparable == redisObj.RedisClientComparable
 }
 
-func (c *Client) Clients() *k8s_generic.Client[RedisClient, *RedisClient] {
-	return k8s_generic.NewClient[RedisClient](
+func (c *Client) Clients() *k8s_generic.Client[RedisClient] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "ponglehub.co.uk",
@@ -112,5 +118,6 @@ func (c *Client) Clients() *k8s_generic.Client[RedisClient, *RedisClient] {
 		},
 		"RedisClient",
 		nil,
+		redisClientFromUnstructured,
 	)
 }

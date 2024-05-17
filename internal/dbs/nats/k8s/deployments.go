@@ -19,7 +19,7 @@ type NatsDeployment struct {
 	ResourceVersion string
 }
 
-func (d *NatsDeployment) ToUnstructured() *unstructured.Unstructured {
+func (d NatsDeployment) ToUnstructured() *unstructured.Unstructured {
 	deployment := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
@@ -96,8 +96,9 @@ func (d *NatsDeployment) ToUnstructured() *unstructured.Unstructured {
 	return deployment
 }
 
-func (d *NatsDeployment) FromUnstructured(obj *unstructured.Unstructured) error {
+func natsDeploymentFromUnstructured(obj *unstructured.Unstructured) (NatsDeployment, error) {
 	var err error
+	d := NatsDeployment{}
 
 	d.Name = obj.GetName()
 	d.Namespace = obj.GetNamespace()
@@ -116,35 +117,38 @@ func (d *NatsDeployment) FromUnstructured(obj *unstructured.Unstructured) error 
 
 	d.Ready = replicas > 0 && replicas == readyReplicas
 
-	return nil
+	return d, nil
 }
 
-func (d *NatsDeployment) GetName() string {
+func (d NatsDeployment) GetName() string {
 	return d.Name
 }
 
-func (d *NatsDeployment) GetNamespace() string {
+func (d NatsDeployment) GetNamespace() string {
 	return d.Namespace
 }
 
-func (d *NatsDeployment) GetUID() string {
+func (d NatsDeployment) GetUID() string {
 	return d.UID
 }
 
-func (d *NatsDeployment) GetResourceVersion() string {
+func (d NatsDeployment) GetResourceVersion() string {
 	return d.ResourceVersion
 }
 
-func (d *NatsDeployment) IsReady() bool {
+func (d NatsDeployment) IsReady() bool {
 	return d.Ready
 }
 
-func (d *NatsDeployment) Equal(obj NatsDeployment) bool {
-	return d.NatsDeploymentComparable == obj.NatsDeploymentComparable
+func (d NatsDeployment) Equal(obj k8s_generic.Resource) bool {
+	if natsDeployment, ok := obj.(*NatsDeployment); ok {
+		return d.NatsDeploymentComparable == natsDeployment.NatsDeploymentComparable
+	}
+	return false
 }
 
-func (c *Client) Deployments() *k8s_generic.Client[NatsDeployment, *NatsDeployment] {
-	return k8s_generic.NewClient[NatsDeployment](
+func (c *Client) Deployments() *k8s_generic.Client[NatsDeployment] {
+	return k8s_generic.NewClient(
 		c.builder,
 		schema.GroupVersionResource{
 			Group:    "apps",
@@ -155,5 +159,6 @@ func (c *Client) Deployments() *k8s_generic.Client[NatsDeployment, *NatsDeployme
 		k8s_generic.Merge(map[string]string{
 			"ponglehub.co.uk/resource-type": "nats",
 		}, common.LABEL_FILTERS),
+		natsDeploymentFromUnstructured,
 	)
 }
