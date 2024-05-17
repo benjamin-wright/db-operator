@@ -1,7 +1,11 @@
 package manager
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/deployments"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/services"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
@@ -9,37 +13,37 @@ import (
 )
 
 type State struct {
-	dbs          bucket.Bucket[k8s.NatsDB, *k8s.NatsDB]
-	clients      bucket.Bucket[k8s.NatsClient, *k8s.NatsClient]
-	statefulSets bucket.Bucket[k8s.NatsDeployment, *k8s.NatsDeployment]
-	services     bucket.Bucket[k8s.NatsService, *k8s.NatsService]
-	secrets      bucket.Bucket[k8s.NatsSecret, *k8s.NatsSecret]
+	clusters    bucket.Bucket[clusters.Resource]
+	clients     bucket.Bucket[clients.Resource]
+	deployments bucket.Bucket[deployments.Resource]
+	services    bucket.Bucket[services.Resource]
+	secrets     bucket.Bucket[secrets.Resource]
 }
 
 func (s *State) Apply(update interface{}) {
 	switch u := update.(type) {
-	case k8s_generic.Update[k8s.NatsDB]:
-		s.dbs.Apply(u)
-	case k8s_generic.Update[k8s.NatsClient]:
+	case k8s_generic.Update[clusters.Resource]:
+		s.clusters.Apply(u)
+	case k8s_generic.Update[clients.Resource]:
 		s.clients.Apply(u)
-	case k8s_generic.Update[k8s.NatsDeployment]:
-		s.statefulSets.Apply(u)
-	case k8s_generic.Update[k8s.NatsService]:
+	case k8s_generic.Update[deployments.Resource]:
+		s.deployments.Apply(u)
+	case k8s_generic.Update[services.Resource]:
 		s.services.Apply(u)
-	case k8s_generic.Update[k8s.NatsSecret]:
+	case k8s_generic.Update[secrets.Resource]:
 		s.secrets.Apply(u)
 	default:
 		log.Error().Interface("update", u).Msg("wat dis? Unknown state update")
 	}
 }
 
-func (s *State) GetDeploymentDemand() state.Demand[k8s.NatsDB, k8s.NatsDeployment] {
+func (s *State) GetDeploymentDemand() state.Demand[clusters.Resource, deployments.Resource] {
 	return state.GetOneForOne(
-		s.dbs,
-		s.statefulSets,
-		func(db k8s.NatsDB) k8s.NatsDeployment {
-			return k8s.NatsDeployment{
-				NatsDeploymentComparable: k8s.NatsDeploymentComparable{
+		s.clusters,
+		s.deployments,
+		func(db clusters.Resource) deployments.Resource {
+			return deployments.Resource{
+				Comparable: deployments.Comparable{
 					Name:      db.Name,
 					Namespace: db.Namespace,
 				},
@@ -48,13 +52,13 @@ func (s *State) GetDeploymentDemand() state.Demand[k8s.NatsDB, k8s.NatsDeploymen
 	)
 }
 
-func (s *State) GetServiceDemand() state.Demand[k8s.NatsDB, k8s.NatsService] {
+func (s *State) GetServiceDemand() state.Demand[clusters.Resource, services.Resource] {
 	return state.GetOneForOne(
-		s.dbs,
+		s.clusters,
 		s.services,
-		func(db k8s.NatsDB) k8s.NatsService {
-			return k8s.NatsService{
-				NatsServiceComparable: k8s.NatsServiceComparable{
+		func(db clusters.Resource) services.Resource {
+			return services.Resource{
+				Comparable: services.Comparable{
 					Name:      db.Name,
 					Namespace: db.Namespace,
 				},
@@ -63,17 +67,20 @@ func (s *State) GetServiceDemand() state.Demand[k8s.NatsDB, k8s.NatsService] {
 	)
 }
 
-func (s *State) GetSecretsDemand() state.Demand[k8s.NatsClient, k8s.NatsSecret] {
+func (s *State) GetSecretsDemand() state.Demand[clients.Resource, secrets.Resource] {
 	return state.GetServiceBound(
 		s.clients,
 		s.secrets,
-		s.statefulSets,
-		func(client k8s.NatsClient) k8s.NatsSecret {
-			return k8s.NatsSecret{
-				NatsSecretComparable: k8s.NatsSecretComparable{
+		s.deployments,
+		func(client clients.Resource) secrets.Resource {
+			return secrets.Resource{
+				Comparable: secrets.Comparable{
 					Name:      client.Secret,
 					Namespace: client.Namespace,
-					DB:        client.DBRef,
+					Cluster: secrets.Cluster{
+						Name:      client.Cluster.Name,
+						Namespace: client.Cluster.Namespace,
+					},
 				},
 			}
 		},

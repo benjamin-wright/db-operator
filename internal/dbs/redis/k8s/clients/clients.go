@@ -12,9 +12,9 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 	Schema: schema.GroupVersionResource{
 		Group:    "ponglehub.co.uk",
 		Version:  "v1alpha1",
-		Resource: "postgresclients",
+		Resource: "redisclients",
 	},
-	Kind:             "PostgresClient",
+	Kind:             "RedisClient",
 	FromUnstructured: fromUnstructured,
 }
 
@@ -27,8 +27,7 @@ type Comparable struct {
 	Name      string
 	Namespace string
 	Cluster   Cluster
-	Database  string
-	Username  string
+	Unit      int64
 	Secret    string
 }
 
@@ -42,7 +41,7 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
-		"kind":       "PostgresClient",
+		"kind":       "RedisClient",
 		"metadata": map[string]interface{}{
 			"name":      r.Name,
 			"namespace": r.Namespace,
@@ -52,9 +51,8 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 				"name":      r.Cluster.Name,
 				"namespace": r.Cluster.Namespace,
 			},
-			"database": r.Database,
-			"username": r.Username,
-			"secret":   r.Secret,
+			"unit":   r.Unit,
+			"secret": r.Secret,
 		},
 	})
 
@@ -64,6 +62,7 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	var err error
 	r := Resource{}
+
 	r.Name = obj.GetName()
 	r.Namespace = obj.GetNamespace()
 	r.UID = string(obj.GetUID())
@@ -71,22 +70,17 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 
 	r.Cluster.Name, err = k8s_generic.GetProperty[string](obj, "spec", "cluster", "name")
 	if err != nil {
-		return r, fmt.Errorf("failed to get cluster ref name: %+v", err)
+		return r, fmt.Errorf("failed to get cluster name: %+v", err)
 	}
 
 	r.Cluster.Namespace, err = k8s_generic.GetProperty[string](obj, "spec", "cluster", "namespace")
 	if err != nil {
-		return r, fmt.Errorf("failed to get cluster ref namespace: %+v", err)
+		return r, fmt.Errorf("failed to get cluster namespace: %+v", err)
 	}
 
-	r.Database, err = k8s_generic.GetProperty[string](obj, "spec", "database")
+	r.Unit, err = k8s_generic.GetProperty[int64](obj, "spec", "unit")
 	if err != nil {
-		return r, fmt.Errorf("failed to get database: %+v", err)
-	}
-
-	r.Username, err = k8s_generic.GetProperty[string](obj, "spec", "username")
-	if err != nil {
-		return r, fmt.Errorf("failed to get username: %+v", err)
+		return r, fmt.Errorf("failed to get unit: %+v", err)
 	}
 
 	r.Secret, err = k8s_generic.GetProperty[string](obj, "spec", "secret")
@@ -122,9 +116,9 @@ func (r Resource) GetTargetNamespace() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	if other, ok := obj.(Resource); ok {
-		return r.Comparable == other.Comparable
+	other, ok := obj.(*Resource)
+	if !ok {
+		return false
 	}
-
-	return false
+	return r.Comparable == other.Comparable
 }

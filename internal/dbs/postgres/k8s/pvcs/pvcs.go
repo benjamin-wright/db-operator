@@ -25,7 +25,7 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 type Comparable struct {
 	Name      string
 	Namespace string
-	Database  string
+	Cluster   string
 	Storage   string
 }
 
@@ -53,7 +53,7 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 		return r, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
-	r.Database, err = k8s_generic.GetProperty[string](obj, "metadata", "labels", "app")
+	r.Cluster, err = k8s_generic.GetProperty[string](obj, "metadata", "labels", "app")
 	if err != nil {
 		return r, fmt.Errorf("failed to get database from app label: %+v", err)
 	}

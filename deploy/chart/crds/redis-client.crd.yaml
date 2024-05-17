@@ -15,7 +15,7 @@ spec:
             spec:
               type: object
               properties:
-                dbRef:
+                cluster:
                   type: object
                   properties:
                     name:
@@ -27,7 +27,7 @@ spec:
                   type: integer
                 secret:
                   type: string
-              required: [ dbRef, unit, secret ]
+              required: [ cluster, unit, secret ]
             status:
               type: object
               properties:
@@ -46,5 +46,5 @@ spec:
     singular: redisclient
     kind: RedisClient
     shortNames:
-    - rc
-    - rcs
+    - rcl
+    - rcls

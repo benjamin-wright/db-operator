@@ -7,14 +7,17 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
 	postgres_helpers "github.com/benjamin-wright/db-operator/internal/test_utils/postgres"
 	"github.com/benjamin-wright/db-operator/pkg/postgres"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCockroachIntegration(t *testing.T) {
+func TestPostgresIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -32,9 +35,8 @@ func TestCockroachIntegration(t *testing.T) {
 
 	namespace := os.Getenv("NAMESPACE")
 
-	mustPass(t, client.DBs().DeleteAll(context.Background(), namespace))
+	mustPass(t, client.Clusters().DeleteAll(context.Background(), namespace))
 	mustPass(t, client.Clients().DeleteAll(context.Background(), namespace))
-	mustPass(t, client.Migrations().DeleteAll(context.Background(), namespace))
 	mustPass(t, waitFor(func() error {
 		sss, err := client.StatefulSets().GetAll(context.Background())
 		if err != nil {
@@ -48,17 +50,17 @@ func TestCockroachIntegration(t *testing.T) {
 		return nil
 	}))
 
-	mustPass(t, client.DBs().Create(context.Background(), k8s.CockroachDB{
-		CockroachDBComparable: k8s.CockroachDBComparable{
+	mustPass(t, client.Clusters().Create(context.Background(), clusters.Resource{
+		Comparable: clusters.Comparable{
 			Name:      "different-db",
 			Namespace: namespace,
 			Storage:   "256Mi",
 		},
 	}))
 
-	mustPass(t, client.Clients().Create(context.Background(), k8s.CockroachClient{
-		CockroachClientComparable: k8s.CockroachClientComparable{
-			DBRef:     k8s.DBRef{Name: "different-db", Namespace: namespace},
+	mustPass(t, client.Clients().Create(context.Background(), clients.Resource{
+		Comparable: clients.Comparable{
+			Cluster:   clients.Cluster{Name: "different-db", Namespace: namespace},
 			Database:  "new_db",
 			Name:      "my-client",
 			Namespace: namespace,
@@ -67,22 +69,7 @@ func TestCockroachIntegration(t *testing.T) {
 		},
 	}))
 
-	mustPass(t, client.Migrations().Create(context.Background(), k8s.CockroachMigration{
-		CockroachMigrationComparable: k8s.CockroachMigrationComparable{
-			Name:      "mig1",
-			Namespace: namespace,
-			DBRef:     k8s.DBRef{Name: "different-db", Namespace: namespace},
-			Database:  "new_db",
-			Migration: `
-				CREATE TABLE hithere (
-					id INT PRIMARY KEY NOT NULL UNIQUE
-				);
-			`,
-			Index: 1,
-		},
-	}))
-
-	secret := waitForResult(t, func() (k8s.CockroachSecret, error) {
+	secret := waitForResult(t, func() (secrets.Resource, error) {
 		return client.Secrets().Get(context.Background(), "my-secret", namespace)
 	})
 
@@ -99,9 +86,6 @@ func TestCockroachIntegration(t *testing.T) {
 
 	tables := pg.GetTableNames(t)
 
-	expected := []string{
-		"migrations",
-		"hithere",
-	}
+	expected := []string{}
 	assert.Equal(t, expected, tables)
 }

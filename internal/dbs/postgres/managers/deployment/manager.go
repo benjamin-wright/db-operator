@@ -5,7 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/pvcs"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/services"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/rs/zerolog/log"
@@ -27,14 +32,14 @@ func New(
 ) (*Manager, error) {
 	client, err := k8s.New()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach client: %+v", err)
+		return nil, fmt.Errorf("failed to create postgres client: %+v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	updates := make(chan any)
 
 	for _, f := range []WatchFunc{
-		client.DBs().Watch,
+		client.Clusters().Watch,
 		client.Clients().Watch,
 		client.StatefulSets().Watch,
 		client.PVCs().Watch,
@@ -47,11 +52,11 @@ func New(
 	}
 
 	state := State{
-		dbs:          bucket.NewBucket[k8s.CockroachDB](),
-		clients:      bucket.NewBucket[k8s.CockroachClient](),
-		statefulSets: bucket.NewBucket[k8s.CockroachStatefulSet](),
-		pvcs:         bucket.NewBucket[k8s.CockroachPVC](),
-		services:     bucket.NewBucket[k8s.CockroachService](),
+		clusters:     bucket.NewBucket[clusters.Resource](),
+		clients:      bucket.NewBucket[clients.Resource](),
+		statefulSets: bucket.NewBucket[stateful_sets.Resource](),
+		pvcs:         bucket.NewBucket[pvcs.Resource](),
+		services:     bucket.NewBucket[services.Resource](),
 	}
 
 	return &Manager{
@@ -89,13 +94,13 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		log.Info().Msg("Processing cockroach deployments started")
-		m.processCockroachDBs()
-		log.Info().Msg("Processing cockroach deployments finished")
+		log.Info().Msg("Processing postgres deployments started")
+		m.processPostgresDBs()
+		log.Info().Msg("Processing postgres deployments finished")
 	}
 }
 
-func (m *Manager) processCockroachDBs() {
+func (m *Manager) processPostgresDBs() {
 	ssDemand := m.state.GetStatefulSetDemand()
 	svcDemand := m.state.GetServiceDemand()
 	pvcsToRemove := m.state.GetPVCDemand()
@@ -105,7 +110,7 @@ func (m *Manager) processCockroachDBs() {
 		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name, db.Target.Namespace)
 
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to delete cockroachdb stateful set: %+v", err)
+			log.Error().Err(err).Msgf("Failed to delete postgresdb stateful set: %+v", err)
 		}
 	}
 
@@ -114,7 +119,7 @@ func (m *Manager) processCockroachDBs() {
 		err := m.client.Services().Delete(m.ctx, svc.Target.Name, svc.Target.Namespace)
 
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to delete cockroachdb service: %+v", err)
+			log.Error().Err(err).Msgf("Failed to delete postgresdb service: %+v", err)
 		}
 	}
 
@@ -123,7 +128,7 @@ func (m *Manager) processCockroachDBs() {
 		err := m.client.PVCs().Delete(m.ctx, pvc.Name, pvc.Namespace)
 
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to delete cockroachdb PVC: %+v", err)
+			log.Error().Err(err).Msgf("Failed to delete postgresdb PVC: %+v", err)
 		}
 	}
 
@@ -131,10 +136,10 @@ func (m *Manager) processCockroachDBs() {
 		log.Info().Msgf("Creating db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Create(m.ctx, db.Target)
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to create cockroachdb stateful set: %+v", err)
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
+			log.Error().Err(err).Msgf("Failed to create postgresdb stateful set: %+v", err)
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
 		} else {
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
 		}
 	}
 
@@ -143,7 +148,7 @@ func (m *Manager) processCockroachDBs() {
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to create cockroachdb service: %+v", err)
+			log.Error().Err(err).Msgf("Failed to create postgresdb service: %+v", err)
 		}
 	}
 }

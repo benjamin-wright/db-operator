@@ -26,7 +26,7 @@ func TestCockroachSecretFromUnstructured(t *testing.T) {
 		Comparable: Comparable{
 			Name:      "test-name",
 			Namespace: "test-namespace",
-			DB: DBRef{
+			Cluster: Cluster{
 				Name:      "test-db",
 				Namespace: "db-namespace",
 			},

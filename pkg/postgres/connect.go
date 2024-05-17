@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v4"
@@ -42,14 +41,9 @@ func getConnection(config *pgx.ConnConfig) *pgx.Conn {
 }
 
 func Connect(config ConnectConfig) (*pgx.Conn, error) {
-	dbSuffix := ""
-	if config.Database != "" {
-		dbSuffix = "/" + config.Database
-	}
+	connectionString := config.ConnectionString()
 
-	connectionString := fmt.Sprintf("postgresql://%s@%s:%d%s", config.Username, config.Host, config.Port, dbSuffix)
-
-	log.Info().Msgf("Connecting to postgres with connection string: %s", connectionString)
+	log.Info().Msgf("Connecting to postgres with connection string: %s", config)
 
 	pgxConfig, err := pgx.ParseConfig(connectionString)
 	if err != nil {

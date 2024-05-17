@@ -15,7 +15,7 @@ spec:
             spec:
               type: object
               properties:
-                dbRef:
+                cluster:
                   type: object
                   properties:
                     name:
@@ -25,7 +25,7 @@ spec:
                   required: [ name, namespace ]
                 secret:
                   type: string
-              required: [ dbRef, secret ]
+              required: [ cluster, secret ]
             status:
               type: object
               properties:
@@ -44,5 +44,5 @@ spec:
     singular: natsclient
     kind: NatsClient
     shortNames:
-    - nc
-    - ncs
+    - ncl
+    - ncls

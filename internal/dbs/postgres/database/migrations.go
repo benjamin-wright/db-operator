@@ -82,7 +82,7 @@ func (c *MigrationsClient) AppliedMigrations() ([]Migration, error) {
 		}
 
 		migrations = append(migrations, Migration{
-			DB: DBRef{
+			Cluster: Cluster{
 				Name:      c.deployment,
 				Namespace: c.namespace,
 			},

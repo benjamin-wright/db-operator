@@ -63,10 +63,16 @@ func (d *AdminConn) ListUsers() ([]string, error) {
 	return users, nil
 }
 
-func (d *AdminConn) CreateUser(username string) error {
+func (d *AdminConn) CreateUser(username string, password string) error {
 	log.Info().Msgf("Creating user %s", username)
-	if _, err := d.conn.Exec(context.Background(), "CREATE USER "+sanitize(username)); err != nil {
-		return fmt.Errorf("failed to create database user: %+v", err)
+	if password != "" {
+		if _, err := d.conn.Exec(context.Background(), "CREATE USER "+sanitize(username)+" WITH PASSWORD $1", password); err != nil {
+			return fmt.Errorf("failed to create database user: %+v", err)
+		}
+	} else {
+		if _, err := d.conn.Exec(context.Background(), "CREATE USER "+sanitize(username)); err != nil {
+			return fmt.Errorf("failed to create database user: %+v", err)
+		}
 	}
 
 	return nil

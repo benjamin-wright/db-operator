@@ -17,7 +17,7 @@ func TestCockroachPVCFromUnstructured(t *testing.T) {
 				"resourceVersion":   "test-resource-version",
 				"creationTimestamp": "test-creation-timestamp",
 				"labels": map[string]interface{}{
-					"app": "test-database",
+					"app": "test-cluster",
 				},
 			},
 			"spec": map[string]interface{}{
@@ -38,5 +38,5 @@ func TestCockroachPVCFromUnstructured(t *testing.T) {
 	assert.Equal(t, "test-uid", cockroachPVC.UID)
 	assert.Equal(t, "test-resource-version", cockroachPVC.ResourceVersion)
 	assert.Equal(t, "test-storage", cockroachPVC.Storage)
-	assert.Equal(t, "test-database", cockroachPVC.Database)
+	assert.Equal(t, "test-cluster", cockroachPVC.Cluster)
 }

@@ -17,7 +17,7 @@ func New(database string, namespace string) (*Client, error) {
 	cfg := postgres.ConnectConfig{
 		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", database, namespace),
 		Port:     26257,
-		Username: "root",
+		Username: "postgres",
 	}
 
 	conn, err := postgres.NewAdminConn(cfg)
@@ -54,7 +54,7 @@ func (c *Client) ListDBs() ([]Database, error) {
 		}
 
 		databases = append(databases, Database{
-			DB: DBRef{
+			Cluster: Cluster{
 				Name:      c.database,
 				Namespace: c.namespace,
 			},
@@ -100,7 +100,7 @@ func (c *Client) ListUsers() ([]User, error) {
 		}
 
 		users = append(users, User{
-			DB: DBRef{
+			Cluster: Cluster{
 				Name:      c.database,
 				Namespace: c.namespace,
 			},
@@ -112,7 +112,7 @@ func (c *Client) ListUsers() ([]User, error) {
 }
 
 func (c *Client) CreateUser(user User) error {
-	err := c.conn.CreateUser(user.Name)
+	err := c.conn.CreateUser(user.Name, user.Password)
 	if err != nil {
 		return fmt.Errorf("failed to create user %s: %+v", user, err)
 	}
@@ -142,7 +142,7 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 		}
 
 		permissions = append(permissions, Permission{
-			DB: DBRef{
+			Cluster: Cluster{
 				Name:      c.database,
 				Namespace: c.namespace,
 			},

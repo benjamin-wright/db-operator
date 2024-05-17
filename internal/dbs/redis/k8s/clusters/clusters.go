@@ -12,9 +12,9 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 	Schema: schema.GroupVersionResource{
 		Group:    "ponglehub.co.uk",
 		Version:  "v1alpha1",
-		Resource: "postgresclusters",
+		Resource: "redisclusters",
 	},
-	Kind:             "PostgresCluster",
+	Kind:             "RedisCluster",
 	FromUnstructured: fromUnstructured,
 }
 
@@ -34,7 +34,7 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 	result := &unstructured.Unstructured{}
 	result.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
-		"kind":       "PostgresCluster",
+		"kind":       "RedisCluster",
 		"metadata": map[string]interface{}{
 			"name":      r.Name,
 			"namespace": r.Namespace,
@@ -84,9 +84,9 @@ func (r Resource) GetResourceVersion() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	if other, ok := obj.(Resource); ok {
-		return r.Comparable == other.Comparable
+	other, ok := obj.(*Resource)
+	if !ok {
+		return false
 	}
-
-	return false
+	return r.Comparable == other.Comparable
 }

@@ -6,17 +6,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type Bucket[T any, PT types.Nameable[T]] struct {
+type Bucket[T types.Nameable] struct {
 	state map[string]T
 }
 
-func NewBucket[T any, PT types.Nameable[T]]() Bucket[T, PT] {
-	return Bucket[T, PT]{
+func NewBucket[T types.Nameable]() Bucket[T] {
+	return Bucket[T]{
 		state: map[string]T{},
 	}
 }
 
-func (b *Bucket[T, PT]) Apply(update k8s_generic.Update[T]) {
+func (b *Bucket[T]) Apply(update k8s_generic.Update[T]) {
 	for _, toRemove := range update.ToRemove {
 		log.Info().Interface("toRemove", toRemove).Msg("Removing")
 		b.Remove(toRemove)
@@ -28,30 +28,28 @@ func (b *Bucket[T, PT]) Apply(update k8s_generic.Update[T]) {
 	}
 }
 
-func (b *Bucket[T, PT]) Add(obj T) {
-	ptr := PT(&obj)
-	key := ptr.GetName() + ":" + ptr.GetNamespace()
+func (b *Bucket[T]) Add(obj T) {
+	key := obj.GetName() + ":" + obj.GetNamespace()
 
 	b.state[key] = obj
 }
 
-func (b *Bucket[T, PT]) Remove(obj T) {
-	ptr := PT(&obj)
-	key := ptr.GetName() + ":" + ptr.GetNamespace()
+func (b *Bucket[T]) Remove(obj T) {
+	key := obj.GetName() + ":" + obj.GetNamespace()
 
 	delete(b.state, key)
 }
 
-func (b *Bucket[T, PT]) Get(name string, namespace string) (T, bool) {
+func (b *Bucket[T]) Get(name string, namespace string) (T, bool) {
 	value, ok := b.state[name+":"+namespace]
 	return value, ok
 }
 
-func (b *Bucket[T, PT]) Clear() {
+func (b *Bucket[T]) Clear() {
 	b.state = map[string]T{}
 }
 
-func (b *Bucket[T, PT]) List() []T {
+func (b *Bucket[T]) List() []T {
 	result := []T{}
 
 	for _, v := range b.state {

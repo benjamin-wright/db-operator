@@ -65,14 +65,16 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 						"containers": []map[string]interface{}{
 							{
 								"name":  "database",
-								"image": "cockroachdb/cockroach:v22.2.8",
-								"command": []string{
-									"cockroach",
-								},
-								"args": []string{
-									"--logtostderr",
-									"start-single-node",
-									"--insecure",
+								"image": "postgres:16.3",
+								"env": []map[string]interface{}{
+									{
+										"name":  "POSTGRES_USER",
+										"value": "postgres",
+									},
+									{
+										"name":  "POSTGRES_PASSWORD",
+										"value": "postgres",
+									},
 								},
 								"resources": map[string]interface{}{
 									"requests": map[string]interface{}{
@@ -86,26 +88,24 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 								"volumeMounts": []map[string]interface{}{
 									{
 										"name":      "datadir",
-										"mountPath": "/cockroach/cockroach-data",
+										"mountPath": "/var/lib/postgresql/data",
 									},
 								},
 								"ports": []map[string]interface{}{
 									{
-										"name":          "http",
-										"protocol":      "TCP",
-										"containerPort": 8080,
-									},
-									{
 										"name":          "grpc",
 										"protocol":      "TCP",
-										"containerPort": 26257,
+										"containerPort": 5432,
 									},
 								},
 								"readinessProbe": map[string]interface{}{
-									"httpGet": map[string]interface{}{
-										"path":   "/health?ready=1",
-										"port":   "http",
-										"scheme": "HTTP",
+									"exec": map[string]interface{}{
+										"command": []string{
+											"/bin/sh",
+											"-c",
+											"-e",
+											"exec pg_isready -U postgres -h 127.0.0.1 -p 5432",
+										},
 									},
 									"initialDelaySeconds": 10,
 									"periodSeconds":       5,

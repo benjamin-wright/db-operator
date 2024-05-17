@@ -3,6 +3,7 @@ package secrets
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/benjamin-wright/db-operator/internal/common"
@@ -19,7 +20,7 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 	},
 	Kind: "Secret",
 	LabelFilters: k8s_generic.Merge(map[string]string{
-		"ponglehub.co.uk/resource-type": "postgrescluster",
+		"ponglehub.co.uk/resource-type": "redis",
 	}, common.LABEL_FILTERS),
 	FromUnstructured: fromUnstructured,
 }
@@ -33,9 +34,7 @@ type Comparable struct {
 	Name      string
 	Namespace string
 	Cluster   Cluster
-	Database  string
-	User      string
-	Password  string
+	Unit      int
 }
 
 type Resource struct {
@@ -44,16 +43,12 @@ type Resource struct {
 	ResourceVersion string
 }
 
-func encode(data string) string {
-	return base64.StdEncoding.EncodeToString([]byte(data))
-}
-
 func (r Resource) GetHost() string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local", r.Cluster.Name, r.Cluster.Namespace)
 }
 
-func (r Resource) GetPort() string {
-	return "26257"
+func encode(data string) string {
+	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
 func (r Resource) ToUnstructured() *unstructured.Unstructured {
@@ -62,19 +57,17 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 			"apiVersion": "v1",
 			"kind":       "Secret",
 			"metadata": map[string]interface{}{
-				"name": r.Name,
+				"name":      r.Name,
+				"namespace": r.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"app":                           r.Name,
-					"ponglehub.co.uk/resource-type": "postgrescluster",
+					"ponglehub.co.uk/resource-type": "redis",
 				}, common.LABEL_FILTERS),
-				"namespace": r.Namespace,
 			},
 			"data": map[string]interface{}{
-				"POSTGRES_HOST":     encode(r.GetHost()),
-				"POSTGRES_PORT":     encode(r.GetPort()),
-				"POSTGRES_USER":     encode(r.User),
-				"POSTGRES_PASSWORD": encode(r.Password),
-				"POSTGRES_NAME":     encode(r.Database),
+				"REDIS_HOST": encode(r.GetHost()),
+				"REDIS_PORT": encode("6379"),
+				"REDIS_UNIT": encode(strconv.FormatInt(int64(r.Unit), 10)),
 			},
 		},
 	}
@@ -91,26 +84,21 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	r.UID = string(obj.GetUID())
 	r.ResourceVersion = obj.GetResourceVersion()
 
-	hostname, err := k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_HOST")
+	hostname, err := k8s_generic.GetEncodedProperty(obj, "data", "REDIS_HOST")
 	if err != nil {
-		return r, fmt.Errorf("failed to get POSTGRES_HOST: %+v", err)
+		return r, fmt.Errorf("failed to get REDIS_HOST: %+v", err)
 	}
 	r.Cluster.Name = strings.Split(hostname, ".")[0]
 	r.Cluster.Namespace = strings.Split(hostname, ".")[1]
 
-	r.User, err = k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_USER")
+	unit, err := k8s_generic.GetEncodedProperty(obj, "data", "REDIS_UNIT")
 	if err != nil {
-		return r, fmt.Errorf("failed to get POSTGRES_USER: %+v", err)
+		return r, fmt.Errorf("failed to get REDIS_UNIT: %+v", err)
 	}
 
-	r.Password, err = k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_PASSWORD")
+	r.Unit, err = strconv.Atoi(unit)
 	if err != nil {
-		return r, fmt.Errorf("failed to get POSTGRES_PASSWORD: %+v", err)
-	}
-
-	r.Database, err = k8s_generic.GetEncodedProperty(obj, "data", "POSTGRES_NAME")
-	if err != nil {
-		return r, fmt.Errorf("failed to get POSTGRES_NAME: %+v", err)
+		return r, fmt.Errorf("failed to parse REDIS_UNIT: %+v", err)
 	}
 
 	return r, nil
@@ -133,9 +121,9 @@ func (r Resource) GetResourceVersion() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	if other, ok := obj.(*Resource); ok {
-		return r.Comparable == other.Comparable
+	other, ok := obj.(*Resource)
+	if !ok {
+		return false
 	}
-
-	return false
+	return r.Comparable == other.Comparable
 }

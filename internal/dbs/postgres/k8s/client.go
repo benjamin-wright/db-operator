@@ -13,7 +13,6 @@ import (
 )
 
 type Client struct {
-	builder      *k8s_generic.Builder
 	clients      *k8s_generic.Client[clients.Resource]
 	clusters     *k8s_generic.Client[clusters.Resource]
 	pvcs         *k8s_generic.Client[pvcs.Resource]
@@ -29,7 +28,6 @@ func New() (*Client, error) {
 	}
 
 	return &Client{
-		builder:      builder,
 		clients:      k8s_generic.NewClient(builder, clients.ClientArgs),
 		clusters:     k8s_generic.NewClient(builder, clusters.ClientArgs),
 		pvcs:         k8s_generic.NewClient(builder, pvcs.ClientArgs),

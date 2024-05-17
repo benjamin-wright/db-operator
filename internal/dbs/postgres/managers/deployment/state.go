@@ -1,7 +1,12 @@
 package deployment
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/pvcs"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/services"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
@@ -9,70 +14,70 @@ import (
 )
 
 type State struct {
-	dbs          bucket.Bucket[k8s.CockroachDB, *k8s.CockroachDB]
-	clients      bucket.Bucket[k8s.CockroachClient, *k8s.CockroachClient]
-	statefulSets bucket.Bucket[k8s.CockroachStatefulSet, *k8s.CockroachStatefulSet]
-	pvcs         bucket.Bucket[k8s.CockroachPVC, *k8s.CockroachPVC]
-	services     bucket.Bucket[k8s.CockroachService, *k8s.CockroachService]
-	secrets      bucket.Bucket[k8s.CockroachSecret, *k8s.CockroachSecret]
+	clusters     bucket.Bucket[clusters.Resource]
+	clients      bucket.Bucket[clients.Resource]
+	statefulSets bucket.Bucket[stateful_sets.Resource]
+	pvcs         bucket.Bucket[pvcs.Resource]
+	services     bucket.Bucket[services.Resource]
+	secrets      bucket.Bucket[secrets.Resource]
 }
 
 func (s *State) Apply(update interface{}) {
 	switch u := update.(type) {
-	case k8s_generic.Update[k8s.CockroachDB]:
-		s.dbs.Apply(u)
-	case k8s_generic.Update[k8s.CockroachClient]:
+	case k8s_generic.Update[clusters.Resource]:
+		s.clusters.Apply(u)
+	case k8s_generic.Update[clients.Resource]:
 		s.clients.Apply(u)
-	case k8s_generic.Update[k8s.CockroachStatefulSet]:
+	case k8s_generic.Update[stateful_sets.Resource]:
 		s.statefulSets.Apply(u)
-	case k8s_generic.Update[k8s.CockroachPVC]:
+	case k8s_generic.Update[pvcs.Resource]:
 		s.pvcs.Apply(u)
-	case k8s_generic.Update[k8s.CockroachService]:
+	case k8s_generic.Update[services.Resource]:
 		s.services.Apply(u)
-	case k8s_generic.Update[k8s.CockroachSecret]:
+	case k8s_generic.Update[secrets.Resource]:
 		s.secrets.Apply(u)
 	default:
 		log.Logger.Error().Interface("update", u).Msg("wat dis? Unknown state update")
 	}
 }
 
-func (s *State) GetStatefulSetDemand() state.Demand[k8s.CockroachDB, k8s.CockroachStatefulSet] {
+func (s *State) GetStatefulSetDemand() state.Demand[clusters.Resource, stateful_sets.Resource] {
 	return state.GetStorageBound(
-		s.dbs,
+		s.clusters,
 		s.statefulSets,
-		func(db k8s.CockroachDB) k8s.CockroachStatefulSet {
-			return k8s.CockroachStatefulSet{
-				CockroachStatefulSetComparable: k8s.CockroachStatefulSetComparable{
-					Name:      db.Name,
-					Namespace: db.Namespace,
-					Storage:   db.Storage,
+		func(cluster clusters.Resource) stateful_sets.Resource {
+			return stateful_sets.Resource{
+				Comparable: stateful_sets.Comparable{
+					Name:      cluster.Name,
+					Namespace: cluster.Namespace,
+					Storage:   cluster.Storage,
 				},
 			}
 		},
 	)
 }
 
-func (s *State) GetServiceDemand() state.Demand[k8s.CockroachDB, k8s.CockroachService] {
+func (s *State) GetServiceDemand() state.Demand[clusters.Resource, services.Resource] {
 	return state.GetOneForOne(
-		s.dbs,
+		s.clusters,
 		s.services,
-		func(db k8s.CockroachDB) k8s.CockroachService {
-			return k8s.CockroachService{
-				CockroachServiceComparable: k8s.CockroachServiceComparable{
-					Name:      db.Name,
-					Namespace: db.Namespace,
+		func(cluster clusters.Resource) services.Resource {
+			return services.Resource{
+				Comparable: services.Comparable{
+					Name:      cluster.Name,
+					Namespace: cluster.Namespace,
 				},
 			}
 		},
 	)
 }
 
-func (s *State) GetPVCDemand() []k8s.CockroachPVC {
+func (s *State) GetPVCDemand() []pvcs.Resource {
 	return state.GetOrphaned(
 		s.statefulSets,
 		s.pvcs,
-		func(ss k8s.CockroachStatefulSet, pvc k8s.CockroachPVC) bool {
-			return ss.Name == pvc.Database
+		func(ss stateful_sets.Resource, pvc pvcs.Resource) bool {
+			return ss.Name == pvc.Cluster
 		},
 	)
 }

@@ -6,6 +6,12 @@ import (
 	"time"
 
 	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/pvcs"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/services"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/stateful_sets"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/rs/zerolog/log"
@@ -34,7 +40,7 @@ func New(
 	updates := make(chan any)
 
 	for _, f := range []WatchFunc{
-		client.DBs().Watch,
+		client.Clusters().Watch,
 		client.Clients().Watch,
 		client.StatefulSets().Watch,
 		client.PVCs().Watch,
@@ -48,12 +54,12 @@ func New(
 	}
 
 	state := State{
-		dbs:          bucket.NewBucket[k8s.RedisDB](),
-		clients:      bucket.NewBucket[k8s.RedisClient](),
-		statefulSets: bucket.NewBucket[k8s.RedisStatefulSet](),
-		pvcs:         bucket.NewBucket[k8s.RedisPVC](),
-		services:     bucket.NewBucket[k8s.RedisService](),
-		secrets:      bucket.NewBucket[k8s.RedisSecret](),
+		clusters:     bucket.NewBucket[clusters.Resource](),
+		clients:      bucket.NewBucket[clients.Resource](),
+		statefulSets: bucket.NewBucket[stateful_sets.Resource](),
+		pvcs:         bucket.NewBucket[pvcs.Resource](),
+		services:     bucket.NewBucket[services.Resource](),
+		secrets:      bucket.NewBucket[secrets.Resource](),
 	}
 
 	return &Manager{
@@ -135,9 +141,9 @@ func (m *Manager) processRedisDBs() {
 		err := m.client.StatefulSets().Create(m.ctx, db.Target)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create redis stateful set")
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
 		} else {
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
 		}
 	}
 

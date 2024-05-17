@@ -1,8 +1,7 @@
-package clusters
+package services
 
 import (
-	"fmt"
-
+	"github.com/benjamin-wright/db-operator/internal/common"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -10,18 +9,20 @@ import (
 
 var ClientArgs = k8s_generic.ClientArgs[Resource]{
 	Schema: schema.GroupVersionResource{
-		Group:    "ponglehub.co.uk",
-		Version:  "v1alpha1",
-		Resource: "postgresclusters",
+		Group:    "",
+		Version:  "v1",
+		Resource: "services",
 	},
-	Kind:             "PostgresCluster",
+	Kind: "Service",
+	LabelFilters: k8s_generic.Merge(map[string]string{
+		"ponglehub.co.uk/resource-type": "redis",
+	}, common.LABEL_FILTERS),
 	FromUnstructured: fromUnstructured,
 }
 
 type Comparable struct {
 	Name      string
 	Namespace string
-	Storage   string
 }
 
 type Resource struct {
@@ -31,34 +32,44 @@ type Resource struct {
 }
 
 func (r Resource) ToUnstructured() *unstructured.Unstructured {
-	result := &unstructured.Unstructured{}
-	result.SetUnstructuredContent(map[string]interface{}{
-		"apiVersion": "ponglehub.co.uk/v1alpha1",
-		"kind":       "PostgresCluster",
-		"metadata": map[string]interface{}{
-			"name":      r.Name,
-			"namespace": r.Namespace,
+	statefulset := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Service",
+			"metadata": map[string]interface{}{
+				"name":      r.Name,
+				"namespace": r.Namespace,
+				"labels": k8s_generic.Merge(map[string]string{
+					"app":                           r.Name,
+					"ponglehub.co.uk/resource-type": "redis",
+				}, common.LABEL_FILTERS),
+			},
+			"spec": map[string]interface{}{
+				"ports": []map[string]interface{}{
+					{
+						"name":       "tcp",
+						"port":       6379,
+						"protocol":   "TCP",
+						"targetPort": "tcp",
+					},
+				},
+				"selector": map[string]interface{}{
+					"app": r.Name,
+				},
+			},
 		},
-		"spec": map[string]interface{}{
-			"storage": r.Storage,
-		},
-	})
+	}
 
-	return result
+	return statefulset
 }
 
 func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
-	var err error
 	r := Resource{}
 
 	r.Name = obj.GetName()
 	r.Namespace = obj.GetNamespace()
 	r.UID = string(obj.GetUID())
 	r.ResourceVersion = obj.GetResourceVersion()
-	r.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "storage")
-	if err != nil {
-		return r, fmt.Errorf("failed to get storage: %+v", err)
-	}
 
 	return r, nil
 }
@@ -71,10 +82,6 @@ func (r Resource) GetNamespace() string {
 	return r.Namespace
 }
 
-func (r Resource) GetStorage() string {
-	return r.Storage
-}
-
 func (r Resource) GetUID() string {
 	return r.UID
 }
@@ -84,9 +91,9 @@ func (r Resource) GetResourceVersion() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	if other, ok := obj.(Resource); ok {
-		return r.Comparable == other.Comparable
+	other, ok := obj.(*Resource)
+	if !ok {
+		return false
 	}
-
-	return false
+	return r.Comparable == other.Comparable
 }

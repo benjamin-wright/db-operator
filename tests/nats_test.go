@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clusters"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,21 +23,21 @@ func TestNatsIntegration(t *testing.T) {
 		t.FailNow()
 	}
 
-	mustPass(t, client.DBs().DeleteAll(context.Background(), namespace))
+	mustPass(t, client.Clusters().DeleteAll(context.Background(), namespace))
 	mustPass(t, client.Clients().DeleteAll(context.Background(), namespace))
 
-	mustPass(t, client.DBs().Create(context.Background(), k8s.NatsDB{
-		NatsDBComparable: k8s.NatsDBComparable{
+	mustPass(t, client.Clusters().Create(context.Background(), clusters.Resource{
+		Comparable: clusters.Comparable{
 			Name:      "nats-db",
 			Namespace: namespace,
 		},
 	}))
 
-	mustPass(t, client.Clients().Create(context.Background(), k8s.NatsClient{
-		NatsClientComparable: k8s.NatsClientComparable{
+	mustPass(t, client.Clients().Create(context.Background(), clients.Resource{
+		Comparable: clients.Comparable{
 			Name:      "my-secret",
 			Namespace: namespace,
-			DBRef: k8s.DBRef{
+			Cluster: clients.Cluster{
 				Name:      "nats-db",
 				Namespace: namespace,
 			},

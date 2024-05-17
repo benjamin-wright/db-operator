@@ -15,7 +15,7 @@ spec:
             spec:
               type: object
               properties:
-                dbRef:
+                cluster:
                   type: object
                   properties:
                     name:
@@ -23,13 +23,13 @@ spec:
                     namespace:
                       type: string
                   required: [ name, namespace ]
-                cluster:
+                database:
                   type: string
                 username:
                   type: string
                 secret:
                   type: string
-              required: [ dbRef, database, username, secret ]
+              required: [ cluster, database, username, secret ]
             status:
               type: object
               properties:

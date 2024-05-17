@@ -1,4 +1,4 @@
-package k8s
+package deployments
 
 import (
 	"github.com/benjamin-wright/db-operator/internal/common"
@@ -7,26 +7,39 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-type NatsDeploymentComparable struct {
+var ClientArgs = k8s_generic.ClientArgs[Resource]{
+	Schema: schema.GroupVersionResource{
+		Group:    "apps",
+		Version:  "v1",
+		Resource: "deployments",
+	},
+	Kind: "Deployment",
+	LabelFilters: k8s_generic.Merge(map[string]string{
+		"ponglehub.co.uk/resource-type": "nats",
+	}, common.LABEL_FILTERS),
+	FromUnstructured: fromUnstructured,
+}
+
+type Comparable struct {
 	Name      string
 	Namespace string
 	Ready     bool
 }
 
-type NatsDeployment struct {
-	NatsDeploymentComparable
+type Resource struct {
+	Comparable
 	UID             string
 	ResourceVersion string
 }
 
-func (d NatsDeployment) ToUnstructured() *unstructured.Unstructured {
+func (r Resource) ToUnstructured() *unstructured.Unstructured {
 	deployment := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]interface{}{
-				"name":      d.Name,
-				"namespace": d.Namespace,
+				"name":      r.Name,
+				"namespace": r.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
 					"ponglehub.co.uk/resource-type": "nats",
 				}, common.LABEL_FILTERS),
@@ -35,13 +48,13 @@ func (d NatsDeployment) ToUnstructured() *unstructured.Unstructured {
 				"replicas": 1,
 				"selector": map[string]interface{}{
 					"matchLabels": map[string]interface{}{
-						"app": d.Name,
+						"app": r.Name,
 					},
 				},
 				"template": map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"labels": map[string]interface{}{
-							"app": d.Name,
+							"app": r.Name,
 						},
 					},
 
@@ -96,14 +109,14 @@ func (d NatsDeployment) ToUnstructured() *unstructured.Unstructured {
 	return deployment
 }
 
-func natsDeploymentFromUnstructured(obj *unstructured.Unstructured) (NatsDeployment, error) {
+func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	var err error
-	d := NatsDeployment{}
+	r := Resource{}
 
-	d.Name = obj.GetName()
-	d.Namespace = obj.GetNamespace()
-	d.UID = string(obj.GetUID())
-	d.ResourceVersion = obj.GetResourceVersion()
+	r.Name = obj.GetName()
+	r.Namespace = obj.GetNamespace()
+	r.UID = string(obj.GetUID())
+	r.ResourceVersion = obj.GetResourceVersion()
 
 	replicas, err := k8s_generic.GetProperty[int64](obj, "status", "replicas")
 	if err != nil {
@@ -115,50 +128,34 @@ func natsDeploymentFromUnstructured(obj *unstructured.Unstructured) (NatsDeploym
 		readyReplicas = 0
 	}
 
-	d.Ready = replicas > 0 && replicas == readyReplicas
+	r.Ready = replicas > 0 && replicas == readyReplicas
 
-	return d, nil
+	return r, nil
 }
 
-func (d NatsDeployment) GetName() string {
-	return d.Name
+func (r Resource) GetName() string {
+	return r.Name
 }
 
-func (d NatsDeployment) GetNamespace() string {
-	return d.Namespace
+func (r Resource) GetNamespace() string {
+	return r.Namespace
 }
 
-func (d NatsDeployment) GetUID() string {
-	return d.UID
+func (r Resource) GetUID() string {
+	return r.UID
 }
 
-func (d NatsDeployment) GetResourceVersion() string {
-	return d.ResourceVersion
+func (r Resource) GetResourceVersion() string {
+	return r.ResourceVersion
 }
 
-func (d NatsDeployment) IsReady() bool {
-	return d.Ready
+func (r Resource) IsReady() bool {
+	return r.Ready
 }
 
-func (d NatsDeployment) Equal(obj k8s_generic.Resource) bool {
-	if natsDeployment, ok := obj.(*NatsDeployment); ok {
-		return d.NatsDeploymentComparable == natsDeployment.NatsDeploymentComparable
+func (r Resource) Equal(obj k8s_generic.Resource) bool {
+	if other, ok := obj.(*Resource); ok {
+		return r.Comparable == other.Comparable
 	}
 	return false
-}
-
-func (c *Client) Deployments() *k8s_generic.Client[NatsDeployment] {
-	return k8s_generic.NewClient(
-		c.builder,
-		schema.GroupVersionResource{
-			Group:    "apps",
-			Version:  "v1",
-			Resource: "deployments",
-		},
-		"Deployment",
-		k8s_generic.Merge(map[string]string{
-			"ponglehub.co.uk/resource-type": "nats",
-		}, common.LABEL_FILTERS),
-		natsDeploymentFromUnstructured,
-	)
 }

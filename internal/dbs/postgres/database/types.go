@@ -2,61 +2,62 @@ package database
 
 import "strconv"
 
-type DBRef struct {
+type Cluster struct {
 	Name      string
 	Namespace string
 }
 
 type Database struct {
-	Name string
-	DB   DBRef
+	Name    string
+	Cluster Cluster
 }
 
-func (d *Database) GetName() string {
+func (d Database) GetName() string {
 	return d.Name
 }
 
-func (d *Database) GetNamespace() string {
-	return d.DB.Namespace + ":" + d.DB.Name
+func (d Database) GetNamespace() string {
+	return d.Cluster.Namespace + ":" + d.Cluster.Name
 }
 
 type User struct {
-	Name string
-	DB   DBRef
+	Name     string
+	Password string
+	Cluster  Cluster
 }
 
-func (u *User) GetName() string {
+func (u User) GetName() string {
 	return u.Name
 }
 
-func (u *User) GetNamespace() string {
-	return u.DB.Namespace + ":" + u.DB.Name
+func (u User) GetNamespace() string {
+	return u.Cluster.Namespace + ":" + u.Cluster.Name
 }
 
 type Permission struct {
 	User     string
 	Database string
-	DB       DBRef
+	Cluster  Cluster
 }
 
-func (u *Permission) GetName() string {
+func (u Permission) GetName() string {
 	return u.Database + u.User
 }
 
-func (u *Permission) GetNamespace() string {
-	return u.DB.Namespace + ":" + u.DB.Name
+func (u Permission) GetNamespace() string {
+	return u.Cluster.Namespace + ":" + u.Cluster.Name
 }
 
 type Migration struct {
-	DB       DBRef
+	Cluster  Cluster
 	Database string
 	Index    int64
 }
 
-func (m *Migration) GetName() string {
+func (m Migration) GetName() string {
 	return m.Database + strconv.FormatInt(m.Index, 10)
 }
 
-func (m *Migration) GetNamespace() string {
-	return m.DB.Namespace + ":" + m.DB.Name
+func (m Migration) GetNamespace() string {
+	return m.Cluster.Namespace + ":" + m.Cluster.Name
 }

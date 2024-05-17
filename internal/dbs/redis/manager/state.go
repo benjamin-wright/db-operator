@@ -1,7 +1,12 @@
 package manager
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/pvcs"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/services"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/stateful_sets"
 	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
@@ -9,85 +14,88 @@ import (
 )
 
 type State struct {
-	dbs          bucket.Bucket[k8s.RedisDB, *k8s.RedisDB]
-	clients      bucket.Bucket[k8s.RedisClient, *k8s.RedisClient]
-	statefulSets bucket.Bucket[k8s.RedisStatefulSet, *k8s.RedisStatefulSet]
-	pvcs         bucket.Bucket[k8s.RedisPVC, *k8s.RedisPVC]
-	services     bucket.Bucket[k8s.RedisService, *k8s.RedisService]
-	secrets      bucket.Bucket[k8s.RedisSecret, *k8s.RedisSecret]
+	clusters     bucket.Bucket[clusters.Resource]
+	clients      bucket.Bucket[clients.Resource]
+	statefulSets bucket.Bucket[stateful_sets.Resource]
+	pvcs         bucket.Bucket[pvcs.Resource]
+	services     bucket.Bucket[services.Resource]
+	secrets      bucket.Bucket[secrets.Resource]
 }
 
 func (s *State) Apply(update interface{}) {
 	switch u := update.(type) {
-	case k8s_generic.Update[k8s.RedisDB]:
-		s.dbs.Apply(u)
-	case k8s_generic.Update[k8s.RedisClient]:
+	case k8s_generic.Update[clusters.Resource]:
+		s.clusters.Apply(u)
+	case k8s_generic.Update[clients.Resource]:
 		s.clients.Apply(u)
-	case k8s_generic.Update[k8s.RedisStatefulSet]:
+	case k8s_generic.Update[stateful_sets.Resource]:
 		s.statefulSets.Apply(u)
-	case k8s_generic.Update[k8s.RedisPVC]:
+	case k8s_generic.Update[pvcs.Resource]:
 		s.pvcs.Apply(u)
-	case k8s_generic.Update[k8s.RedisService]:
+	case k8s_generic.Update[services.Resource]:
 		s.services.Apply(u)
-	case k8s_generic.Update[k8s.RedisSecret]:
+	case k8s_generic.Update[secrets.Resource]:
 		s.secrets.Apply(u)
 	default:
 		log.Error().Interface("update", u).Msg("wat dis? Unknown state update")
 	}
 }
 
-func (s *State) GetStatefulSetDemand() state.Demand[k8s.RedisDB, k8s.RedisStatefulSet] {
+func (s *State) GetStatefulSetDemand() state.Demand[clusters.Resource, stateful_sets.Resource] {
 	return state.GetOneForOne(
-		s.dbs,
+		s.clusters,
 		s.statefulSets,
-		func(db k8s.RedisDB) k8s.RedisStatefulSet {
-			return k8s.RedisStatefulSet{
-				RedisStatefulSetComparable: k8s.RedisStatefulSetComparable{
-					Name:      db.Name,
-					Namespace: db.Namespace,
-					Storage:   db.Storage,
+		func(c clusters.Resource) stateful_sets.Resource {
+			return stateful_sets.Resource{
+				Comparable: stateful_sets.Comparable{
+					Name:      c.Name,
+					Namespace: c.Namespace,
+					Storage:   c.Storage,
 				},
 			}
 		},
 	)
 }
 
-func (s *State) GetServiceDemand() state.Demand[k8s.RedisDB, k8s.RedisService] {
+func (s *State) GetServiceDemand() state.Demand[clusters.Resource, services.Resource] {
 	return state.GetOneForOne(
-		s.dbs,
+		s.clusters,
 		s.services,
-		func(db k8s.RedisDB) k8s.RedisService {
-			return k8s.RedisService{
-				RedisServiceComparable: k8s.RedisServiceComparable{
-					Name:      db.Name,
-					Namespace: db.Namespace,
+		func(c clusters.Resource) services.Resource {
+			return services.Resource{
+				Comparable: services.Comparable{
+					Name:      c.Name,
+					Namespace: c.Namespace,
 				},
 			}
 		},
 	)
 }
 
-func (s *State) GetPVCDemand() []k8s.RedisPVC {
+func (s *State) GetPVCDemand() []pvcs.Resource {
 	return state.GetOrphaned(
 		s.statefulSets,
 		s.pvcs,
-		func(ss k8s.RedisStatefulSet, pvc k8s.RedisPVC) bool {
+		func(ss stateful_sets.Resource, pvc pvcs.Resource) bool {
 			return ss.Name == pvc.Database
 		},
 	)
 }
 
-func (s *State) GetSecretsDemand() state.Demand[k8s.RedisClient, k8s.RedisSecret] {
+func (s *State) GetSecretsDemand() state.Demand[clients.Resource, secrets.Resource] {
 	return state.GetServiceBound(
 		s.clients,
 		s.secrets,
 		s.statefulSets,
-		func(client k8s.RedisClient) k8s.RedisSecret {
-			return k8s.RedisSecret{
-				RedisSecretComparable: k8s.RedisSecretComparable{
+		func(client clients.Resource) secrets.Resource {
+			return secrets.Resource{
+				Comparable: secrets.Comparable{
 					Name:      client.Secret,
 					Namespace: client.Namespace,
-					DB:        client.DBRef,
+					Cluster: secrets.Cluster{
+						Name:      client.Cluster.Name,
+						Namespace: client.Cluster.Namespace,
+					},
 				},
 			}
 		},
