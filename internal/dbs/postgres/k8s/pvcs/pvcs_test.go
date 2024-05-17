@@ -1,4 +1,4 @@
-package k8s
+package pvcs
 
 import (
 	"testing"
@@ -30,7 +30,7 @@ func TestCockroachPVCFromUnstructured(t *testing.T) {
 		},
 	}
 
-	cockroachPVC, err := cockroachPVCFromUnstructured(pvc)
+	cockroachPVC, err := fromUnstructured(pvc)
 	assert.NoError(t, err)
 
 	assert.Equal(t, "test-name", cockroachPVC.Name)

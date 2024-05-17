@@ -1,4 +1,4 @@
-package k8s
+package secrets
 
 import (
 	"encoding/base64"
@@ -22,8 +22,8 @@ func decode(t *testing.T, data interface{}) string {
 }
 
 func TestCockroachSecretFromUnstructured(t *testing.T) {
-	secret := &CockroachSecret{
-		CockroachSecretComparable: CockroachSecretComparable{
+	secret := &Resource{
+		Comparable: Comparable{
 			Name:      "test-name",
 			Namespace: "test-namespace",
 			DB: DBRef{

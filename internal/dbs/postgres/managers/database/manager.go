@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/database"
-	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/database"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
@@ -39,7 +42,6 @@ func New(
 		client.Clients().Watch,
 		client.StatefulSets().Watch,
 		client.Secrets().Watch,
-		client.Migrations().Watch,
 	} {
 		err := f(ctx, cancel, updates)
 		if err != nil {
@@ -48,10 +50,9 @@ func New(
 	}
 
 	state := State{
-		clients:      bucket.NewBucket[k8s.CockroachClient](),
-		statefulSets: bucket.NewBucket[k8s.CockroachStatefulSet](),
-		secrets:      bucket.NewBucket[k8s.CockroachSecret](),
-		migrations:   bucket.NewBucket[k8s.CockroachMigration](),
+		clients:      bucket.NewBucket[clients.Resource](),
+		statefulSets: bucket.NewBucket[stateful_sets.Resource](),
+		secrets:      bucket.NewBucket[secrets.Resource](),
 		databases:    bucket.NewBucket[database.Database](),
 		users:        bucket.NewBucket[database.User](),
 		permissions:  bucket.NewBucket[database.Permission](),

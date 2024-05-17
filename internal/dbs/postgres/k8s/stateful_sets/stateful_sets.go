@@ -1,4 +1,4 @@
-package k8s
+package stateful_sets
 
 import (
 	"fmt"
@@ -9,42 +9,55 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-type CockroachStatefulSetComparable struct {
+var ClientArgs = k8s_generic.ClientArgs[Resource]{
+	Schema: schema.GroupVersionResource{
+		Group:    "apps",
+		Version:  "v1",
+		Resource: "statefulsets",
+	},
+	Kind: "StatefulSet",
+	LabelFilters: k8s_generic.Merge(map[string]string{
+		"ponglehub.co.uk/resource-type": "postgrescluster",
+	}, common.LABEL_FILTERS),
+	FromUnstructured: fromUnstructured,
+}
+
+type Comparable struct {
 	Name      string
 	Namespace string
 	Storage   string
 	Ready     bool
 }
 
-type CockroachStatefulSet struct {
-	CockroachStatefulSetComparable
+type Resource struct {
+	Comparable
 	UID             string
 	ResourceVersion string
 }
 
-func (s CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
+func (r Resource) ToUnstructured() *unstructured.Unstructured {
 	statefulset := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apps/v1",
 			"kind":       "StatefulSet",
 			"metadata": map[string]interface{}{
-				"name":      s.Name,
-				"namespace": s.Namespace,
+				"name":      r.Name,
+				"namespace": r.Namespace,
 				"labels": k8s_generic.Merge(map[string]string{
-					"ponglehub.co.uk/resource-type": "cockroachdb",
+					"ponglehub.co.uk/resource-type": "postgrescluster",
 				}, common.LABEL_FILTERS),
 			},
 			"spec": map[string]interface{}{
 				"replicas": 1,
 				"selector": map[string]interface{}{
 					"matchLabels": map[string]interface{}{
-						"app": s.Name,
+						"app": r.Name,
 					},
 				},
 				"template": map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"labels": map[string]interface{}{
-							"app": s.Name,
+							"app": r.Name,
 						},
 					},
 
@@ -115,7 +128,7 @@ func (s CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
 						"metadata": map[string]interface{}{
 							"name": "datadir",
 							"labels": k8s_generic.Merge(map[string]string{
-								"ponglehub.co.uk/resource-type": "cockroachdb",
+								"ponglehub.co.uk/resource-type": "postgrescluster",
 							}, common.LABEL_FILTERS),
 						},
 						"spec": map[string]interface{}{
@@ -124,7 +137,7 @@ func (s CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
 							},
 							"resources": map[string]interface{}{
 								"requests": map[string]interface{}{
-									"storage": s.Storage,
+									"storage": r.Storage,
 								},
 							},
 						},
@@ -137,18 +150,18 @@ func (s CockroachStatefulSet) ToUnstructured() *unstructured.Unstructured {
 	return statefulset
 }
 
-func cockroachStatefulSetFromUnstructured(obj *unstructured.Unstructured) (CockroachStatefulSet, error) {
+func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	var err error
-	s := CockroachStatefulSet{}
+	r := Resource{}
 
-	s.Name = obj.GetName()
-	s.Namespace = obj.GetNamespace()
-	s.UID = string(obj.GetUID())
-	s.ResourceVersion = obj.GetResourceVersion()
+	r.Name = obj.GetName()
+	r.Namespace = obj.GetNamespace()
+	r.UID = string(obj.GetUID())
+	r.ResourceVersion = obj.GetResourceVersion()
 
-	s.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "volumeClaimTemplates", "0", "spec", "resources", "requests", "storage")
+	r.Storage, err = k8s_generic.GetProperty[string](obj, "spec", "volumeClaimTemplates", "0", "spec", "resources", "requests", "storage")
 	if err != nil {
-		return s, fmt.Errorf("failed to get storage: %+v", err)
+		return r, fmt.Errorf("failed to get storage: %+v", err)
 	}
 
 	replicas, err := k8s_generic.GetProperty[int64](obj, "status", "replicas")
@@ -161,55 +174,39 @@ func cockroachStatefulSetFromUnstructured(obj *unstructured.Unstructured) (Cockr
 		readyReplicas = 0
 	}
 
-	s.Ready = replicas > 0 && replicas == readyReplicas
+	r.Ready = replicas > 0 && replicas == readyReplicas
 
-	return s, nil
+	return r, nil
 }
 
-func (s CockroachStatefulSet) GetName() string {
-	return s.Name
+func (r Resource) GetName() string {
+	return r.Name
 }
 
-func (s CockroachStatefulSet) GetNamespace() string {
-	return s.Namespace
+func (r Resource) GetNamespace() string {
+	return r.Namespace
 }
 
-func (s CockroachStatefulSet) GetUID() string {
-	return s.UID
+func (r Resource) GetUID() string {
+	return r.UID
 }
 
-func (s CockroachStatefulSet) GetResourceVersion() string {
-	return s.ResourceVersion
+func (r Resource) GetResourceVersion() string {
+	return r.ResourceVersion
 }
 
-func (s CockroachStatefulSet) GetStorage() string {
-	return s.Storage
+func (r Resource) GetStorage() string {
+	return r.Storage
 }
 
-func (s CockroachStatefulSet) IsReady() bool {
-	return s.Ready
+func (r Resource) IsReady() bool {
+	return r.Ready
 }
 
-func (s CockroachStatefulSet) Equal(obj k8s_generic.Resource) bool {
-	other, ok := obj.(CockroachStatefulSet)
+func (r Resource) Equal(obj k8s_generic.Resource) bool {
+	other, ok := obj.(Resource)
 	if !ok {
 		return false
 	}
-	return s.CockroachStatefulSetComparable == other.CockroachStatefulSetComparable
-}
-
-func (c *Client) StatefulSets() *k8s_generic.Client[CockroachStatefulSet] {
-	return k8s_generic.NewClient(
-		c.builder,
-		schema.GroupVersionResource{
-			Group:    "apps",
-			Version:  "v1",
-			Resource: "statefulsets",
-		},
-		"StatefulSet",
-		k8s_generic.Merge(map[string]string{
-			"ponglehub.co.uk/resource-type": "cockroachdb",
-		}, common.LABEL_FILTERS),
-		cockroachStatefulSetFromUnstructured,
-	)
+	return r.Comparable == other.Comparable
 }

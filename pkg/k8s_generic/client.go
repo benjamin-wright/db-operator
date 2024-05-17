@@ -37,14 +37,21 @@ type Client[T Resource] struct {
 	fromUnstructured FromUnstructured[T]
 }
 
-func NewClient[T Resource](b *Builder, resourceSchema schema.GroupVersionResource, kind string, labelFilters map[string]string, fromUnstructured FromUnstructured[T]) *Client[T] {
+type ClientArgs[T Resource] struct {
+	Schema           schema.GroupVersionResource
+	Kind             string
+	LabelFilters     map[string]string
+	FromUnstructured FromUnstructured[T]
+}
+
+func NewClient[T Resource](b *Builder, args ClientArgs[T]) *Client[T] {
 	return &Client[T]{
-		schema:           resourceSchema,
+		schema:           args.Schema,
 		client:           b.dynClient,
 		restClient:       b.restClient,
-		labelFilters:     labelFilters,
-		kind:             kind,
-		fromUnstructured: fromUnstructured,
+		labelFilters:     args.LabelFilters,
+		kind:             args.Kind,
+		fromUnstructured: args.FromUnstructured,
 	}
 }
 
