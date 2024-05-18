@@ -33,7 +33,7 @@ func New(
 ) (*Manager, error) {
 	client, err := k8s.New()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach client: %+v", err)
+		return nil, fmt.Errorf("failed to create postgres client: %+v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -22,7 +22,7 @@ func New(database string, namespace string) (*Client, error) {
 
 	conn, err := postgres.NewAdminConn(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to cockroach db at %s: %+v", database, err)
+		return nil, fmt.Errorf("failed to connect to postgres db at %s: %+v", database, err)
 	}
 
 	return &Client{

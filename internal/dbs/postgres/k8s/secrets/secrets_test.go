@@ -21,7 +21,7 @@ func decode(t *testing.T, data interface{}) string {
 	return string(decoded)
 }
 
-func TestCockroachSecretFromUnstructured(t *testing.T) {
+func TestPostgresSecretFromUnstructured(t *testing.T) {
 	secret := &Resource{
 		Comparable: Comparable{
 			Name:      "test-name",

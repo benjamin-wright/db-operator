@@ -1,4 +1,4 @@
-package cockroach
+package postgres
 
 import (
 	"context"
@@ -21,7 +21,7 @@ func Run(name string, port int64) func() {
 	// Try to remove any existing containers
 	exec.Command("docker", "stop", name).Run()
 
-	image := "cockroachdb/cockroach:v22.2.8"
+	image := "postgres:16.3"
 	args := "--logtostderr start-single-node --insecure --listen-addr 0.0.0.0:" + strconv.FormatInt(port, 10)
 
 	cmdString := fmt.Sprintf(
@@ -31,13 +31,13 @@ func Run(name string, port int64) func() {
 
 	cmd := exec.Command("docker", strings.Split(cmdString, " ")...)
 	if err := cmd.Run(); err != nil {
-		log.Fatal().Err(err).Msg("Failed to start cockroach container")
+		log.Fatal().Err(err).Msg("Failed to start postgres container")
 	}
 
 	return func() {
 		cmd := exec.Command("docker", "stop", name)
 		if err := cmd.Run(); err != nil {
-			log.Fatal().Err(err).Msg("Failed to stop cockroach container")
+			log.Fatal().Err(err).Msg("Failed to stop postgres container")
 		}
 	}
 }

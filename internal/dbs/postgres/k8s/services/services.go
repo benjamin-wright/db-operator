@@ -91,9 +91,9 @@ func (r Resource) GetResourceVersion() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	cockroachService, ok := obj.(*Resource)
+	other, ok := obj.(*Resource)
 	if !ok {
 		return false
 	}
-	return r.Comparable == cockroachService.Comparable
+	return r.Comparable == other.Comparable
 }

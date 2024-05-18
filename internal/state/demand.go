@@ -43,13 +43,13 @@ func GetOneForOne[
 func GetOrphaned[
 	T types.Nameable,
 	U types.Nameable,
-](current bucket.Bucket[T], existing bucket.Bucket[U], equals func(T, U) bool) []U {
+](demand bucket.Bucket[T], existing bucket.Bucket[U], equals func(T, U) bool) []U {
 	toRemove := []U{}
 
 	for _, obj := range existing.List() {
 		missing := true
 
-		for _, ref := range current.List() {
+		for _, ref := range demand.List() {
 			if equals(ref, obj) {
 				missing = false
 				break
@@ -68,14 +68,14 @@ func GetStorageBound[
 	T types.HasStorage,
 	U types.HasStorage,
 ](
-	current bucket.Bucket[T],
+	demand bucket.Bucket[T],
 	existing bucket.Bucket[U],
 	transform func(T) U,
 ) Demand[T, U] {
 	toAdd := []DemandTarget[T, U]{}
 	toRemove := []DemandTarget[T, U]{}
 
-	for _, db := range current.List() {
+	for _, db := range demand.List() {
 		if ss, ok := existing.Get(db.GetName(), db.GetNamespace()); !ok {
 			toAdd = append(toAdd, DemandTarget[T, U]{Parent: db, Target: transform(db)})
 		} else {
@@ -87,7 +87,7 @@ func GetStorageBound[
 	}
 
 	for _, db := range existing.List() {
-		if _, ok := current.Get(db.GetName(), db.GetNamespace()); !ok {
+		if _, ok := demand.Get(db.GetName(), db.GetNamespace()); !ok {
 			toRemove = append(toRemove, DemandTarget[T, U]{Target: db})
 		}
 	}
@@ -99,7 +99,7 @@ func GetStorageBound[
 }
 
 func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
-	current bucket.Bucket[T],
+	demand bucket.Bucket[T],
 	existing bucket.Bucket[U],
 	servers bucket.Bucket[V],
 	transform func(T) U,
@@ -111,7 +111,7 @@ func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
 
 	seen := bucket.NewBucket[U]()
 
-	for _, client := range current.List() {
+	for _, client := range demand.List() {
 		ss, hasSS := servers.Get(client.GetTarget(), client.GetTargetNamespace())
 
 		if !hasSS || !ss.IsReady() {

@@ -10,6 +10,7 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
+	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
@@ -97,7 +98,7 @@ func (m *Manager) refresh() {
 		log.Info().Msg("Updating postgres database state")
 		m.refreshDatabaseState()
 		log.Info().Msg("Processing postgres databases started")
-		m.processCockroachClients()
+		m.processPostgresClients()
 		log.Info().Msg("Processing postgres databases finished")
 	}
 }
@@ -167,11 +168,59 @@ func (m *Manager) refreshDatabaseState() {
 	}
 }
 
-func (m *Manager) processCockroachClients() {
+func isUserSecret(user database.User, secret secrets.Resource) bool {
+	return user.Cluster.Name == secret.Cluster.Name && user.Cluster.Namespace == secret.Cluster.Namespace && user.Name == secret.User
+}
+
+func setPasswords(
+	secretsDemand *state.Demand[clients.Resource, secrets.Resource],
+	userDemand *state.Demand[clients.Resource, database.User],
+) {
+	secretIds := []int{}
+	userIds := []int{}
+	for secretId, secret := range secretsDemand.ToAdd {
+		missing := true
+		for userId, user := range userDemand.ToAdd {
+			if isUserSecret(user.Target, secret.Target) {
+				password, err := utils.GeneratePassword(32, true, true)
+				if err != nil {
+					// remove the secret and user from the ToAdd list
+					secretIds = append(secretIds, secretId)
+					userIds = append(userIds, userId)
+					log.Error().Err(err).Msgf("Failed to generate password for user %s in db %s", user.Target.Name, user.Target.Cluster)
+					continue
+				}
+
+				userDemand.ToAdd[userId].Target.Password = password
+				secretsDemand.ToAdd[secretId].Target.Password = password
+				missing = false
+				break
+			}
+		}
+
+		if missing {
+			// remove the secret from the ToAdd list
+			secretIds = append(secretIds, secretId)
+			log.Error().Msgf("Failed to find user for secret %s", secret.Target.Name)
+		}
+	}
+
+	for _, secretId := range secretIds {
+		secretsDemand.ToAdd = append(secretsDemand.ToAdd[:secretId], secretsDemand.ToAdd[secretId+1:]...)
+	}
+
+	for _, userId := range userIds {
+		userDemand.ToAdd = append(userDemand.ToAdd[:userId], userDemand.ToAdd[userId+1:]...)
+	}
+}
+
+func (m *Manager) processPostgresClients() {
 	dbDemand := m.state.GetDBDemand()
 	userDemand := m.state.GetUserDemand()
 	permsDemand := m.state.GetPermissionDemand()
 	secretsDemand := m.state.GetSecretsDemand()
+
+	setPasswords(&secretsDemand, &userDemand)
 
 	dbs := newConsolidator()
 	for _, db := range dbDemand.ToAdd {
@@ -286,13 +335,6 @@ func (m *Manager) processCockroachClients() {
 	}
 
 	for _, secret := range secretsDemand.ToAdd {
-		user, ok := m.state.users.Get(secret.Target.User, secret.Target.Namespace)
-		if !ok {
-			log.Error().Msgf("Failed to find user %s in namespace %s for secret %s", secret.Target.User, secret.Target.Namespace, secret.Target.Name)
-			continue
-		}
-		secret.Target.Password = user.Password
-
 		log.Info().Msgf("Adding secret %s", secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 		if err != nil {

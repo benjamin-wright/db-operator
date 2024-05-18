@@ -78,9 +78,9 @@ func (r Resource) GetResourceVersion() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	cockroachPVC, ok := obj.(*Resource)
+	other, ok := obj.(*Resource)
 	if !ok {
 		return false
 	}
-	return r.Comparable == cockroachPVC.Comparable
+	return r.Comparable == other.Comparable
 }

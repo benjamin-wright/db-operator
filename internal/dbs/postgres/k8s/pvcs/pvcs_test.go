@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestCockroachPVCFromUnstructured(t *testing.T) {
+func TestPostgresPVCFromUnstructured(t *testing.T) {
 	pvc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"metadata": map[string]interface{}{
@@ -30,13 +30,13 @@ func TestCockroachPVCFromUnstructured(t *testing.T) {
 		},
 	}
 
-	cockroachPVC, err := fromUnstructured(pvc)
+	postgresPVC, err := fromUnstructured(pvc)
 	assert.NoError(t, err)
 
-	assert.Equal(t, "test-name", cockroachPVC.Name)
-	assert.Equal(t, "test-namespace", cockroachPVC.Namespace)
-	assert.Equal(t, "test-uid", cockroachPVC.UID)
-	assert.Equal(t, "test-resource-version", cockroachPVC.ResourceVersion)
-	assert.Equal(t, "test-storage", cockroachPVC.Storage)
-	assert.Equal(t, "test-cluster", cockroachPVC.Cluster)
+	assert.Equal(t, "test-name", postgresPVC.Name)
+	assert.Equal(t, "test-namespace", postgresPVC.Namespace)
+	assert.Equal(t, "test-uid", postgresPVC.UID)
+	assert.Equal(t, "test-resource-version", postgresPVC.ResourceVersion)
+	assert.Equal(t, "test-storage", postgresPVC.Storage)
+	assert.Equal(t, "test-cluster", postgresPVC.Cluster)
 }
