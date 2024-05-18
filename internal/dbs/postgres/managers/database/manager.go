@@ -175,34 +175,46 @@ func isUserSecret(user database.User, secret secrets.Resource) bool {
 func setPasswords(
 	secretsDemand *state.Demand[clients.Resource, secrets.Resource],
 	userDemand *state.Demand[clients.Resource, database.User],
+	users bucket.Bucket[database.User],
 ) {
 	secretIds := []int{}
 	userIds := []int{}
 	for secretId, secret := range secretsDemand.ToAdd {
-		missing := true
-		for userId, user := range userDemand.ToAdd {
-			if isUserSecret(user.Target, secret.Target) {
-				password, err := utils.GeneratePassword(32, true, true)
-				if err != nil {
-					// remove the secret and user from the ToAdd list
-					secretIds = append(secretIds, secretId)
-					userIds = append(userIds, userId)
-					log.Error().Err(err).Msgf("Failed to generate password for user %s in db %s", user.Target.Name, user.Target.Cluster)
-					continue
-				}
+		userId := -1
 
-				userDemand.ToAdd[userId].Target.Password = password
-				secretsDemand.ToAdd[secretId].Target.Password = password
-				missing = false
+		// check if the user already exists in the user demand
+		for id, user := range userDemand.ToAdd {
+			if isUserSecret(user.Target, secret.Target) {
+				userId = id
 				break
 			}
 		}
 
-		if missing {
-			// remove the secret from the ToAdd list
-			secretIds = append(secretIds, secretId)
-			log.Error().Msgf("Failed to find user for secret %s", secret.Target.Name)
+		// if the user does not exist in the user demand it must already exist, so delete the user and re-add it
+		if userId < 0 {
+			existing, _ := users.Get(secretsDemand.ToAdd[secretId].Target.User, secretsDemand.ToAdd[secretId].Target.Namespace)
+
+			userDemand.ToRemove = append(userDemand.ToRemove, state.DemandTarget[clients.Resource, database.User]{
+				Target: existing,
+			})
+			userDemand.ToAdd = append(userDemand.ToAdd, state.DemandTarget[clients.Resource, database.User]{
+				Parent: secret.Parent,
+				Target: existing,
+			})
+			userId = len(userDemand.ToAdd) - 1
 		}
+
+		password, err := utils.GeneratePassword(32, true, true)
+		if err != nil {
+			// remove the secret and user from the ToAdd list
+			secretIds = append(secretIds, secretId)
+			userIds = append(userIds, userId)
+			log.Error().Err(err).Msgf("Failed to generate password for user: %v", err)
+			continue
+		}
+
+		userDemand.ToAdd[userId].Target.Password = password
+		secretsDemand.ToAdd[secretId].Target.Password = password
 	}
 
 	for _, secretId := range secretIds {
@@ -220,7 +232,7 @@ func (m *Manager) processPostgresClients() {
 	permsDemand := m.state.GetPermissionDemand()
 	secretsDemand := m.state.GetSecretsDemand()
 
-	setPasswords(&secretsDemand, &userDemand)
+	setPasswords(&secretsDemand, &userDemand, m.state.users)
 
 	dbs := newConsolidator()
 	for _, db := range dbDemand.ToAdd {

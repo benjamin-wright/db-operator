@@ -126,9 +126,9 @@ func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
 		}
 	}
 
-	for _, db := range existing.List() {
-		if _, ok := seen.Get(db.GetName(), db.GetNamespace()); !ok {
-			d.ToRemove = append(d.ToRemove, DemandTarget[T, U]{Target: db})
+	for _, e := range existing.List() {
+		if _, ok := seen.Get(e.GetName(), e.GetNamespace()); !ok {
+			d.ToRemove = append(d.ToRemove, DemandTarget[T, U]{Target: e})
 		}
 	}
 
