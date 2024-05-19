@@ -140,10 +140,7 @@ func (s *State) diffDatabases(requests bucket.Bucket[state.DemandTarget[clients.
 }
 
 func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Resource, database.User]]) state.Demand[clients.Resource, database.User] {
-	demand := state.Demand[clients.Resource, database.User]{
-		ToAdd:    bucket.NewBucket[state.DemandTarget[clients.Resource, database.User]](),
-		ToRemove: bucket.NewBucket[database.User](),
-	}
+	demand := state.NewDemand[clients.Resource, database.User]()
 
 	for _, userRequest := range requests.List() {
 		_, userExists := s.users.Get(userRequest.Target.GetName(), userRequest.Target.GetNamespace())
@@ -173,10 +170,7 @@ func (s *State) diffPermissions(
 	requests bucket.Bucket[state.DemandTarget[clients.Resource, database.Permission]],
 	deadUsers bucket.Bucket[database.User],
 ) state.Demand[clients.Resource, database.Permission] {
-	demand := state.Demand[clients.Resource, database.Permission]{
-		ToAdd:    bucket.NewBucket[state.DemandTarget[clients.Resource, database.Permission]](),
-		ToRemove: bucket.NewBucket[database.Permission](),
-	}
+	demand := state.NewDemand[clients.Resource, database.Permission]()
 
 	for _, permissionRequest := range requests.List() {
 		_, permissionExists := s.permissions.Get(permissionRequest.Target.GetName(), permissionRequest.Target.GetNamespace())
@@ -205,10 +199,7 @@ func (s *State) diffSecrets(
 	requests bucket.Bucket[state.DemandTarget[clients.Resource, secrets.Resource]],
 	users state.Demand[clients.Resource, database.User],
 ) state.Demand[clients.Resource, secrets.Resource] {
-	demand := state.Demand[clients.Resource, secrets.Resource]{
-		ToAdd:    bucket.NewBucket[state.DemandTarget[clients.Resource, secrets.Resource]](),
-		ToRemove: bucket.NewBucket[secrets.Resource](),
-	}
+	demand := state.NewDemand[clients.Resource, secrets.Resource]()
 
 	for _, secretRequest := range requests.List() {
 		_, secretExists := s.secrets.Get(secretRequest.Target.GetName(), secretRequest.Target.GetNamespace())

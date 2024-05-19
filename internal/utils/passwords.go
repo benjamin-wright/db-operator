@@ -28,7 +28,7 @@ func GeneratePassword(length int, includeNumeric bool, includeSpecial bool) stri
 		if err != nil {
 			panic(err)
 		}
-		password = append(password, charSource[randNum.Int64()])
+		password[i] = charSource[randNum.Int64()]
 	}
 	return string(password)
 }
