@@ -80,6 +80,7 @@ func TestPostgresIntegration(t *testing.T) {
 		Host:     secret.GetHost(),
 		Port:     int(port),
 		Username: secret.User,
+		Password: secret.Password,
 		Database: secret.Database,
 	})
 	mustPass(t, err)
