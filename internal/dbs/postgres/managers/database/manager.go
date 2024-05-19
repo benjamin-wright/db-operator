@@ -104,64 +104,42 @@ func (m *Manager) refresh() {
 func (m *Manager) refreshDatabaseState() {
 	m.state.ClearRemote()
 
-	for _, client := range m.state.GetActiveClients() {
-		cli, err := database.New(client.Cluster.Name, client.Cluster.Namespace, "postgres")
+	for _, cluster := range m.state.GetActiveClusters() {
+		globalCli, err := database.New(cluster.Name, cluster.Namespace, "postgres", "")
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to create client for database %s/%s", client.Cluster.Namespace, client.Cluster.Name)
+			log.Error().Err(err).Msgf("Failed to create client for database %s/%s", cluster.Namespace, cluster.Name)
 			continue
 		}
-		defer cli.Stop()
+		defer globalCli.Stop()
 
-		users, err := cli.ListUsers()
+		users, err := globalCli.ListUsers()
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to list users in %s/%s", client.Cluster.Namespace, client.Cluster.Name)
+			log.Error().Err(err).Msgf("Failed to list users in %s/%s", cluster.Namespace, cluster.Name)
 			continue
 		}
-
 		m.state.Apply(k8s_generic.Update[database.User]{ToAdd: users})
 
-		names, err := cli.ListDBs()
+		dbs, err := globalCli.ListDBs()
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to list databases in %s/%s", client.Cluster.Namespace, client.Cluster.Name)
+			log.Error().Err(err).Msgf("Failed to list databases in %s/%s", cluster.Namespace, cluster.Name)
 			continue
 		}
+		m.state.Apply(k8s_generic.Update[database.Database]{ToAdd: dbs})
 
-		for _, db := range names {
-			m.state.Apply(k8s_generic.Update[database.Database]{ToAdd: []database.Database{db}})
+		for _, db := range dbs {
+			cli, err := database.New(db.Cluster.Name, db.Cluster.Namespace, "postgres", db.Name)
+			if err != nil {
+				log.Error().Err(err).Msgf("Failed to create client for database %s/%s", db.Cluster.Namespace, db.Cluster.Name)
+				continue
+			}
+			defer cli.Stop()
 
 			permissions, err := cli.ListPermitted(db)
 			if err != nil {
-				log.Error().Err(err).Msgf("Failed to list permissions in %s/%s/%s", client.Cluster.Namespace, client.Cluster.Name, db.Name)
+				log.Error().Err(err).Msgf("Failed to list permissions in %s/%s/%s", db.Cluster.Namespace, db.Cluster.Name, db.Name)
 				continue
 			}
-
 			m.state.Apply(k8s_generic.Update[database.Permission]{ToAdd: permissions})
-
-			// mClient, err := database.NewMigrations(db.Cluster.Name, db.Cluster.Namespace, db.Name)
-			// if err != nil {
-			// 	log.Error().Err(err).Msgf("Failed to get migration client in %s/%s/%s", client.Cluster.Namespace, client.Cluster.Name, db.Name)
-			// 	continue
-			// }
-			// defer mClient.Stop()
-
-			// if ok, err := mClient.HasMigrationsTable(); err != nil {
-			// 	log.Error().Err(err).Msgf("Failed to check for migrations table in %s/%s/%s", client.Cluster.Namespace, client.Cluster.Name, db.Name)
-			// 	continue
-			// } else if !ok {
-			// 	err = mClient.CreateMigrationsTable()
-			// 	if err != nil {
-			// 		log.Error().Err(err).Msgf("Failed to create migrations table in %s/%s/%s", client.Cluster.Namespace, client.Cluster.Name, db.Name)
-			// 		continue
-			// 	}
-			// }
-
-			// migrations, err := mClient.AppliedMigrations()
-			// if err != nil {
-			// 	log.Error().Err(err).Msgf("Failed to get applied migrations in %s/%s/%s", client.Cluster.Namespace, client.Cluster.Name, db.Name)
-			// 	continue
-			// }
-
-			// m.state.Apply(k8s_generic.Update[database.Migration]{ToAdd: migrations})
 		}
 	}
 }
@@ -169,24 +147,24 @@ func (m *Manager) refreshDatabaseState() {
 func (m *Manager) processPostgresClients() {
 	dbDemand, userDemand, permsDemand, secretsDemand := m.state.GetDemand()
 
-	dbs := newConsolidator()
+	clusters := newConsolidator()
 	for _, db := range dbDemand.ToAdd.List() {
-		dbs.add(db.Target.Cluster.Name, db.Target.Cluster.Namespace)
+		clusters.add(db.Target.Cluster.Name, db.Target.Cluster.Namespace)
 	}
 	for _, db := range dbDemand.ToRemove.List() {
-		dbs.add(db.Cluster.Name, db.Cluster.Namespace)
+		clusters.add(db.Cluster.Name, db.Cluster.Namespace)
 	}
 	for _, user := range userDemand.ToAdd.List() {
-		dbs.add(user.Target.Cluster.Name, user.Target.Cluster.Namespace)
+		clusters.add(user.Target.Cluster.Name, user.Target.Cluster.Namespace)
 	}
 	for _, user := range userDemand.ToRemove.List() {
-		dbs.add(user.Cluster.Name, user.Cluster.Namespace)
+		clusters.add(user.Cluster.Name, user.Cluster.Namespace)
 	}
 	for _, perm := range permsDemand.ToAdd.List() {
-		dbs.add(perm.Target.Cluster.Name, perm.Target.Cluster.Namespace)
+		clusters.add(perm.Target.Cluster.Name, perm.Target.Cluster.Namespace)
 	}
 	for _, perm := range permsDemand.ToRemove.List() {
-		dbs.add(perm.Cluster.Name, perm.Cluster.Namespace)
+		clusters.add(perm.Cluster.Name, perm.Cluster.Namespace)
 	}
 
 	for _, secret := range secretsDemand.ToRemove.List() {
@@ -197,19 +175,26 @@ func (m *Manager) processPostgresClients() {
 		}
 	}
 
-	for _, namespace := range dbs.getNamespaces() {
-		for _, db := range dbs.getNames(namespace) {
-			cli, err := database.New(db, namespace, "postgres")
+	for _, namespace := range clusters.getNamespaces() {
+		for _, cluster := range clusters.getNames(namespace) {
+			cli, err := database.New(cluster, namespace, "postgres", "")
 			if err != nil {
-				log.Error().Err(err).Msgf("Failed to create database client for %s", db)
+				log.Error().Err(err).Msgf("Failed to create database client for %s", cluster)
 				continue
 			}
 			defer cli.Stop()
 
 			for _, perm := range permsDemand.ToRemove.List() {
-				if perm.Cluster.Name != db || perm.Cluster.Namespace != namespace {
+				if perm.Cluster.Name != cluster || perm.Cluster.Namespace != namespace {
 					continue
 				}
+
+				cli, err := database.New(perm.Cluster.Name, perm.Cluster.Namespace, "postgres", perm.Database)
+				if err != nil {
+					log.Error().Err(err).Msgf("Failed to create database client for %s/%s", perm.Cluster.Namespace, perm.Cluster.Name)
+					continue
+				}
+				defer cli.Stop()
 
 				log.Info().Msgf("Dropping permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
 				err = cli.RevokePermission(perm)
@@ -219,7 +204,7 @@ func (m *Manager) processPostgresClients() {
 			}
 
 			for _, toRemove := range dbDemand.ToRemove.List() {
-				if toRemove.Cluster.Name != db || toRemove.Cluster.Namespace != namespace {
+				if toRemove.Cluster.Name != cluster || toRemove.Cluster.Namespace != namespace {
 					continue
 				}
 
@@ -231,7 +216,7 @@ func (m *Manager) processPostgresClients() {
 			}
 
 			for _, user := range userDemand.ToRemove.List() {
-				if user.Cluster.Name != db || user.Cluster.Namespace != namespace {
+				if user.Cluster.Name != cluster || user.Cluster.Namespace != namespace {
 					continue
 				}
 
@@ -243,7 +228,7 @@ func (m *Manager) processPostgresClients() {
 			}
 
 			for _, toAdd := range dbDemand.ToAdd.List() {
-				if toAdd.Target.Cluster.Name != db || toAdd.Target.Cluster.Namespace != namespace {
+				if toAdd.Target.Cluster.Name != cluster || toAdd.Target.Cluster.Namespace != namespace {
 					continue
 				}
 
@@ -255,7 +240,7 @@ func (m *Manager) processPostgresClients() {
 			}
 
 			for _, user := range userDemand.ToAdd.List() {
-				if user.Target.Cluster.Name != db || user.Target.Cluster.Namespace != namespace {
+				if user.Target.Cluster.Name != cluster || user.Target.Cluster.Namespace != namespace {
 					continue
 				}
 
@@ -268,14 +253,23 @@ func (m *Manager) processPostgresClients() {
 			}
 
 			for _, perm := range permsDemand.ToAdd.List() {
-				if perm.Target.Cluster.Name != db || perm.Target.Cluster.Namespace != namespace {
+				perm := perm.Target
+
+				if perm.Cluster.Name != cluster || perm.Cluster.Namespace != namespace {
 					continue
 				}
 
-				log.Info().Msgf("Adding permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.Cluster)
-				err := cli.GrantPermission(perm.Target)
+				cli, err := database.New(perm.Cluster.Name, perm.Cluster.Namespace, "postgres", perm.Database)
 				if err != nil {
-					log.Error().Err(err).Msgf("Failed to grant permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.Cluster)
+					log.Error().Err(err).Msgf("Failed to create database client for %s/%s", perm.Cluster.Namespace, perm.Cluster.Name)
+					continue
+				}
+				defer cli.Stop()
+
+				log.Info().Msgf("Adding permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
+				err = cli.GrantPermission(perm)
+				if err != nil {
+					log.Error().Err(err).Msgf("Failed to grant permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
 				}
 			}
 		}

@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/benjamin-wright/db-operator/pkg/postgres"
 	"github.com/rs/zerolog/log"
@@ -9,37 +10,38 @@ import (
 
 type Client struct {
 	conn      *postgres.AdminConn
-	database  string
+	cluster   string
 	namespace string
 }
 
-func New(database string, namespace string, password string) (*Client, error) {
+func New(cluster string, namespace string, password string, database string) (*Client, error) {
 	cfg := postgres.ConnectConfig{
-		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", database, namespace),
+		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", cluster, namespace),
 		Port:     26257,
 		Username: "postgres",
 		Password: password,
+		Database: database,
 	}
 
 	conn, err := postgres.NewAdminConn(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to postgres db at %s: %+v", database, err)
+		return nil, fmt.Errorf("failed to connect to postgres db at %s: %+v", cluster, err)
 	}
 
 	return &Client{
 		conn:      conn,
-		database:  database,
+		cluster:   cluster,
 		namespace: namespace,
 	}, nil
 }
 
 func (c *Client) Stop() {
-	log.Info().Msgf("Closing connection to DB %s", c.database)
+	log.Info().Msgf("Closing connection to DB %s", c.cluster)
 	c.conn.Stop()
 }
 
 func isReservedDB(name string) bool {
-	return name == "system" || name == "postgres"
+	return name == "system" || name == "postgres" || strings.HasPrefix(name, "template")
 }
 
 func (c *Client) ListDBs() ([]Database, error) {
@@ -56,7 +58,7 @@ func (c *Client) ListDBs() ([]Database, error) {
 
 		databases = append(databases, Database{
 			Cluster: Cluster{
-				Name:      c.database,
+				Name:      c.cluster,
 				Namespace: c.namespace,
 			},
 			Name: name,
@@ -102,7 +104,7 @@ func (c *Client) ListUsers() ([]User, error) {
 
 		users = append(users, User{
 			Cluster: Cluster{
-				Name:      c.database,
+				Name:      c.cluster,
 				Namespace: c.namespace,
 			},
 			Name: name,
@@ -144,7 +146,7 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 
 		permissions = append(permissions, Permission{
 			Cluster: Cluster{
-				Name:      c.database,
+				Name:      c.cluster,
 				Namespace: c.namespace,
 			},
 			Database: db.Name,

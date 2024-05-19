@@ -247,20 +247,19 @@ func (s *State) GetDemand() (
 	return dbDemand, userDemand, permissionDemand, secretsDemand
 }
 
-func (s *State) GetActiveClients() []clients.Resource {
-	clients := []clients.Resource{}
+func (s *State) GetActiveClusters() []database.Cluster {
+	clusters := []database.Cluster{}
 
-	for _, client := range s.clients.List() {
-		target := client.GetTarget()
-		targetNamespace := client.GetTargetNamespace()
-		statefulSet, hasSS := s.statefulSets.Get(target, targetNamespace)
-
-		if !hasSS || !statefulSet.IsReady() {
+	for _, ss := range s.statefulSets.List() {
+		if !ss.IsReady() {
 			continue
 		}
 
-		clients = append(clients, client)
+		clusters = append(clusters, database.Cluster{
+			Name:      ss.Name,
+			Namespace: ss.Namespace,
+		})
 	}
 
-	return clients
+	return clusters
 }

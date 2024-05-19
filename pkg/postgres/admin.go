@@ -88,7 +88,7 @@ func (d *AdminConn) DropUser(username string) error {
 }
 
 func (d *AdminConn) ListDatabases() ([]string, error) {
-	rows, err := d.conn.Query(context.Background(), "SHOW DATABASES")
+	rows, err := d.conn.Query(context.Background(), "SELECT datname FROM pg_catalog.pg_database")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list databases: %+v", err)
 	}
@@ -97,7 +97,7 @@ func (d *AdminConn) ListDatabases() ([]string, error) {
 	databases := []string{}
 	for rows.Next() {
 		var name string
-		if err := rows.Scan(&name, nil, nil, nil, nil, nil); err != nil {
+		if err := rows.Scan(&name); err != nil {
 			return nil, fmt.Errorf("failed to decode database: %+v", err)
 		}
 
@@ -130,7 +130,7 @@ func (d *AdminConn) DropDatabase(database string) error {
 }
 
 func (d *AdminConn) ListPermitted(database string) ([]string, error) {
-	rows, err := d.conn.Query(context.Background(), "SHOW GRANTS ON DATABASE "+sanitize(database))
+	rows, err := d.conn.Query(context.Background(), "SELECT * FROM information_schema.role_table_grants WHERE grantee = '"+sanitize(database)+"'")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
@@ -159,22 +159,22 @@ func (d *AdminConn) ListPermitted(database string) ([]string, error) {
 }
 
 func (d *AdminConn) GrantPermissions(username string, database string) error {
-	query := fmt.Sprintf("GRANT ALL ON DATABASE %s TO %s", sanitize(database), sanitize(username))
+	query := fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s", sanitize(database), sanitize(username))
 	if _, err := d.conn.Exec(context.Background(), query); err != nil {
 		return fmt.Errorf("failed to grant permissions: %+v", err)
 	}
 
-	query = fmt.Sprintf("USE %s; ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL ON TABLES TO %s;", sanitize(database), sanitize(username))
-	_, err := d.conn.Exec(context.Background(), query)
-	if pgerr := parsePGXError(err); pgerr != nil {
-		return fmt.Errorf("failed to grant default table permissions: %+v", pgerr)
-	}
+	// query = fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR ROLE postgres GRANT ALL ON TABLES TO %s;", sanitize(username), sanitize(username))
+	// _, err := d.conn.Exec(context.Background(), query)
+	// if pgerr := parsePGXError(err); pgerr != nil {
+	// 	return fmt.Errorf("failed to grant default table permissions: %+v", pgerr)
+	// }
 
-	query = fmt.Sprintf("GRANT ALL ON %s.* TO %s", sanitize(database), sanitize(username))
-	_, err = d.conn.Exec(context.Background(), query)
-	if pgerr := parsePGXError(err); pgerr != nil {
-		return fmt.Errorf("failed to grant existing table permissions: %+v", err)
-	}
+	// query = fmt.Sprintf("GRANT ALL ON %s.* TO %s", sanitize(database), sanitize(username))
+	// _, err = d.conn.Exec(context.Background(), query)
+	// if pgerr := parsePGXError(err); pgerr != nil {
+	// 	return fmt.Errorf("failed to grant existing table permissions: %+v", err)
+	// }
 
 	log.Info().Msgf("Granted '%s' permission to read/write to '%s'", username, database)
 
