@@ -105,18 +105,18 @@ func (m *Manager) processPostgresDBs() {
 	svcDemand := m.state.GetServiceDemand()
 	pvcsToRemove := m.state.GetPVCDemand()
 
-	for _, db := range ssDemand.ToRemove {
-		log.Info().Msgf("Deleting db: %s", db.Target.Name)
-		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name, db.Target.Namespace)
+	for _, db := range ssDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting db: %s", db.Name)
+		err := m.client.StatefulSets().Delete(m.ctx, db.Name, db.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to delete postgresdb stateful set: %+v", err)
 		}
 	}
 
-	for _, svc := range svcDemand.ToRemove {
-		log.Info().Msgf("Deleting service: %s", svc.Target.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Target.Name, svc.Target.Namespace)
+	for _, svc := range svcDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting service: %s", svc.Name)
+		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to delete postgresdb service: %+v", err)
@@ -132,7 +132,7 @@ func (m *Manager) processPostgresDBs() {
 		}
 	}
 
-	for _, db := range ssDemand.ToAdd {
+	for _, db := range ssDemand.ToAdd.List() {
 		log.Info().Msgf("Creating db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Create(m.ctx, db.Target)
 		if err != nil {
@@ -143,7 +143,7 @@ func (m *Manager) processPostgresDBs() {
 		}
 	}
 
-	for _, svc := range svcDemand.ToAdd {
+	for _, svc := range svcDemand.ToAdd.List() {
 		log.Info().Msgf("Creating service: %s", svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 

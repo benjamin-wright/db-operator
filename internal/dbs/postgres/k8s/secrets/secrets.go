@@ -29,6 +29,10 @@ type Cluster struct {
 	Namespace string
 }
 
+func (c Cluster) GetNamespace() string {
+	return c.Namespace + ":" + c.Name
+}
+
 type Comparable struct {
 	Name      string
 	Namespace string

@@ -10,7 +10,6 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
-	"github.com/benjamin-wright/db-operator/internal/state"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
@@ -57,7 +56,6 @@ func New(
 		databases:    bucket.NewBucket[database.Database](),
 		users:        bucket.NewBucket[database.User](),
 		permissions:  bucket.NewBucket[database.Permission](),
-		applied:      bucket.NewBucket[database.Migration](),
 	}
 
 	return &Manager{
@@ -107,7 +105,7 @@ func (m *Manager) refreshDatabaseState() {
 	m.state.ClearRemote()
 
 	for _, client := range m.state.GetActiveClients() {
-		cli, err := database.New(client.Cluster.Name, client.Cluster.Namespace)
+		cli, err := database.New(client.Cluster.Name, client.Cluster.Namespace, "postgres")
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to create client for database %s/%s", client.Cluster.Namespace, client.Cluster.Name)
 			continue
@@ -168,146 +166,83 @@ func (m *Manager) refreshDatabaseState() {
 	}
 }
 
-func isUserSecret(user database.User, secret secrets.Resource) bool {
-	return user.Cluster.Name == secret.Cluster.Name && user.Cluster.Namespace == secret.Cluster.Namespace && user.Name == secret.User
-}
-
-func setPasswords(
-	secretsDemand *state.Demand[clients.Resource, secrets.Resource],
-	userDemand *state.Demand[clients.Resource, database.User],
-	users bucket.Bucket[database.User],
-) {
-	secretIds := []int{}
-	userIds := []int{}
-	for secretId, secret := range secretsDemand.ToAdd {
-		userId := -1
-
-		// check if the user already exists in the user demand
-		for id, user := range userDemand.ToAdd {
-			if isUserSecret(user.Target, secret.Target) {
-				userId = id
-				break
-			}
-		}
-
-		// if the user does not exist in the user demand it must already exist, so delete the user and re-add it
-		if userId < 0 {
-			existing, _ := users.Get(secretsDemand.ToAdd[secretId].Target.User, secretsDemand.ToAdd[secretId].Target.Namespace)
-
-			userDemand.ToRemove = append(userDemand.ToRemove, state.DemandTarget[clients.Resource, database.User]{
-				Target: existing,
-			})
-			userDemand.ToAdd = append(userDemand.ToAdd, state.DemandTarget[clients.Resource, database.User]{
-				Parent: secret.Parent,
-				Target: existing,
-			})
-			userId = len(userDemand.ToAdd) - 1
-		}
-
-		password, err := utils.GeneratePassword(32, true, true)
-		if err != nil {
-			// remove the secret and user from the ToAdd list
-			secretIds = append(secretIds, secretId)
-			userIds = append(userIds, userId)
-			log.Error().Err(err).Msgf("Failed to generate password for user: %v", err)
-			continue
-		}
-
-		userDemand.ToAdd[userId].Target.Password = password
-		secretsDemand.ToAdd[secretId].Target.Password = password
-	}
-
-	for _, secretId := range secretIds {
-		secretsDemand.ToAdd = append(secretsDemand.ToAdd[:secretId], secretsDemand.ToAdd[secretId+1:]...)
-	}
-
-	for _, userId := range userIds {
-		userDemand.ToAdd = append(userDemand.ToAdd[:userId], userDemand.ToAdd[userId+1:]...)
-	}
-}
-
 func (m *Manager) processPostgresClients() {
-	dbDemand := m.state.GetDBDemand()
-	userDemand := m.state.GetUserDemand()
-	permsDemand := m.state.GetPermissionDemand()
-	secretsDemand := m.state.GetSecretsDemand()
-
-	setPasswords(&secretsDemand, &userDemand, m.state.users)
+	dbDemand, userDemand, permsDemand, secretsDemand := m.state.GetDemand()
 
 	dbs := newConsolidator()
-	for _, db := range dbDemand.ToAdd {
+	for _, db := range dbDemand.ToAdd.List() {
 		dbs.add(db.Target.Cluster.Name, db.Target.Cluster.Namespace)
 	}
-	for _, db := range dbDemand.ToRemove {
-		dbs.add(db.Target.Cluster.Name, db.Target.Cluster.Namespace)
+	for _, db := range dbDemand.ToRemove.List() {
+		dbs.add(db.Cluster.Name, db.Cluster.Namespace)
 	}
-	for _, user := range userDemand.ToAdd {
+	for _, user := range userDemand.ToAdd.List() {
 		dbs.add(user.Target.Cluster.Name, user.Target.Cluster.Namespace)
 	}
-	for _, user := range userDemand.ToRemove {
-		dbs.add(user.Target.Cluster.Name, user.Target.Cluster.Namespace)
+	for _, user := range userDemand.ToRemove.List() {
+		dbs.add(user.Cluster.Name, user.Cluster.Namespace)
 	}
-	for _, perm := range permsDemand.ToAdd {
+	for _, perm := range permsDemand.ToAdd.List() {
 		dbs.add(perm.Target.Cluster.Name, perm.Target.Cluster.Namespace)
 	}
-	for _, perm := range permsDemand.ToRemove {
-		dbs.add(perm.Target.Cluster.Name, perm.Target.Cluster.Namespace)
+	for _, perm := range permsDemand.ToRemove.List() {
+		dbs.add(perm.Cluster.Name, perm.Cluster.Namespace)
 	}
 
-	for _, secret := range secretsDemand.ToRemove {
-		log.Info().Msgf("Removing secret %s", secret.Target.Name)
-		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name, secret.Target.Namespace)
+	for _, secret := range secretsDemand.ToRemove.List() {
+		log.Info().Msgf("Removing secret %s", secret.Name)
+		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to delete secret %s", secret.Target.Name)
+			log.Error().Err(err).Msgf("Failed to delete secret %s", secret.Name)
 		}
 	}
 
 	for _, namespace := range dbs.getNamespaces() {
 		for _, db := range dbs.getNames(namespace) {
-			cli, err := database.New(db, namespace)
+			cli, err := database.New(db, namespace, "postgres")
 			if err != nil {
 				log.Error().Err(err).Msgf("Failed to create database client for %s", db)
 				continue
 			}
 			defer cli.Stop()
 
-			for _, perm := range permsDemand.ToRemove {
-				if perm.Target.Cluster.Name != db || perm.Target.Cluster.Namespace != namespace {
+			for _, perm := range permsDemand.ToRemove.List() {
+				if perm.Cluster.Name != db || perm.Cluster.Namespace != namespace {
 					continue
 				}
 
-				log.Info().Msgf("Dropping permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.Cluster)
-				err = cli.RevokePermission(perm.Target)
+				log.Info().Msgf("Dropping permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
+				err = cli.RevokePermission(perm)
 				if err != nil {
-					log.Error().Err(err).Msgf("Failed to revoke permission for user %s in database %s of db %s", perm.Target.User, perm.Target.Database, perm.Target.Cluster)
+					log.Error().Err(err).Msgf("Failed to revoke permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
 				}
 			}
 
-			for _, toRemove := range dbDemand.ToRemove {
-				if toRemove.Target.Cluster.Name != db || toRemove.Target.Cluster.Namespace != namespace {
+			for _, toRemove := range dbDemand.ToRemove.List() {
+				if toRemove.Cluster.Name != db || toRemove.Cluster.Namespace != namespace {
 					continue
 				}
 
-				log.Info().Msgf("Dropping database %s in db %s", toRemove.Target.Name, toRemove.Target.Cluster)
-				err = cli.DeleteDB(toRemove.Target)
+				log.Info().Msgf("Dropping database %s in db %s", toRemove.Name, toRemove.Cluster)
+				err = cli.DeleteDB(toRemove)
 				if err != nil {
-					log.Error().Err(err).Msgf("Failed to delete database %s in db %s", toRemove.Target.Name, toRemove.Target.Cluster)
+					log.Error().Err(err).Msgf("Failed to delete database %s in db %s", toRemove.Name, toRemove.Cluster)
 				}
 			}
 
-			for _, user := range userDemand.ToRemove {
-				if user.Target.Cluster.Name != db || user.Target.Cluster.Namespace != namespace {
+			for _, user := range userDemand.ToRemove.List() {
+				if user.Cluster.Name != db || user.Cluster.Namespace != namespace {
 					continue
 				}
 
-				log.Info().Msgf("Dropping user %s in db %s", user.Target.Name, user.Target.Cluster)
-				err = cli.DeleteUser(user.Target)
+				log.Info().Msgf("Dropping user %s in db %s", user.Name, user.Cluster)
+				err = cli.DeleteUser(user)
 				if err != nil {
-					log.Error().Err(err).Msgf("Failed to delete user %s in db %s", user.Target.Name, user.Target.Cluster)
+					log.Error().Err(err).Msgf("Failed to delete user %s in db %s", user.Name, user.Cluster)
 				}
 			}
 
-			for _, toAdd := range dbDemand.ToAdd {
+			for _, toAdd := range dbDemand.ToAdd.List() {
 				if toAdd.Target.Cluster.Name != db || toAdd.Target.Cluster.Namespace != namespace {
 					continue
 				}
@@ -319,7 +254,7 @@ func (m *Manager) processPostgresClients() {
 				}
 			}
 
-			for _, user := range userDemand.ToAdd {
+			for _, user := range userDemand.ToAdd.List() {
 				if user.Target.Cluster.Name != db || user.Target.Cluster.Namespace != namespace {
 					continue
 				}
@@ -332,7 +267,7 @@ func (m *Manager) processPostgresClients() {
 				}
 			}
 
-			for _, perm := range permsDemand.ToAdd {
+			for _, perm := range permsDemand.ToAdd.List() {
 				if perm.Target.Cluster.Name != db || perm.Target.Cluster.Namespace != namespace {
 					continue
 				}
@@ -346,7 +281,7 @@ func (m *Manager) processPostgresClients() {
 		}
 	}
 
-	for _, secret := range secretsDemand.ToAdd {
+	for _, secret := range secretsDemand.ToAdd.List() {
 		log.Info().Msgf("Adding secret %s", secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 		if err != nil {

@@ -43,7 +43,7 @@ func (d *AdminConn) Stop() {
 }
 
 func (d *AdminConn) ListUsers() ([]string, error) {
-	rows, err := d.conn.Query(context.Background(), "SHOW USERS")
+	rows, err := d.conn.Query(context.Background(), "SELECT usename FROM pg_catalog.pg_user")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list users: %+v", err)
 	}
@@ -53,7 +53,7 @@ func (d *AdminConn) ListUsers() ([]string, error) {
 
 	for rows.Next() {
 		var user string
-		if err := rows.Scan(&user, nil, nil); err != nil {
+		if err := rows.Scan(&user); err != nil {
 			return nil, fmt.Errorf("failed to decode database user: %+v", err)
 		}
 

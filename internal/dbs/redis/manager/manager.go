@@ -109,18 +109,18 @@ func (m *Manager) processRedisDBs() {
 	svcDemand := m.state.GetServiceDemand()
 	pvcsToRemove := m.state.GetPVCDemand()
 
-	for _, db := range ssDemand.ToRemove {
-		log.Info().Msgf("Deleting db: %s/%s", db.Target.Namespace, db.Target.Name)
-		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name, db.Target.Namespace)
+	for _, db := range ssDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting db: %s/%s", db.Namespace, db.Name)
+		err := m.client.StatefulSets().Delete(m.ctx, db.Name, db.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete redis stateful set")
 		}
 	}
 
-	for _, svc := range svcDemand.ToRemove {
-		log.Info().Msgf("Deleting service: %s/%s", svc.Target.Namespace, svc.Target.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Target.Name, svc.Target.Namespace)
+	for _, svc := range svcDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting service: %s/%s", svc.Namespace, svc.Name)
+		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete redis service")
@@ -136,7 +136,7 @@ func (m *Manager) processRedisDBs() {
 		}
 	}
 
-	for _, db := range ssDemand.ToAdd {
+	for _, db := range ssDemand.ToAdd.List() {
 		log.Info().Msgf("Creating db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Create(m.ctx, db.Target)
 		if err != nil {
@@ -147,7 +147,7 @@ func (m *Manager) processRedisDBs() {
 		}
 	}
 
-	for _, svc := range svcDemand.ToAdd {
+	for _, svc := range svcDemand.ToAdd.List() {
 		log.Info().Msgf("Creating service: %s/%s", svc.Target.Namespace, svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
@@ -160,16 +160,16 @@ func (m *Manager) processRedisDBs() {
 func (m *Manager) processRedisStatefulSets() {
 	secretsDemand := m.state.GetSecretsDemand()
 
-	for _, secret := range secretsDemand.ToRemove {
-		log.Info().Msgf("Deleting secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
-		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name, secret.Target.Namespace)
+	for _, secret := range secretsDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting secret: %s/%s", secret.Namespace, secret.Name)
+		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete redis secret")
 		}
 	}
 
-	for _, secret := range secretsDemand.ToAdd {
+	for _, secret := range secretsDemand.ToAdd.List() {
 		log.Info().Msgf("Creating secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 

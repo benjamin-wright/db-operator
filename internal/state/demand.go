@@ -5,32 +5,47 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/state/types"
 )
 
-type DemandTarget[T any, U any] struct {
+type DemandTarget[T types.Nameable, U types.Nameable] struct {
 	Parent T
 	Target U
 }
 
-type Demand[T any, U any] struct {
-	ToAdd    []DemandTarget[T, U]
-	ToRemove []DemandTarget[T, U]
+func (d DemandTarget[T, U]) GetName() string {
+	return d.Target.GetName()
+}
+
+func (d DemandTarget[T, U]) GetNamespace() string {
+	return d.Target.GetNamespace()
+}
+
+type Demand[T types.Nameable, U types.Nameable] struct {
+	ToAdd    bucket.Bucket[DemandTarget[T, U]]
+	ToRemove bucket.Bucket[U]
+}
+
+func NewDemand[T types.Nameable, U types.Nameable]() Demand[T, U] {
+	return Demand[T, U]{
+		ToAdd:    bucket.NewBucket[DemandTarget[T, U]](),
+		ToRemove: bucket.NewBucket[U](),
+	}
 }
 
 func GetOneForOne[
 	T types.Nameable,
 	U types.Nameable,
 ](request bucket.Bucket[T], existing bucket.Bucket[U], transform func(T) U) Demand[T, U] {
-	toAdd := []DemandTarget[T, U]{}
-	toRemove := []DemandTarget[T, U]{}
+	toAdd := bucket.NewBucket[DemandTarget[T, U]]()
+	toRemove := bucket.NewBucket[U]()
 
 	for _, obj := range request.List() {
 		if _, ok := existing.Get(obj.GetName(), obj.GetNamespace()); !ok {
-			toAdd = append(toAdd, DemandTarget[T, U]{Parent: obj, Target: transform(obj)})
+			toAdd.Add(DemandTarget[T, U]{Parent: obj, Target: transform(obj)})
 		}
 	}
 
 	for _, obj := range existing.List() {
 		if _, ok := request.Get(obj.GetName(), obj.GetNamespace()); !ok {
-			toRemove = append(toRemove, DemandTarget[T, U]{Target: obj})
+			toRemove.Add(obj)
 		}
 	}
 
@@ -72,23 +87,23 @@ func GetStorageBound[
 	existing bucket.Bucket[U],
 	transform func(T) U,
 ) Demand[T, U] {
-	toAdd := []DemandTarget[T, U]{}
-	toRemove := []DemandTarget[T, U]{}
+	toAdd := bucket.NewBucket[DemandTarget[T, U]]()
+	toRemove := bucket.NewBucket[U]()
 
 	for _, db := range demand.List() {
 		if ss, ok := existing.Get(db.GetName(), db.GetNamespace()); !ok {
-			toAdd = append(toAdd, DemandTarget[T, U]{Parent: db, Target: transform(db)})
+			toAdd.Add(DemandTarget[T, U]{Parent: db, Target: transform(db)})
 		} else {
 			if db.GetStorage() != ss.GetStorage() {
-				toRemove = append(toRemove, DemandTarget[T, U]{Parent: db, Target: transform(db)})
-				toAdd = append(toAdd, DemandTarget[T, U]{Parent: db, Target: transform(db)})
+				toRemove.Add(transform(db))
+				toAdd.Add(DemandTarget[T, U]{Parent: db, Target: transform(db)})
 			}
 		}
 	}
 
 	for _, db := range existing.List() {
 		if _, ok := demand.Get(db.GetName(), db.GetNamespace()); !ok {
-			toRemove = append(toRemove, DemandTarget[T, U]{Target: db})
+			toRemove.Add(db)
 		}
 	}
 
@@ -105,8 +120,8 @@ func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
 	transform func(T) U,
 ) Demand[T, U] {
 	d := Demand[T, U]{
-		ToAdd:    []DemandTarget[T, U]{},
-		ToRemove: []DemandTarget[T, U]{},
+		ToAdd:    bucket.NewBucket[DemandTarget[T, U]](),
+		ToRemove: bucket.NewBucket[U](),
 	}
 
 	seen := bucket.NewBucket[U]()
@@ -122,13 +137,13 @@ func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
 		seen.Add(desired)
 
 		if _, ok := existing.Get(desired.GetName(), desired.GetNamespace()); !ok {
-			d.ToAdd = append(d.ToAdd, DemandTarget[T, U]{Parent: client, Target: desired})
+			d.ToAdd.Add(DemandTarget[T, U]{Parent: client, Target: desired})
 		}
 	}
 
 	for _, e := range existing.List() {
 		if _, ok := seen.Get(e.GetName(), e.GetNamespace()); !ok {
-			d.ToRemove = append(d.ToRemove, DemandTarget[T, U]{Target: e})
+			d.ToRemove.Add(e)
 		}
 	}
 

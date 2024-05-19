@@ -5,7 +5,7 @@ import (
 	"math/big"
 )
 
-func GeneratePassword(length int, includeNumeric bool, includeSpecial bool) (string, error) {
+func GeneratePassword(length int, includeNumeric bool, includeSpecial bool) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	const numeric = "0123456789"
 	const special = "!@#$%^&*()_+=-"
@@ -30,5 +30,5 @@ func GeneratePassword(length int, includeNumeric bool, includeSpecial bool) (str
 		}
 		password = append(password, charSource[randNum.Int64()])
 	}
-	return string(password), nil
+	return string(password)
 }

@@ -13,11 +13,12 @@ type Client struct {
 	namespace string
 }
 
-func New(database string, namespace string) (*Client, error) {
+func New(database string, namespace string, password string) (*Client, error) {
 	cfg := postgres.ConnectConfig{
 		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", database, namespace),
 		Port:     26257,
 		Username: "postgres",
+		Password: password,
 	}
 
 	conn, err := postgres.NewAdminConn(cfg)
@@ -84,7 +85,7 @@ func (c *Client) DeleteDB(db Database) error {
 }
 
 func isReservedUser(name string) bool {
-	return name == "" || name == "admin" || name == "root"
+	return name == "" || name == "postgres" || name == "root"
 }
 
 func (c *Client) ListUsers() ([]User, error) {

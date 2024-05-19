@@ -105,25 +105,25 @@ func (m *Manager) processNatsDBs() {
 	dDemand := m.state.GetDeploymentDemand()
 	svcDemand := m.state.GetServiceDemand()
 
-	for _, db := range dDemand.ToRemove {
-		log.Info().Msgf("Deleting db: %s/%s", db.Target.Namespace, db.Target.Name)
-		err := m.client.Deployments().Delete(m.ctx, db.Target.Name, db.Target.Namespace)
+	for _, db := range dDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting db: %s/%s", db.Namespace, db.Name)
+		err := m.client.Deployments().Delete(m.ctx, db.Name, db.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete nats deployment")
 		}
 	}
 
-	for _, svc := range svcDemand.ToRemove {
-		log.Info().Msgf("Deleting service: %s/%s", svc.Target.Namespace, svc.Target.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Target.Name, svc.Target.Namespace)
+	for _, svc := range svcDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting service: %s/%s", svc.Namespace, svc.Name)
+		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete nats service")
 		}
 	}
 
-	for _, db := range dDemand.ToAdd {
+	for _, db := range dDemand.ToAdd.List() {
 		log.Info().Msgf("Creating db: %s/%s", db.Target.Namespace, db.Target.Name)
 		err := m.client.Deployments().Create(m.ctx, db.Target)
 		if err != nil {
@@ -134,7 +134,7 @@ func (m *Manager) processNatsDBs() {
 		}
 	}
 
-	for _, svc := range svcDemand.ToAdd {
+	for _, svc := range svcDemand.ToAdd.List() {
 		log.Info().Msgf("Creating service: %s/%s", svc.Target.Namespace, svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
@@ -147,16 +147,16 @@ func (m *Manager) processNatsDBs() {
 func (m *Manager) processNatsDeployments() {
 	secretsDemand := m.state.GetSecretsDemand()
 
-	for _, secret := range secretsDemand.ToRemove {
-		log.Info().Msgf("Deleting secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
-		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name, secret.Target.Namespace)
+	for _, secret := range secretsDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting secret: %s/%s", secret.Namespace, secret.Name)
+		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete nats secret")
 		}
 	}
 
-	for _, secret := range secretsDemand.ToAdd {
+	for _, secret := range secretsDemand.ToAdd.List() {
 		log.Info().Msgf("Creating secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 
