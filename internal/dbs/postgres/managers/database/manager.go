@@ -93,11 +93,11 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		log.Info().Msg("Updating postgres database state")
+		log.Debug().Msg("Updating postgres database state")
 		m.refreshDatabaseState()
-		log.Info().Msg("Processing postgres databases started")
+		log.Debug().Msg("Processing postgres databases started")
 		m.processPostgresClients()
-		log.Info().Msg("Processing postgres databases finished")
+		log.Debug().Msg("Processing postgres databases finished")
 	}
 }
 
@@ -192,7 +192,6 @@ func (m *Manager) processPostgresClients() {
 	}
 
 	for _, secret := range secretsDemand.ToRemove.List() {
-		log.Info().Msgf("Removing secret %s", secret.Name)
 		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to delete secret %s", secret.Name)
@@ -201,7 +200,7 @@ func (m *Manager) processPostgresClients() {
 
 	for _, namespace := range clusters.getNamespaces() {
 		for _, cluster := range clusters.getNames(namespace) {
-			log.Info().Msgf("Processing cluster %s/%s", namespace, cluster)
+			log.Debug().Msgf("Processing cluster %s/%s", namespace, cluster)
 
 			cli, err := database.New(cluster, namespace, "postgres", "")
 			if err != nil {
@@ -215,7 +214,6 @@ func (m *Manager) processPostgresClients() {
 					continue
 				}
 
-				log.Info().Msgf("Dropping permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
 				cli, err := database.New(perm.Cluster.Name, perm.Cluster.Namespace, "postgres", perm.Database)
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to create database client for %s/%s", perm.Cluster.Namespace, perm.Cluster.Name)
@@ -234,7 +232,6 @@ func (m *Manager) processPostgresClients() {
 					continue
 				}
 
-				log.Info().Msgf("Dropping database %s in db %s", toRemove.Name, toRemove.Cluster)
 				err = cli.DeleteDB(toRemove)
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to delete database %s in db %s", toRemove.Name, toRemove.Cluster)
@@ -246,7 +243,6 @@ func (m *Manager) processPostgresClients() {
 					continue
 				}
 
-				log.Info().Msgf("Dropping user %s in db %s", user.Name, user.Cluster)
 				err = cli.DeleteUser(user)
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to delete user %s in db %s", user.Name, user.Cluster)
@@ -258,7 +254,6 @@ func (m *Manager) processPostgresClients() {
 					continue
 				}
 
-				log.Info().Msgf("Creating user %s in db %s", user.Target.Name, user.Target.Cluster)
 				err := cli.CreateUser(user.Target)
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to create user %s in db %s", user.Target.Name, user.Target.Cluster)
@@ -270,7 +265,6 @@ func (m *Manager) processPostgresClients() {
 					continue
 				}
 
-				log.Info().Msgf("Creating database %s in db %s", toAdd.Target.Name, toAdd.Target.Cluster)
 				err := cli.CreateDB(toAdd.Target)
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to create database %s in db %s", toAdd.Target.Name, toAdd.Target.Cluster)
@@ -284,7 +278,6 @@ func (m *Manager) processPostgresClients() {
 					continue
 				}
 
-				log.Info().Msgf("Adding permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
 				cli, err := database.New(perm.Cluster.Name, perm.Cluster.Namespace, "postgres", perm.Database)
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to create database client for %s/%s", perm.Cluster.Namespace, perm.Cluster.Name)
@@ -301,7 +294,6 @@ func (m *Manager) processPostgresClients() {
 	}
 
 	for _, secret := range secretsDemand.ToAdd.List() {
-		log.Info().Msgf("Adding secret %s", secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to create secret %s", secret.Target.Name)

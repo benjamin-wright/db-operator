@@ -18,12 +18,12 @@ func NewBucket[T types.Nameable]() Bucket[T] {
 
 func (b *Bucket[T]) Apply(update k8s_generic.Update[T]) {
 	for _, toRemove := range update.ToRemove {
-		log.Info().Interface("toRemove", toRemove).Msg("Removing")
+		log.Debug().Interface("toRemove", toRemove).Msg("Removing")
 		b.Remove(toRemove)
 	}
 
 	for _, toAdd := range update.ToAdd {
-		log.Info().Interface("toAdd", toAdd).Msg("Adding")
+		log.Debug().Interface("toAdd", toAdd).Msg("Adding")
 		b.Add(toAdd)
 	}
 }

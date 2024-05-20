@@ -3,6 +3,7 @@ package postgres
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 )
@@ -95,7 +96,7 @@ func (c ConnectConfig) ConnectionString() string {
 
 	password := ""
 	if c.Password != "" {
-		password = ":" + c.Password
+		password = ":" + url.QueryEscape(c.Password)
 	}
 
 	return fmt.Sprintf("postgresql://%s%s@%s:%d%s", c.Username, password, c.Host, c.Port, dbSuffix)

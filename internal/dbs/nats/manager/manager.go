@@ -94,10 +94,10 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		log.Info().Msg("Processing nats started")
+		log.Debug().Msg("Processing nats started")
 		m.processNatsDBs()
 		m.processNatsDeployments()
-		log.Info().Msg("Processing nats finished")
+		log.Debug().Msg("Processing nats finished")
 	}
 }
 

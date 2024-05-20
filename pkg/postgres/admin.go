@@ -4,26 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
-	"github.com/rs/zerolog/log"
 )
-
-func parsePGXError(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	if pgerr, ok := err.(*pgconn.PgError); ok {
-		if pgerr.Message == "no object matched" {
-			return nil
-		}
-
-		return fmt.Errorf("%s [%s]: %s", pgerr.Message, pgerr.Code, pgerr.Detail)
-	}
-
-	return err
-}
 
 type AdminConn struct {
 	conn *pgx.Conn
@@ -64,7 +46,6 @@ func (d *AdminConn) ListUsers() ([]string, error) {
 }
 
 func (d *AdminConn) CreateUser(username string, password string) error {
-	log.Info().Msgf("Creating user %s", username)
 	if password != "" {
 		if _, err := d.conn.Exec(context.Background(), "CREATE USER "+sanitize(username)+" WITH PASSWORD '"+sanitize(password)+"'"); err != nil {
 			return fmt.Errorf("failed to create database user: %+v", err)
@@ -79,7 +60,6 @@ func (d *AdminConn) CreateUser(username string, password string) error {
 }
 
 func (d *AdminConn) DropUser(username string) error {
-	log.Info().Msgf("Dropping user %s", username)
 	if _, err := d.conn.Exec(context.Background(), "DROP USER "+sanitize(username)); err != nil {
 		return fmt.Errorf("failed to drop database user: %+v", err)
 	}
@@ -112,7 +92,6 @@ func sanitize(name string) string {
 }
 
 func (d *AdminConn) CreateDatabase(database string) error {
-	log.Info().Msgf("Creating database %s", database)
 	if _, err := d.conn.Exec(context.Background(), "CREATE DATABASE "+sanitize(database)); err != nil {
 		return fmt.Errorf("failed to create database: %+v", err)
 	}
@@ -121,7 +100,6 @@ func (d *AdminConn) CreateDatabase(database string) error {
 }
 
 func (d *AdminConn) DropDatabase(database string) error {
-	log.Info().Msgf("Dropping database %s", database)
 	if _, err := d.conn.Exec(context.Background(), "DROP DATABASE "+sanitize(database)); err != nil {
 		return fmt.Errorf("failed to drop database: %+v", err)
 	}
@@ -130,7 +108,6 @@ func (d *AdminConn) DropDatabase(database string) error {
 }
 
 func (d *AdminConn) SetOwner(database string, user string) error {
-	log.Info().Msgf("Setting owner of %s to %s", database, user)
 	if _, err := d.conn.Exec(context.Background(), "ALTER DATABASE "+sanitize(database)+" OWNER TO "+sanitize(user)); err != nil {
 		return fmt.Errorf("failed to set database owner: %+v", err)
 	}
@@ -204,8 +181,6 @@ func (d *AdminConn) GrantPermissions(username string, database string) error {
 	// 	return fmt.Errorf("failed to grant existing table permissions: %+v", err)
 	// }
 
-	log.Info().Msgf("Granted '%s' permission to read/write to '%s'", username, database)
-
 	return nil
 }
 
@@ -224,8 +199,6 @@ func (d *AdminConn) RevokePermissions(username string, database string) error {
 	if _, err := d.conn.Exec(context.Background(), query); err != nil {
 		return fmt.Errorf("failed to revoke permissions: %+v", err)
 	}
-
-	log.Info().Msgf("Revoked '%s' permission to read/write from '%s'", username, database)
 
 	return nil
 }

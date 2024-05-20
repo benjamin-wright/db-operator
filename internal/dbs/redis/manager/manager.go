@@ -97,10 +97,10 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		log.Info().Msg("Processing redis started")
+		log.Debug().Msg("Processing redis started")
 		m.processRedisDBs()
 		m.processRedisStatefulSets()
-		log.Info().Msg("Processing redis finished")
+		log.Debug().Msg("Processing redis finished")
 	}
 }
 

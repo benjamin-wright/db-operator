@@ -94,9 +94,9 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		log.Info().Msg("Processing postgres deployments started")
+		log.Debug().Msg("Processing postgres deployments started")
 		m.processPostgresDBs()
-		log.Info().Msg("Processing postgres deployments finished")
+		log.Debug().Msg("Processing postgres deployments finished")
 	}
 }
 

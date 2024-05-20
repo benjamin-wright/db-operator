@@ -25,7 +25,7 @@ func getConnection(config *pgx.ConnConfig) *pgx.Conn {
 				time.Sleep(time.Second * backoff)
 				backoff = backoff + time.Duration(1)
 			} else {
-				log.Info().Msg("Connected")
+				log.Debug().Msg("Connected")
 				break
 			}
 		}
@@ -42,8 +42,6 @@ func getConnection(config *pgx.ConnConfig) *pgx.Conn {
 
 func Connect(config ConnectConfig) (*pgx.Conn, error) {
 	connectionString := config.ConnectionString()
-
-	log.Info().Msgf("Connecting to postgres with connection string: %s", config)
 
 	pgxConfig, err := pgx.ParseConfig(connectionString)
 	if err != nil {

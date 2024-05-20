@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,6 +36,7 @@ type Client[T Resource] struct {
 	kind             string
 	labelFilters     map[string]string
 	fromUnstructured FromUnstructured[T]
+	logger           zerolog.Logger
 }
 
 type ClientArgs[T Resource] struct {
@@ -52,10 +54,12 @@ func NewClient[T Resource](b *Builder, args ClientArgs[T]) *Client[T] {
 		labelFilters:     args.LabelFilters,
 		kind:             args.Kind,
 		fromUnstructured: args.FromUnstructured,
+		logger:           log.With().Str("kind", args.Kind).Logger(),
 	}
 }
 
 func (c *Client[T]) Create(ctx context.Context, resource T) error {
+	c.logger.Info().Msgf("Creating %s:%s", resource.GetNamespace(), resource.GetName())
 	_, err := c.client.Resource(c.schema).Namespace(resource.GetNamespace()).Create(ctx, resource.ToUnstructured(), v1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create %T: %+v", resource, err)
@@ -107,6 +111,7 @@ func (c *Client[T]) GetAll(ctx context.Context) ([]T, error) {
 }
 
 func (c *Client[T]) Delete(ctx context.Context, name string, namespace string) error {
+	c.logger.Info().Msgf("Deleting %s:%s", namespace, name)
 	err := c.client.Resource(c.schema).Namespace(namespace).Delete(ctx, name, v1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete %T: %+v", name, err)
@@ -116,6 +121,7 @@ func (c *Client[T]) Delete(ctx context.Context, name string, namespace string) e
 }
 
 func (c *Client[T]) DeleteAll(ctx context.Context, namespace string) error {
+	c.logger.Info().Msgf("Deleting all resources in %s", namespace)
 	err := c.client.Resource(c.schema).Namespace(namespace).DeleteCollection(ctx, v1.DeleteOptions{}, v1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete all resources: %+v", err)
@@ -125,6 +131,7 @@ func (c *Client[T]) DeleteAll(ctx context.Context, namespace string) error {
 }
 
 func (c *Client[T]) Update(ctx context.Context, resource T) error {
+	c.logger.Info().Msgf("Updating %s:%s", resource.GetNamespace(), resource.GetName())
 	_, err := c.client.Resource(c.schema).Namespace(resource.GetNamespace()).Update(ctx, resource.ToUnstructured(), v1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed up update resource %s: %+v", resource.GetName(), err)

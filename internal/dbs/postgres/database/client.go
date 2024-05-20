@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/benjamin-wright/db-operator/pkg/postgres"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -12,6 +13,8 @@ type Client struct {
 	conn      *postgres.AdminConn
 	cluster   string
 	namespace string
+	database  string
+	logger    zerolog.Logger
 }
 
 func New(cluster string, namespace string, password string, database string) (*Client, error) {
@@ -23,6 +26,19 @@ func New(cluster string, namespace string, password string, database string) (*C
 		Database: database,
 	}
 
+	logger := log.With().
+		Str("kind", "postgres").
+		Str("cluster", cluster).
+		Str("namespace", namespace).
+		Str("database", database).
+		Logger()
+
+	if database != "" {
+		logger.Debug().Msgf("Opening connection to Postgres Database %s:%s", cluster, database)
+	} else {
+		logger.Debug().Msgf("Opening connection to Postgres Cluster %s", cluster)
+	}
+
 	conn, err := postgres.NewAdminConn(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to postgres db at %s: %+v", cluster, err)
@@ -32,11 +48,18 @@ func New(cluster string, namespace string, password string, database string) (*C
 		conn:      conn,
 		cluster:   cluster,
 		namespace: namespace,
+		database:  database,
+		logger:    logger,
 	}, nil
 }
 
 func (c *Client) Stop() {
-	log.Info().Msgf("Closing connection to DB %s", c.cluster)
+	if c.database != "" {
+		c.logger.Debug().Msgf("Closing connection to Postgres Database %s:%s", c.cluster, c.database)
+	} else {
+		c.logger.Debug().Msgf("Closing connection to Postgres Cluster %s", c.cluster)
+	}
+
 	c.conn.Stop()
 }
 
@@ -69,6 +92,8 @@ func (c *Client) ListDBs() ([]Database, error) {
 }
 
 func (c *Client) CreateDB(db Database) error {
+	c.logger.Info().Msgf("Creating database %s", db.Name)
+
 	err := c.conn.CreateDatabase(db.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create database %s: %+v", db.Name, err)
@@ -83,6 +108,7 @@ func (c *Client) CreateDB(db Database) error {
 }
 
 func (c *Client) DeleteDB(db Database) error {
+	c.logger.Info().Msgf("Deleting database %s", db.Name)
 	err := c.conn.DropDatabase(db.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create database %s: %+v", db.Name, err)
@@ -120,6 +146,7 @@ func (c *Client) ListUsers() ([]User, error) {
 }
 
 func (c *Client) CreateUser(user User) error {
+	c.logger.Info().Msgf("Creating user %s", user.Name)
 	err := c.conn.CreateUser(user.Name, user.Password)
 	if err != nil {
 		return fmt.Errorf("failed to create user %s: %+v", user, err)
@@ -129,6 +156,7 @@ func (c *Client) CreateUser(user User) error {
 }
 
 func (c *Client) DeleteUser(user User) error {
+	c.logger.Info().Msgf("Deleting user %s", user.Name)
 	err := c.conn.DropUser(user.Name)
 	if err != nil {
 		return fmt.Errorf("failed to delete user %s: %+v", user, err)
@@ -163,6 +191,7 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 }
 
 func (c *Client) GrantPermission(permission Permission) error {
+	c.logger.Info().Msgf("Granting '%s' permission to read/write to '%s'", permission.User, permission.Database)
 	err := c.conn.GrantPermissions(permission.User, permission.Database)
 	if err != nil {
 		return fmt.Errorf("failed to grant permission: %+v", err)
@@ -172,6 +201,7 @@ func (c *Client) GrantPermission(permission Permission) error {
 }
 
 func (c *Client) RevokePermission(permission Permission) error {
+	c.logger.Info().Msgf("Revoking '%s' permission to read/write to '%s'", permission.User, permission.Database)
 	err := c.conn.RevokePermissions(permission.User, permission.Database)
 	if err != nil {
 		return fmt.Errorf("failed to revoke permission: %+v", err)
