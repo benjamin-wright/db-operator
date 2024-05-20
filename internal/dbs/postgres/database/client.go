@@ -117,7 +117,7 @@ func (c *Client) DeleteDB(db Database) error {
 	c.logger.Info().Msgf("Deleting database %s", db.Name)
 	err := c.conn.DropDatabase(db.Name)
 	if err != nil {
-		return fmt.Errorf("failed to create database %s: %+v", db.Name, err)
+		return fmt.Errorf("failed to delete database %s: %+v", db.Name, err)
 	}
 
 	return nil
@@ -190,7 +190,6 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 			},
 			Database: db.Name,
 			User:     user,
-			Owner:    db.Owner,
 		})
 	}
 
@@ -198,8 +197,13 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 }
 
 func (c *Client) GrantPermission(permission Permission) error {
+	owner, err := c.conn.GetOwner(permission.Database)
+	if err != nil {
+		return fmt.Errorf("failed to get owner of database %s: %+v", permission.Database, err)
+	}
+
 	c.logger.Info().Msgf("Granting '%s' permission to read/write to '%s'", permission.User, permission.Database)
-	err := c.conn.GrantPermissions(permission.User, permission.Owner)
+	err = c.conn.GrantPermissions(permission.User, owner)
 	if err != nil {
 		return fmt.Errorf("failed to grant permission: %+v", err)
 	}
@@ -208,8 +212,13 @@ func (c *Client) GrantPermission(permission Permission) error {
 }
 
 func (c *Client) RevokePermission(permission Permission) error {
+	owner, err := c.conn.GetOwner(permission.Database)
+	if err != nil {
+		return fmt.Errorf("failed to get owner of database %s: %+v", permission.Database, err)
+	}
+
 	c.logger.Info().Msgf("Revoking '%s' permission to read/write to '%s'", permission.User, permission.Database)
-	err := c.conn.RevokePermissions(permission.User, permission.Owner)
+	err = c.conn.RevokePermissions(permission.User, owner)
 	if err != nil {
 		return fmt.Errorf("failed to revoke permission: %+v", err)
 	}

@@ -201,6 +201,8 @@ func (m *Manager) processPostgresClients() {
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to revoke permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
 				}
+
+				cli.Stop()
 			}
 
 			for _, toRemove := range dbDemand.ToRemove.List() {
@@ -265,6 +267,8 @@ func (m *Manager) processPostgresClients() {
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to grant permission for user %s in database %s of db %s", perm.User, perm.Database, perm.Cluster)
 				}
+
+				cli.Stop()
 			}
 		}
 	}

@@ -39,7 +39,6 @@ type Permission struct {
 	User     string
 	Database string
 	Cluster  Cluster
-	Owner    string
 }
 
 func (u Permission) GetName() string {

@@ -61,6 +61,10 @@ func (d *AdminConn) CreateUser(username string, password string) error {
 }
 
 func (d *AdminConn) DropUser(username string) error {
+	if _, err := d.conn.Exec(context.Background(), "DROP OWNED BY "+sanitize(username)); err != nil {
+		return fmt.Errorf("failed to revoke user permissions: %+v", err)
+	}
+
 	if _, err := d.conn.Exec(context.Background(), "DROP USER "+sanitize(username)); err != nil {
 		return fmt.Errorf("failed to drop database user: %+v", err)
 	}
@@ -101,7 +105,7 @@ func (d *AdminConn) CreateDatabase(database string) error {
 }
 
 func (d *AdminConn) DropDatabase(database string) error {
-	if _, err := d.conn.Exec(context.Background(), "DROP DATABASE "+sanitize(database)); err != nil {
+	if _, err := d.conn.Exec(context.Background(), "DROP DATABASE "+sanitize(database)+" WITH (FORCE)"); err != nil {
 		return fmt.Errorf("failed to drop database: %+v", err)
 	}
 
@@ -182,7 +186,7 @@ func (d *AdminConn) GrantPermissions(username string, owner string) error {
 		return fmt.Errorf("failed to grant default sequence permissions: %+v", err)
 	}
 
-	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("GRANT INSERT, SELECT, UPDATE, DELETE ON ALL TABLES TO %s", sanitize(username))); err != nil {
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("GRANT INSERT, SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %s", sanitize(username))); err != nil {
 		return fmt.Errorf("failed to grant existing table permissions: %+v", err)
 	}
 
@@ -198,7 +202,7 @@ func (d *AdminConn) RevokePermissions(username string, owner string) error {
 		return fmt.Errorf("failed to revoke default sequence permissions: %+v", err)
 	}
 
-	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("REVOKE INSERT, SELECT, UPDATE, DELETE ON ALL TABLES FROM %s", sanitize(username))); err != nil {
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("REVOKE INSERT, SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM %s", sanitize(username))); err != nil {
 		return fmt.Errorf("failed to revoke existing table permissions: %+v", err)
 	}
 

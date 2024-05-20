@@ -186,41 +186,21 @@ func (s *State) getOwner(database string, newDatabases bucket.Bucket[state.Deman
 func (s *State) diffPermissions(
 	requests bucket.Bucket[state.DemandTarget[clients.Resource, database.Permission]],
 	deadUsers bucket.Bucket[database.User],
-	newDatabases bucket.Bucket[state.DemandTarget[clients.Resource, database.Database]],
 ) state.Demand[clients.Resource, database.Permission] {
 	demand := state.NewDemand[clients.Resource, database.Permission]()
 
 	for _, permissionRequest := range requests.List() {
-		existing, permissionExists := s.permissions.Get(permissionRequest.Target.GetName(), permissionRequest.Target.GetNamespace())
+		_, permissionExists := s.permissions.Get(permissionRequest.Target.GetName(), permissionRequest.Target.GetNamespace())
 		_, isRefreshing := deadUsers.Get(permissionRequest.Parent.Username, permissionRequest.Target.GetNamespace())
 
 		if permissionExists {
 			if isRefreshing {
-				owner, err := s.getOwner(permissionRequest.Target.Database, newDatabases)
-				if err != nil {
-					log.Logger.Error().Str("permission", permissionRequest.Target.GetName()).Msg(err.Error())
-					continue
-				}
-
-				permissionRequest.Target.Owner = owner
 				demand.ToRemove.Add(permissionRequest.Target)
-				permissionExists = false
-			} else if existing.Owner != permissionRequest.Target.Owner {
-				demand.ToRemove.Add(existing)
 				permissionExists = false
 			}
 		}
 
 		if !permissionExists {
-			log.Info().Msgf("Adding permission %+v", permissionRequest)
-
-			owner, err := s.getOwner(permissionRequest.Target.Database, newDatabases)
-			if err != nil {
-				log.Logger.Error().Str("permission", permissionRequest.Target.GetName()).Msg(err.Error())
-				continue
-			}
-
-			permissionRequest.Target.Owner = owner
 			demand.ToAdd.Add(permissionRequest)
 			continue
 		}
@@ -281,7 +261,7 @@ func (s *State) GetDemand() (
 
 	dbDemand := s.diffDatabases(dbRequests)
 	userDemand := s.diffUsers(userRequests)
-	permissionDemand := s.diffPermissions(permissionRequests, userDemand.ToRemove, dbDemand.ToAdd)
+	permissionDemand := s.diffPermissions(permissionRequests, userDemand.ToRemove)
 	secretsDemand := s.diffSecrets(secretRequests, userDemand)
 
 	return dbDemand, userDemand, permissionDemand, secretsDemand
