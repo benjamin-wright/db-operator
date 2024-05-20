@@ -190,6 +190,7 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 			},
 			Database: db.Name,
 			User:     user,
+			Owner:    db.Owner,
 		})
 	}
 

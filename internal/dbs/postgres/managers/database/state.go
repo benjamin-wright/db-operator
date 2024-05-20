@@ -1,6 +1,8 @@
 package database
 
 import (
+	"fmt"
+
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/database"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
@@ -169,6 +171,18 @@ func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Reso
 	return demand
 }
 
+func (s *State) getOwner(database string, newDatabases bucket.Bucket[state.DemandTarget[clients.Resource, database.Database]]) (string, error) {
+	if db, ok := newDatabases.Get(database, ""); ok {
+		return db.Target.Owner, nil
+	}
+
+	if db, ok := s.databases.Get(database, ""); ok {
+		return db.Owner, nil
+	}
+
+	return "", fmt.Errorf("database %s not found", database)
+}
+
 func (s *State) diffPermissions(
 	requests bucket.Bucket[state.DemandTarget[clients.Resource, database.Permission]],
 	deadUsers bucket.Bucket[database.User],
@@ -182,6 +196,13 @@ func (s *State) diffPermissions(
 
 		if permissionExists {
 			if isRefreshing {
+				owner, err := s.getOwner(permissionRequest.Target.Database, newDatabases)
+				if err != nil {
+					log.Logger.Error().Str("permission", permissionRequest.Target.GetName()).Msg(err.Error())
+					continue
+				}
+
+				permissionRequest.Target.Owner = owner
 				demand.ToRemove.Add(permissionRequest.Target)
 				permissionExists = false
 			} else if existing.Owner != permissionRequest.Target.Owner {
@@ -191,17 +212,15 @@ func (s *State) diffPermissions(
 		}
 
 		if !permissionExists {
-			if database, ok := newDatabases.Get(permissionRequest.Target.Database, permissionRequest.Target.GetNamespace()); ok {
-				permissionRequest.Target.Owner = database.Target.Owner
-			} else if database, ok := s.databases.Get(permissionRequest.Target.Database, permissionRequest.Target.GetNamespace()); ok {
-				permissionRequest.Target.Owner = database.Owner
-			} else {
-				log.Logger.Error().Str("permission", permissionRequest.Target.GetName()).Msg("wat dis? Database not found for permission")
+			log.Info().Msgf("Adding permission %+v", permissionRequest)
+
+			owner, err := s.getOwner(permissionRequest.Target.Database, newDatabases)
+			if err != nil {
+				log.Logger.Error().Str("permission", permissionRequest.Target.GetName()).Msg(err.Error())
 				continue
 			}
 
-			log.Info().Msgf("Adding permission %+v", permissionRequest)
-
+			permissionRequest.Target.Owner = owner
 			demand.ToAdd.Add(permissionRequest)
 			continue
 		}
