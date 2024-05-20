@@ -9,6 +9,7 @@ type Cluster struct {
 
 type Database struct {
 	Name    string
+	Owner   string
 	Cluster Cluster
 }
 
@@ -38,6 +39,7 @@ type Permission struct {
 	User     string
 	Database string
 	Cluster  Cluster
+	Owner    bool
 }
 
 func (u Permission) GetName() string {

@@ -74,6 +74,11 @@ func (c *Client) CreateDB(db Database) error {
 		return fmt.Errorf("failed to create database %s: %+v", db.Name, err)
 	}
 
+	err = c.conn.SetOwner(db.Name, db.Owner)
+	if err != nil {
+		return fmt.Errorf("failed to set owner of database %s to %s: %+v", db.Name, db.Owner, err)
+	}
+
 	return nil
 }
 
@@ -133,12 +138,12 @@ func (c *Client) DeleteUser(user User) error {
 }
 
 func (c *Client) ListPermitted(db Database) ([]Permission, error) {
+	permissions := []Permission{}
 	permitted, err := c.conn.ListPermitted(db.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
 
-	permissions := []Permission{}
 	for _, user := range permitted {
 		if isReservedUser(user) {
 			continue

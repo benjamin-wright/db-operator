@@ -67,16 +67,19 @@ func (s *State) getRequests() (
 			continue
 		}
 
-		databaseRequests.Add(state.DemandTarget[clients.Resource, database.Database]{
-			Parent: client,
-			Target: database.Database{
-				Name: client.Database,
-				Cluster: database.Cluster{
-					Name:      client.Cluster.Name,
-					Namespace: client.Cluster.Namespace,
+		if client.Owner {
+			databaseRequests.Add(state.DemandTarget[clients.Resource, database.Database]{
+				Parent: client,
+				Target: database.Database{
+					Name: client.Database,
+					Cluster: database.Cluster{
+						Name:      client.Cluster.Name,
+						Namespace: client.Cluster.Namespace,
+					},
+					Owner: client.Username,
 				},
-			},
-		})
+			})
+		}
 
 		userRequests.Add(state.DemandTarget[clients.Resource, database.User]{
 			Parent: client,
@@ -94,6 +97,7 @@ func (s *State) getRequests() (
 			Target: database.Permission{
 				User:     client.Username,
 				Database: client.Database,
+				Owner:    client.Owner,
 				Cluster: database.Cluster{
 					Name:      client.Cluster.Name,
 					Namespace: client.Cluster.Namespace,
@@ -173,15 +177,19 @@ func (s *State) diffPermissions(
 	demand := state.NewDemand[clients.Resource, database.Permission]()
 
 	for _, permissionRequest := range requests.List() {
-		_, permissionExists := s.permissions.Get(permissionRequest.Target.GetName(), permissionRequest.Target.GetNamespace())
+		existing, permissionExists := s.permissions.Get(permissionRequest.Target.GetName(), permissionRequest.Target.GetNamespace())
 		_, isRefreshing := deadUsers.Get(permissionRequest.Parent.Username, permissionRequest.Target.GetNamespace())
 
 		if !permissionExists {
 			demand.ToAdd.Add(permissionRequest)
+			continue
 		}
 
-		if permissionExists && isRefreshing {
+		if isRefreshing {
 			demand.ToRemove.Add(permissionRequest.Target)
+			demand.ToAdd.Add(permissionRequest)
+		} else if existing.Owner != permissionRequest.Target.Owner {
+			demand.ToRemove.Add(existing)
 			demand.ToAdd.Add(permissionRequest)
 		}
 	}

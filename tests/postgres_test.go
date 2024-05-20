@@ -66,6 +66,7 @@ func TestPostgresIntegration(t *testing.T) {
 			Namespace: namespace,
 			Username:  "my_user",
 			Secret:    "my-secret",
+			Owner:     true,
 		},
 	}))
 

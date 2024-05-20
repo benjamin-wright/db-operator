@@ -129,6 +129,34 @@ func (d *AdminConn) DropDatabase(database string) error {
 	return nil
 }
 
+func (d *AdminConn) SetOwner(database string, user string) error {
+	log.Info().Msgf("Setting owner of %s to %s", database, user)
+	if _, err := d.conn.Exec(context.Background(), "ALTER DATABASE "+sanitize(database)+" OWNER TO "+sanitize(user)); err != nil {
+		return fmt.Errorf("failed to set database owner: %+v", err)
+	}
+
+	return nil
+}
+
+func (d *AdminConn) GetOwner(database string) (string, error) {
+	rows, err := d.conn.Query(context.Background(), "SELECT datdba FROM pg_catalog.pg_database WHERE datname = '"+sanitize(database)+"'")
+	if err != nil {
+		return "", fmt.Errorf("failed to get database owner: %+v", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return "", fmt.Errorf("database not found")
+	}
+
+	var owner string
+	if err := rows.Scan(&owner); err != nil {
+		return "", fmt.Errorf("failed to decode database owner: %+v", err)
+	}
+
+	return owner, nil
+}
+
 func (d *AdminConn) ListPermitted(database string) ([]string, error) {
 	rows, err := d.conn.Query(context.Background(), "SELECT * FROM information_schema.role_table_grants WHERE grantee = '"+sanitize(database)+"'")
 	if err != nil {

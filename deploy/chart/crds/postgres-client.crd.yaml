@@ -25,6 +25,8 @@ spec:
                   required: [ name, namespace ]
                 database:
                   type: string
+                owner:
+                  type: boolean
                 username:
                   type: string
                 secret:

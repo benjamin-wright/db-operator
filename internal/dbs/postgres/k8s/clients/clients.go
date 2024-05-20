@@ -30,6 +30,7 @@ type Comparable struct {
 	Database  string
 	Username  string
 	Secret    string
+	Owner     bool
 }
 
 type Resource struct {
@@ -55,6 +56,7 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 			"database": r.Database,
 			"username": r.Username,
 			"secret":   r.Secret,
+			"owner":    r.Owner,
 		},
 	})
 
@@ -92,6 +94,13 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	r.Secret, err = k8s_generic.GetProperty[string](obj, "spec", "secret")
 	if err != nil {
 		return r, fmt.Errorf("failed to get secret: %+v", err)
+	}
+
+	r.Owner, err = k8s_generic.GetProperty[bool](obj, "spec", "owner")
+	if err != nil {
+		if _, ok := err.(*k8s_generic.MissingError); !ok {
+			return r, fmt.Errorf("failed to get owner: %+v", err)
+		}
 	}
 
 	return r, nil
