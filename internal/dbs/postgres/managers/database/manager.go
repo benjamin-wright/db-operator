@@ -149,45 +149,21 @@ func (m *Manager) processPostgresClients() {
 
 	clusters := newConsolidator()
 	for _, db := range dbDemand.ToAdd.List() {
-		if db.Target.Cluster.Name == "" {
-			log.Error().Msgf("Database to add %s has no cluster", db.Target.Name)
-			continue
-		}
 		clusters.add(db.Target.Cluster.Name, db.Target.Cluster.Namespace)
 	}
 	for _, db := range dbDemand.ToRemove.List() {
-		if db.Cluster.Name == "" {
-			log.Error().Msgf("Database to remove %s has no cluster", db.Name)
-			continue
-		}
 		clusters.add(db.Cluster.Name, db.Cluster.Namespace)
 	}
 	for _, user := range userDemand.ToAdd.List() {
-		if user.Target.Cluster.Name == "" {
-			log.Error().Msgf("User to add %s has no cluster", user.Target.Name)
-			continue
-		}
 		clusters.add(user.Target.Cluster.Name, user.Target.Cluster.Namespace)
 	}
 	for _, user := range userDemand.ToRemove.List() {
-		if user.Cluster.Name == "" {
-			log.Error().Msgf("User to remove %s has no cluster", user.Name)
-			continue
-		}
 		clusters.add(user.Cluster.Name, user.Cluster.Namespace)
 	}
 	for _, perm := range permsDemand.ToAdd.List() {
-		if perm.Target.Cluster.Name == "" {
-			log.Error().Msgf("Permission to add %s has no cluster", perm.Target.User)
-			continue
-		}
 		clusters.add(perm.Target.Cluster.Name, perm.Target.Cluster.Namespace)
 	}
 	for _, perm := range permsDemand.ToRemove.List() {
-		if perm.Cluster.Name == "" {
-			log.Error().Msgf("Permission to remove %s has no cluster", perm.User)
-			continue
-		}
 		clusters.add(perm.Cluster.Name, perm.Cluster.Namespace)
 	}
 

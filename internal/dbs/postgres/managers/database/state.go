@@ -67,6 +67,17 @@ func (s *State) getRequests() (
 			continue
 		}
 
+		userRequests.Add(state.DemandTarget[clients.Resource, database.User]{
+			Parent: client,
+			Target: database.User{
+				Name: client.Username,
+				Cluster: database.Cluster{
+					Name:      client.Cluster.Name,
+					Namespace: client.Cluster.Namespace,
+				},
+			},
+		})
+
 		if client.Owner {
 			databaseRequests.Add(state.DemandTarget[clients.Resource, database.Database]{
 				Parent: client,
@@ -79,31 +90,19 @@ func (s *State) getRequests() (
 					Owner: client.Username,
 				},
 			})
+		} else {
+			permissionRequests.Add(state.DemandTarget[clients.Resource, database.Permission]{
+				Parent: client,
+				Target: database.Permission{
+					User:     client.Username,
+					Database: client.Database,
+					Cluster: database.Cluster{
+						Name:      client.Cluster.Name,
+						Namespace: client.Cluster.Namespace,
+					},
+				},
+			})
 		}
-
-		userRequests.Add(state.DemandTarget[clients.Resource, database.User]{
-			Parent: client,
-			Target: database.User{
-				Name: client.Username,
-				Cluster: database.Cluster{
-					Name:      client.Cluster.Name,
-					Namespace: client.Cluster.Namespace,
-				},
-			},
-		})
-
-		permissionRequests.Add(state.DemandTarget[clients.Resource, database.Permission]{
-			Parent: client,
-			Target: database.Permission{
-				User:     client.Username,
-				Database: client.Database,
-				Owner:    client.Owner,
-				Cluster: database.Cluster{
-					Name:      client.Cluster.Name,
-					Namespace: client.Cluster.Namespace,
-				},
-			},
-		})
 
 		secretRequests.Add(state.DemandTarget[clients.Resource, secrets.Resource]{
 			Parent: client,
@@ -173,6 +172,7 @@ func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Reso
 func (s *State) diffPermissions(
 	requests bucket.Bucket[state.DemandTarget[clients.Resource, database.Permission]],
 	deadUsers bucket.Bucket[database.User],
+	newDatabases bucket.Bucket[state.DemandTarget[clients.Resource, database.Database]],
 ) state.Demand[clients.Resource, database.Permission] {
 	demand := state.NewDemand[clients.Resource, database.Permission]()
 
@@ -180,17 +180,30 @@ func (s *State) diffPermissions(
 		existing, permissionExists := s.permissions.Get(permissionRequest.Target.GetName(), permissionRequest.Target.GetNamespace())
 		_, isRefreshing := deadUsers.Get(permissionRequest.Parent.Username, permissionRequest.Target.GetNamespace())
 
-		if !permissionExists {
-			demand.ToAdd.Add(permissionRequest)
-			continue
+		if permissionExists {
+			if isRefreshing {
+				demand.ToRemove.Add(permissionRequest.Target)
+				permissionExists = false
+			} else if existing.Owner != permissionRequest.Target.Owner {
+				demand.ToRemove.Add(existing)
+				permissionExists = false
+			}
 		}
 
-		if isRefreshing {
-			demand.ToRemove.Add(permissionRequest.Target)
+		if !permissionExists {
+			if database, ok := newDatabases.Get(permissionRequest.Target.Database, permissionRequest.Target.GetNamespace()); ok {
+				permissionRequest.Target.Owner = database.Target.Owner
+			} else if database, ok := s.databases.Get(permissionRequest.Target.Database, permissionRequest.Target.GetNamespace()); ok {
+				permissionRequest.Target.Owner = database.Owner
+			} else {
+				log.Logger.Error().Str("permission", permissionRequest.Target.GetName()).Msg("wat dis? Database not found for permission")
+				continue
+			}
+
+			log.Info().Msgf("Adding permission %+v", permissionRequest)
+
 			demand.ToAdd.Add(permissionRequest)
-		} else if existing.Owner != permissionRequest.Target.Owner {
-			demand.ToRemove.Add(existing)
-			demand.ToAdd.Add(permissionRequest)
+			continue
 		}
 	}
 
@@ -249,7 +262,7 @@ func (s *State) GetDemand() (
 
 	dbDemand := s.diffDatabases(dbRequests)
 	userDemand := s.diffUsers(userRequests)
-	permissionDemand := s.diffPermissions(permissionRequests, userDemand.ToRemove)
+	permissionDemand := s.diffPermissions(permissionRequests, userDemand.ToRemove, dbDemand.ToAdd)
 	secretsDemand := s.diffSecrets(secretRequests, userDemand)
 
 	return dbDemand, userDemand, permissionDemand, secretsDemand

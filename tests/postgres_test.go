@@ -70,6 +70,17 @@ func TestPostgresIntegration(t *testing.T) {
 		},
 	}))
 
+	mustPass(t, client.Clients().Create(context.Background(), clients.Resource{
+		Comparable: clients.Comparable{
+			Cluster:   clients.Cluster{Name: "different-db", Namespace: namespace},
+			Database:  "new_db",
+			Name:      "other-client",
+			Namespace: namespace,
+			Username:  "other_user",
+			Secret:    "other-secret",
+		},
+	}))
+
 	secret := waitForResult(t, func() (secrets.Resource, error) {
 		return client.Secrets().Get(context.Background(), "my-secret", namespace)
 	})

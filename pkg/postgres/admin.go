@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/jackc/pgx/v4"
 )
@@ -116,7 +117,7 @@ func (d *AdminConn) SetOwner(database string, user string) error {
 }
 
 func (d *AdminConn) GetOwner(database string) (string, error) {
-	rows, err := d.conn.Query(context.Background(), "SELECT datdba FROM pg_catalog.pg_database WHERE datname = '"+sanitize(database)+"'")
+	rows, err := d.conn.Query(context.Background(), "SELECT B.usename FROM pg_database A INNER JOIN pg_user B ON A.datdba = B.usesysid WHERE A.datname = $1", database)
 	if err != nil {
 		return "", fmt.Errorf("failed to get database owner: %+v", err)
 	}
@@ -134,8 +135,10 @@ func (d *AdminConn) GetOwner(database string) (string, error) {
 	return owner, nil
 }
 
+var ACL_REGEX = regexp.MustCompile(`^{(\w+)=.*\/.*}$`)
+
 func (d *AdminConn) ListPermitted(database string) ([]string, error) {
-	rows, err := d.conn.Query(context.Background(), "SELECT * FROM information_schema.role_table_grants WHERE grantee = '"+sanitize(database)+"'")
+	rows, err := d.conn.Query(context.Background(), "SELECT defaclacl FROM pg_default_acl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
@@ -144,15 +147,22 @@ func (d *AdminConn) ListPermitted(database string) ([]string, error) {
 	permittedMap := map[string]struct{}{}
 
 	for rows.Next() {
-		var user string
-		var privilege_type string
-		if err := rows.Scan(nil, &user, &privilege_type, nil); err != nil {
+		var acl string
+		if err := rows.Scan(&acl); err != nil {
 			return nil, fmt.Errorf("failed to decode user permission: %+v", err)
 		}
 
-		if privilege_type == "ALL" {
-			permittedMap[user] = struct{}{}
+		matches := ACL_REGEX.FindStringSubmatch(acl)
+		if len(matches) != 2 {
+			return nil, fmt.Errorf("failed to parse user permission: %s", acl)
 		}
+
+		user := matches[1]
+		if user == "" {
+			return nil, fmt.Errorf("failed to parse user permission: %s", acl)
+		}
+
+		permittedMap[user] = struct{}{}
 	}
 
 	permitted := make([]string, len(permittedMap))
@@ -163,41 +173,33 @@ func (d *AdminConn) ListPermitted(database string) ([]string, error) {
 	return permitted, nil
 }
 
-func (d *AdminConn) GrantPermissions(username string, database string) error {
-	query := fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s", sanitize(database), sanitize(username))
-	if _, err := d.conn.Exec(context.Background(), query); err != nil {
-		return fmt.Errorf("failed to grant permissions: %+v", err)
+func (d *AdminConn) GrantPermissions(username string, owner string) error {
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT INSERT, SELECT, UPDATE, DELETE ON TABLES TO %s", sanitize(owner), sanitize(username))); err != nil {
+		return fmt.Errorf("failed to grant default table permissions: %+v", err)
 	}
 
-	// query = fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR ROLE postgres GRANT ALL ON TABLES TO %s;", sanitize(username), sanitize(username))
-	// _, err := d.conn.Exec(context.Background(), query)
-	// if pgerr := parsePGXError(err); pgerr != nil {
-	// 	return fmt.Errorf("failed to grant default table permissions: %+v", pgerr)
-	// }
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT SELECT, UPDATE ON SEQUENCES TO %s", sanitize(owner), sanitize(username))); err != nil {
+		return fmt.Errorf("failed to grant default sequence permissions: %+v", err)
+	}
 
-	// query = fmt.Sprintf("GRANT ALL ON %s.* TO %s", sanitize(database), sanitize(username))
-	// _, err = d.conn.Exec(context.Background(), query)
-	// if pgerr := parsePGXError(err); pgerr != nil {
-	// 	return fmt.Errorf("failed to grant existing table permissions: %+v", err)
-	// }
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("GRANT INSERT, SELECT, UPDATE, DELETE ON ALL TABLES TO %s", sanitize(username))); err != nil {
+		return fmt.Errorf("failed to grant existing table permissions: %+v", err)
+	}
 
 	return nil
 }
 
-func (d *AdminConn) RevokePermissions(username string, database string) error {
-	query := fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE ALL ON DATABASE %s FROM %s;", sanitize(database), sanitize(username))
-	if _, err := d.conn.Exec(context.Background(), query); err != nil {
-		return fmt.Errorf("failed to revoke default permissions: %+v", err)
+func (d *AdminConn) RevokePermissions(username string, owner string) error {
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public REVOKE INSERT, SELECT, UPDATE, DELETE ON TABLES FROM %s", sanitize(owner), sanitize(username))); err != nil {
+		return fmt.Errorf("failed to revoke default table permissions: %+v", err)
 	}
 
-	query = fmt.Sprintf("REVOKE ALL ON * FROM %s", sanitize(username))
-	if _, err := d.conn.Exec(context.Background(), query); err != nil {
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public REVOKE SELECT, UPDATE ON SEQUENCES FROM %s", sanitize(owner), sanitize(username))); err != nil {
+		return fmt.Errorf("failed to revoke default sequence permissions: %+v", err)
+	}
+
+	if _, err := d.conn.Exec(context.Background(), fmt.Sprintf("REVOKE INSERT, SELECT, UPDATE, DELETE ON ALL TABLES FROM %s", sanitize(username))); err != nil {
 		return fmt.Errorf("failed to revoke existing table permissions: %+v", err)
-	}
-
-	query = fmt.Sprintf("REVOKE ALL ON DATABASE %s FROM %s", sanitize(database), sanitize(username))
-	if _, err := d.conn.Exec(context.Background(), query); err != nil {
-		return fmt.Errorf("failed to revoke permissions: %+v", err)
 	}
 
 	return nil

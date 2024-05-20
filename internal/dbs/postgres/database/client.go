@@ -79,12 +79,18 @@ func (c *Client) ListDBs() ([]Database, error) {
 			continue
 		}
 
+		owner, err := c.conn.GetOwner(name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get owner of database %s: %+v", name, err)
+		}
+
 		databases = append(databases, Database{
 			Cluster: Cluster{
 				Name:      c.cluster,
 				Namespace: c.namespace,
 			},
-			Name: name,
+			Name:  name,
+			Owner: owner,
 		})
 	}
 
@@ -192,7 +198,7 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 
 func (c *Client) GrantPermission(permission Permission) error {
 	c.logger.Info().Msgf("Granting '%s' permission to read/write to '%s'", permission.User, permission.Database)
-	err := c.conn.GrantPermissions(permission.User, permission.Database)
+	err := c.conn.GrantPermissions(permission.User, permission.Owner)
 	if err != nil {
 		return fmt.Errorf("failed to grant permission: %+v", err)
 	}
@@ -202,7 +208,7 @@ func (c *Client) GrantPermission(permission Permission) error {
 
 func (c *Client) RevokePermission(permission Permission) error {
 	c.logger.Info().Msgf("Revoking '%s' permission to read/write to '%s'", permission.User, permission.Database)
-	err := c.conn.RevokePermissions(permission.User, permission.Database)
+	err := c.conn.RevokePermissions(permission.User, permission.Owner)
 	if err != nil {
 		return fmt.Errorf("failed to revoke permission: %+v", err)
 	}
