@@ -144,6 +144,8 @@ func (s *State) diffDatabases(requests bucket.Bucket[state.DemandTarget[clients.
 	return demand
 }
 
+var generatePassword = utils.GeneratePassword
+
 func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Resource, database.User]]) state.Demand[clients.Resource, database.User] {
 	demand := state.NewDemand[clients.Resource, database.User]()
 
@@ -157,7 +159,7 @@ func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Reso
 		}
 
 		if !userExists {
-			userRequest.Target.Password = utils.GeneratePassword(32, true, true)
+			userRequest.Target.Password = generatePassword(32, true, true)
 			demand.ToAdd.Add(userRequest)
 		}
 	}

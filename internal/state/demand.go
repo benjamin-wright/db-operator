@@ -5,6 +5,10 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/state/types"
 )
 
+func NewDemandTarget[T types.Nameable, U types.Nameable](parent T, target U) DemandTarget[T, U] {
+	return DemandTarget[T, U]{Parent: parent, Target: target}
+}
+
 type DemandTarget[T types.Nameable, U types.Nameable] struct {
 	Parent T
 	Target U
@@ -28,6 +32,20 @@ func NewDemand[T types.Nameable, U types.Nameable]() Demand[T, U] {
 		ToAdd:    bucket.NewBucket[DemandTarget[T, U]](),
 		ToRemove: bucket.NewBucket[U](),
 	}
+}
+
+func NewInitializedDemand[T types.Nameable, U types.Nameable](toAdd []DemandTarget[T, U], toRemove []U) Demand[T, U] {
+	d := NewDemand[T, U]()
+
+	for _, obj := range toAdd {
+		d.ToAdd.Add(obj)
+	}
+
+	for _, obj := range toRemove {
+		d.ToRemove.Add(obj)
+	}
+
+	return d
 }
 
 func GetOneForOne[
