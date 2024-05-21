@@ -57,6 +57,12 @@ func secret(id int, clusterid int, password string) secrets.Resource {
 	}
 }
 
+func secretWithUser(id int, clusterid int, password string, user string) secrets.Resource {
+	s := secret(id, clusterid, password)
+	s.User = user
+	return s
+}
+
 func db(ownerid int, clusterid int) database.Database {
 	return database.Database{
 		Name:  "database" + strconv.Itoa(clusterid),
@@ -79,6 +85,11 @@ func user(id int, clusterid int, password string) database.User {
 	}
 }
 
+func withName(u database.User, name string) database.User {
+	u.Name = name
+	return u
+}
+
 func permission(id int, clusterid int) database.Permission {
 	return database.Permission{
 		Database: "database" + strconv.Itoa(clusterid),
@@ -91,10 +102,8 @@ func permission(id int, clusterid int) database.Permission {
 }
 
 func TestGetDemand(t *testing.T) {
-	count := 0
-	generatePassword = func(int, bool, bool) string {
-		count++
-		return "password" + strconv.Itoa(count)
+	generatePassword = func(name string) string {
+		return name + "-pwd"
 	}
 
 	type existing struct {
@@ -117,9 +126,10 @@ func TestGetDemand(t *testing.T) {
 		secretToRemove     []secrets.Resource
 	}
 
-	user1 := 1
-	user2 := 2
-	cluster1 := 1
+	userid1 := 1
+	userid2 := 2
+	// userid3 := 3
+	clusterid1 := 1
 
 	tests := []struct {
 		name     string
@@ -132,55 +142,138 @@ func TestGetDemand(t *testing.T) {
 		{
 			name: "one client with offline statefulset",
 			existing: existing{
-				clients:      []clients.Resource{client(user1, cluster1, true)},
-				statefulSets: []stateful_sets.Resource{statefulset(cluster1, false)},
+				clients:      []clients.Resource{client(userid1, clusterid1, true)},
+				statefulSets: []stateful_sets.Resource{statefulset(clusterid1, false)},
 			},
 		},
 		{
 			name: "one client",
 			existing: existing{
-				clients:      []clients.Resource{client(user1, cluster1, true)},
-				statefulSets: []stateful_sets.Resource{statefulset(cluster1, true)},
+				clients:      []clients.Resource{client(userid1, clusterid1, true)},
+				statefulSets: []stateful_sets.Resource{statefulset(clusterid1, true)},
 			},
 			expected: expected{
 				dbToAdd: []state.DemandTarget[clients.Resource, database.Database]{
-					state.NewDemandTarget(client(user1, cluster1, true), db(user1, cluster1)),
+					state.NewDemandTarget(client(userid1, clusterid1, true), db(userid1, clusterid1)),
 				},
 				userToAdd: []state.DemandTarget[clients.Resource, database.User]{
-					state.NewDemandTarget(client(user1, cluster1, true), user(user1, cluster1, "password1")),
+					state.NewDemandTarget(client(userid1, clusterid1, true), user(userid1, clusterid1, "user1-pwd")),
 				},
 				secretToAdd: []state.DemandTarget[clients.Resource, secrets.Resource]{
-					state.NewDemandTarget(client(user1, cluster1, true), secret(user1, cluster1, "password1")),
+					state.NewDemandTarget(client(userid1, clusterid1, true), secret(userid1, clusterid1, "user1-pwd")),
 				},
 			},
 		},
 		{
 			name: "two clients",
 			existing: existing{
-				clients:      []clients.Resource{client(user1, cluster1, true), client(user2, cluster1, false)},
-				statefulSets: []stateful_sets.Resource{statefulset(cluster1, true)},
+				clients:      []clients.Resource{client(userid1, clusterid1, true), client(userid2, clusterid1, false)},
+				statefulSets: []stateful_sets.Resource{statefulset(clusterid1, true)},
 			},
 			expected: expected{
 				dbToAdd: []state.DemandTarget[clients.Resource, database.Database]{
-					state.NewDemandTarget(client(user1, cluster1, true), db(user1, cluster1)),
+					state.NewDemandTarget(client(userid1, clusterid1, true), db(userid1, clusterid1)),
 				},
 				userToAdd: []state.DemandTarget[clients.Resource, database.User]{
-					state.NewDemandTarget(client(user1, cluster1, true), user(user1, cluster1, "password1")),
-					state.NewDemandTarget(client(user2, cluster1, false), user(user2, cluster1, "password2")),
+					state.NewDemandTarget(client(userid1, clusterid1, true), user(userid1, clusterid1, "user1-pwd")),
+					state.NewDemandTarget(client(userid2, clusterid1, false), user(userid2, clusterid1, "user2-pwd")),
 				},
 				secretToAdd: []state.DemandTarget[clients.Resource, secrets.Resource]{
-					state.NewDemandTarget(client(user1, cluster1, true), secret(user1, cluster1, "password1")),
-					state.NewDemandTarget(client(user2, cluster1, false), secret(user2, cluster1, "password2")),
+					state.NewDemandTarget(client(userid1, clusterid1, true), secret(userid1, clusterid1, "user1-pwd")),
+					state.NewDemandTarget(client(userid2, clusterid1, false), secret(userid2, clusterid1, "user2-pwd")),
 				},
 				permissionToAdd: []state.DemandTarget[clients.Resource, database.Permission]{
-					state.NewDemandTarget(client(user2, cluster1, false), permission(user2, cluster1)),
+					state.NewDemandTarget(client(userid2, clusterid1, false), permission(userid2, clusterid1)),
 				},
 			},
 		},
+		{
+			name: "everything exists",
+			existing: existing{
+				clients:      []clients.Resource{client(userid1, clusterid1, true), client(userid2, clusterid1, false)},
+				statefulSets: []stateful_sets.Resource{statefulset(clusterid1, true)},
+				databases:    []database.Database{db(userid1, clusterid1)},
+				users:        []database.User{user(userid1, clusterid1, ""), user(userid2, clusterid1, "")},
+				permissions:  []database.Permission{permission(userid2, clusterid1)},
+				secrets:      []secrets.Resource{secret(userid1, clusterid1, "oldpwd1"), secret(userid2, clusterid1, "oldpwd2")},
+			},
+		},
+		{
+			name: "missing secret",
+			existing: existing{
+				clients:      []clients.Resource{client(userid1, clusterid1, true), client(userid2, clusterid1, false)},
+				statefulSets: []stateful_sets.Resource{statefulset(clusterid1, true)},
+				databases:    []database.Database{db(userid1, clusterid1)},
+				users:        []database.User{user(userid1, clusterid1, ""), user(userid2, clusterid1, "")},
+				permissions:  []database.Permission{permission(userid2, clusterid1)},
+				secrets:      []secrets.Resource{secret(userid1, clusterid1, "oldpwd1")},
+			},
+			expected: expected{
+				userToRemove: []database.User{user(userid2, clusterid1, "")},
+				userToAdd: []state.DemandTarget[clients.Resource, database.User]{
+					state.NewDemandTarget(client(userid2, clusterid1, false), user(userid2, clusterid1, "user2-pwd")),
+				},
+				permissionToRemove: []database.Permission{permission(userid2, clusterid1)},
+				permissionToAdd: []state.DemandTarget[clients.Resource, database.Permission]{
+					state.NewDemandTarget(client(userid2, clusterid1, false), permission(userid2, clusterid1)),
+				},
+				secretToAdd: []state.DemandTarget[clients.Resource, secrets.Resource]{
+					state.NewDemandTarget(client(userid2, clusterid1, false), secret(userid2, clusterid1, "user2-pwd")),
+				},
+			},
+		},
+		{
+			name: "missing user",
+			existing: existing{
+				clients:      []clients.Resource{client(userid1, clusterid1, true), client(userid2, clusterid1, false)},
+				statefulSets: []stateful_sets.Resource{statefulset(clusterid1, true)},
+				databases:    []database.Database{db(userid1, clusterid1)},
+				users:        []database.User{user(userid1, clusterid1, "")},
+				permissions:  []database.Permission{permission(userid2, clusterid1)},
+				secrets:      []secrets.Resource{secret(userid1, clusterid1, "oldpwd1"), secret(userid2, clusterid1, "oldpwd2")},
+			},
+			expected: expected{
+				userToAdd: []state.DemandTarget[clients.Resource, database.User]{
+					state.NewDemandTarget(client(userid2, clusterid1, false), user(userid2, clusterid1, "user2-pwd")),
+				},
+				secretToRemove: []secrets.Resource{secret(userid2, clusterid1, "oldpwd2")},
+				secretToAdd: []state.DemandTarget[clients.Resource, secrets.Resource]{
+					state.NewDemandTarget(client(userid2, clusterid1, false), secret(userid2, clusterid1, "user2-pwd")),
+				},
+				permissionToRemove: []database.Permission{permission(userid2, clusterid1)},
+				permissionToAdd: []state.DemandTarget[clients.Resource, database.Permission]{
+					state.NewDemandTarget(client(userid2, clusterid1, false), permission(userid2, clusterid1)),
+				},
+			},
+		},
+		// {
+		// 	name: "wrong user name",
+		// 	existing: existing{
+		// 		clients:      []clients.Resource{client(userid1, clusterid1, true), client(userid2, clusterid1, false)},
+		// 		statefulSets: []stateful_sets.Resource{statefulset(clusterid1, true)},
+		// 		databases:    []database.Database{db(userid1, clusterid1)},
+		// 		users:        []database.User{user(userid1, clusterid1, ""), withName(user(userid2, clusterid1, ""), "user3")},
+		// 		permissions:  []database.Permission{permission(userid3, clusterid1)},
+		// 		secrets:      []secrets.Resource{secret(userid1, clusterid1, "oldpwd1"), secretWithUser(userid2, clusterid1, "oldpwd2", "user3")},
+		// 	},
+		// 	expected: expected{
+		// 		userToRemove: []database.User{withName(user(userid2, clusterid1, ""), "user3")},
+		// 		userToAdd: []state.DemandTarget[clients.Resource, database.User]{
+		// 			state.NewDemandTarget(client(userid2, clusterid1, false), user(userid2, clusterid1, "user2-pwd")),
+		// 		},
+		// 		permissionToRemove: []database.Permission{permission(userid3, clusterid1)},
+		// 		permissionToAdd: []state.DemandTarget[clients.Resource, database.Permission]{
+		// 			state.NewDemandTarget(client(userid2, clusterid1, false), permission(userid2, clusterid1)),
+		// 		},
+		// 		secretToRemove: []secrets.Resource{secretWithUser(userid2, clusterid1, "oldpwd2", "user3")},
+		// 		secretToAdd: []state.DemandTarget[clients.Resource, secrets.Resource]{
+		// 			state.NewDemandTarget(client(userid2, clusterid1, false), secret(userid2, clusterid1, "user2-pwd")),
+		// 		},
+		// 	},
+		// },
 	}
 
 	for _, tt := range tests {
-		count = 0
 		t.Run(tt.name, func(t *testing.T) {
 			s := State{
 				clients:      bucket.NewBucket[clients.Resource](),

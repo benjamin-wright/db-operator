@@ -1,8 +1,6 @@
 package database
 
 import (
-	"fmt"
-
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/database"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
@@ -144,7 +142,9 @@ func (s *State) diffDatabases(requests bucket.Bucket[state.DemandTarget[clients.
 	return demand
 }
 
-var generatePassword = utils.GeneratePassword
+var generatePassword = func(user string) string {
+	return utils.GeneratePassword(32, true, true)
+}
 
 func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Resource, database.User]]) state.Demand[clients.Resource, database.User] {
 	demand := state.NewDemand[clients.Resource, database.User]()
@@ -159,7 +159,7 @@ func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Reso
 		}
 
 		if !userExists {
-			userRequest.Target.Password = generatePassword(32, true, true)
+			userRequest.Target.Password = generatePassword(userRequest.Target.Name)
 			demand.ToAdd.Add(userRequest)
 		}
 	}
@@ -171,18 +171,6 @@ func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Reso
 	}
 
 	return demand
-}
-
-func (s *State) getOwner(database string, newDatabases bucket.Bucket[state.DemandTarget[clients.Resource, database.Database]]) (string, error) {
-	if db, ok := newDatabases.Get(database, ""); ok {
-		return db.Target.Owner, nil
-	}
-
-	if db, ok := s.databases.Get(database, ""); ok {
-		return db.Owner, nil
-	}
-
-	return "", fmt.Errorf("database %s not found", database)
 }
 
 func (s *State) diffPermissions(
