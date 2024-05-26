@@ -19,6 +19,7 @@ type State struct {
 	databases    bucket.Bucket[database.Database]
 	users        bucket.Bucket[database.User]
 	permissions  bucket.Bucket[database.Permission]
+	passwords    map[string]string
 }
 
 func (s *State) Apply(update interface{}) {
@@ -149,18 +150,19 @@ var generatePassword = func(user string) string {
 func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Resource, database.User]]) state.Demand[clients.Resource, database.User] {
 	demand := state.NewDemand[clients.Resource, database.User]()
 
-	for _, userRequest := range requests.List() {
-		_, userExists := s.users.Get(userRequest.Target.GetName(), userRequest.Target.GetNamespace())
-		_, secretExists := s.secrets.Get(userRequest.Parent.Secret, userRequest.Parent.Namespace)
+	for _, request := range requests.List() {
+		_, userExists := s.users.Get(request.Target.GetName(), request.Target.GetNamespace())
+		_, secretExists := s.secrets.Get(request.Parent.Secret, request.Parent.Namespace)
 
 		if userExists && !secretExists {
-			demand.ToRemove.Add(userRequest.Target)
+			demand.ToRemove.Add(request.Target)
 			userExists = false
 		}
 
 		if !userExists {
-			userRequest.Target.Password = generatePassword(userRequest.Target.Name)
-			demand.ToAdd.Add(userRequest)
+			s.passwords[request.Parent.Name+":"+request.Parent.Namespace] = generatePassword(request.Target.Name)
+			request.Target.Password = s.passwords[request.Parent.Name+":"+request.Parent.Namespace]
+			demand.ToAdd.Add(request)
 		}
 	}
 
@@ -173,25 +175,52 @@ func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Reso
 	return demand
 }
 
+func (s *State) diffSecrets(
+	requests bucket.Bucket[state.DemandTarget[clients.Resource, secrets.Resource]],
+) state.Demand[clients.Resource, secrets.Resource] {
+	demand := state.NewDemand[clients.Resource, secrets.Resource]()
+
+	for _, request := range requests.List() {
+		oldSecret, secretExists := s.secrets.Get(request.Target.GetName(), request.Target.GetNamespace())
+		_, userExists := s.users.Get(request.Parent.Username, request.Target.Cluster.GetNamespace())
+
+		if secretExists && !userExists {
+			demand.ToRemove.Add(oldSecret)
+			secretExists = false
+		}
+
+		if !secretExists {
+			request.Target.Password = s.passwords[request.Parent.Name+":"+request.Parent.Namespace]
+			demand.ToAdd.Add(request)
+		}
+	}
+
+	for _, secret := range s.secrets.List() {
+		if _, ok := requests.Get(secret.GetName(), secret.GetNamespace()); !ok {
+			demand.ToRemove.Add(secret)
+		}
+	}
+
+	return demand
+}
+
 func (s *State) diffPermissions(
 	requests bucket.Bucket[state.DemandTarget[clients.Resource, database.Permission]],
-	deadUsers bucket.Bucket[database.User],
 ) state.Demand[clients.Resource, database.Permission] {
 	demand := state.NewDemand[clients.Resource, database.Permission]()
 
-	for _, permissionRequest := range requests.List() {
-		_, permissionExists := s.permissions.Get(permissionRequest.Target.GetName(), permissionRequest.Target.GetNamespace())
-		_, isRefreshing := deadUsers.Get(permissionRequest.Parent.Username, permissionRequest.Target.GetNamespace())
+	for _, request := range requests.List() {
+		_, permissionExists := s.permissions.Get(request.Target.GetName(), request.Target.GetNamespace())
+		_, userExists := s.users.Get(request.Parent.Username, request.Target.GetNamespace())
+		_, secretExists := s.secrets.Get(request.Parent.Secret, request.Parent.Namespace)
 
-		if permissionExists {
-			if isRefreshing {
-				demand.ToRemove.Add(permissionRequest.Target)
-				permissionExists = false
-			}
+		if permissionExists && (!userExists || !secretExists) {
+			demand.ToRemove.Add(request.Target)
+			permissionExists = false
 		}
 
 		if !permissionExists {
-			demand.ToAdd.Add(permissionRequest)
+			demand.ToAdd.Add(request)
 			continue
 		}
 	}
@@ -199,42 +228,6 @@ func (s *State) diffPermissions(
 	for _, permission := range s.permissions.List() {
 		if _, ok := requests.Get(permission.GetName(), permission.GetNamespace()); !ok {
 			demand.ToRemove.Add(permission)
-		}
-	}
-
-	return demand
-}
-
-func (s *State) diffSecrets(
-	requests bucket.Bucket[state.DemandTarget[clients.Resource, secrets.Resource]],
-	users state.Demand[clients.Resource, database.User],
-) state.Demand[clients.Resource, secrets.Resource] {
-	demand := state.NewDemand[clients.Resource, secrets.Resource]()
-
-	for _, secretRequest := range requests.List() {
-		_, secretExists := s.secrets.Get(secretRequest.Target.GetName(), secretRequest.Target.GetNamespace())
-		_, isRefreshing := users.ToRemove.Get(secretRequest.Parent.Username, secretRequest.Target.Cluster.GetNamespace())
-
-		if secretExists && isRefreshing {
-			demand.ToRemove.Add(secretRequest.Target)
-			secretExists = false
-		}
-
-		if !secretExists {
-			user, ok := users.ToAdd.Get(secretRequest.Parent.Username, secretRequest.Target.Cluster.GetNamespace())
-			if !ok {
-				log.Logger.Error().Str("secret", secretRequest.Target.GetName()).Msg("wat dis? User not found for secret")
-				continue
-			}
-
-			secretRequest.Target.Password = user.Target.Password
-			demand.ToAdd.Add(secretRequest)
-		}
-	}
-
-	for _, secret := range s.secrets.List() {
-		if _, ok := requests.Get(secret.GetName(), secret.GetNamespace()); !ok {
-			demand.ToRemove.Add(secret)
 		}
 	}
 
@@ -249,10 +242,11 @@ func (s *State) GetDemand() (
 ) {
 	dbRequests, userRequests, permissionRequests, secretRequests := s.getRequests()
 
+	s.passwords = map[string]string{}
 	dbDemand := s.diffDatabases(dbRequests)
 	userDemand := s.diffUsers(userRequests)
-	permissionDemand := s.diffPermissions(permissionRequests, userDemand.ToRemove)
-	secretsDemand := s.diffSecrets(secretRequests, userDemand)
+	permissionDemand := s.diffPermissions(permissionRequests)
+	secretsDemand := s.diffSecrets(secretRequests)
 
 	return dbDemand, userDemand, permissionDemand, secretsDemand
 }

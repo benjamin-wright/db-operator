@@ -42,7 +42,7 @@ type Permission struct {
 }
 
 func (u Permission) GetName() string {
-	return u.Database + u.User
+	return u.Database + ":" + u.User
 }
 
 func (u Permission) GetNamespace() string {
