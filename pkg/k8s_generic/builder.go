@@ -1,7 +1,6 @@
 package k8s_generic
 
 import (
-	"fmt"
 	"os"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -24,9 +23,6 @@ func NewBuilder() (*Builder, error) {
 	var err error
 
 	if kubeconfig != "" {
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current working directory: %+v", err)
-		}
 		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
 			return nil, err
