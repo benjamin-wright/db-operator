@@ -75,6 +75,10 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 										"name":  "POSTGRES_PASSWORD",
 										"value": "postgres",
 									},
+									{
+										"name":  "ALLOW_EMPTY_PASSWORD",
+										"value": "false",
+									},
 								},
 								"resources": map[string]interface{}{
 									"requests": map[string]interface{}{

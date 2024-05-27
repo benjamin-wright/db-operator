@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/benjamin-wright/db-operator/pkg/postgres"
+	"github.com/benjamin-wright/db-operator/pkg/postgres/config"
 	"github.com/rs/zerolog/log"
 )
 
@@ -43,12 +43,12 @@ func Run(name string, port int64) func() {
 }
 
 func Migrate(path string) {
-	cfg, err := postgres.ConfigFromEnv()
+	cfg, err := config.FromEnv()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to get connection details")
 	}
 
-	conn, err := postgres.Connect(cfg)
+	conn, err := config.Connect(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to connect to postgres")
 	}

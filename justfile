@@ -44,6 +44,9 @@ tilt:
 test:
     go test --short -v ./...
 
+int-test:
+    NAMESPACE=test-ns go test -v ./tests/...
+
 build IMAGE_TAG:
     mkdir -p ./dist
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ./dist/app ./cmd/operator/main.go

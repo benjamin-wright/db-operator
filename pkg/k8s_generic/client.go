@@ -124,7 +124,7 @@ func (c *Client[T]) DeleteAll(ctx context.Context, namespace string) error {
 	c.logger.Info().Msgf("Deleting all resources in %s", namespace)
 	err := c.client.Resource(c.schema).Namespace(namespace).DeleteCollection(ctx, v1.DeleteOptions{}, v1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to delete all resources: %+v", err)
+		return fmt.Errorf("failed to delete all resources in %s: %+v", namespace, err)
 	}
 
 	return nil

@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/benjamin-wright/db-operator/pkg/postgres"
+	"github.com/benjamin-wright/db-operator/pkg/postgres/admin"
+	"github.com/benjamin-wright/db-operator/pkg/postgres/config"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 type Client struct {
-	conn      *postgres.AdminConn
+	conn      *admin.Client
 	cluster   string
 	namespace string
 	database  string
@@ -18,12 +19,13 @@ type Client struct {
 }
 
 func New(cluster string, namespace string, password string, database string) (*Client, error) {
-	cfg := postgres.ConnectConfig{
+	cfg := config.Config{
 		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", cluster, namespace),
 		Port:     26257,
 		Username: "postgres",
 		Password: password,
 		Database: database,
+		Retry:    false,
 	}
 
 	logger := log.With().
@@ -39,7 +41,7 @@ func New(cluster string, namespace string, password string, database string) (*C
 		logger.Debug().Msgf("Opening connection to Postgres Cluster %s", cluster)
 	}
 
-	conn, err := postgres.NewAdminConn(cfg)
+	conn, err := admin.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to postgres db at %s: %+v", cluster, err)
 	}

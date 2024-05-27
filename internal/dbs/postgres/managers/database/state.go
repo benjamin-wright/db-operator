@@ -47,6 +47,54 @@ func (s *State) ClearRemote() {
 	s.permissions.Clear()
 }
 
+func (s *State) clearPasswords() {
+	s.passwords = map[string]string{}
+}
+
+func (s *State) getPassword(client clients.Resource) string {
+	if password, ok := s.passwords[client.Name+":"+client.Namespace]; ok {
+		return password
+	}
+
+	password := generatePassword(client.Username)
+	s.passwords[client.Name+":"+client.Namespace] = password
+	return password
+}
+
+func (s *State) GetActiveClusters() []database.Cluster {
+	clusters := []database.Cluster{}
+
+	for _, ss := range s.statefulSets.List() {
+		if !ss.IsReady() {
+			continue
+		}
+
+		clusters = append(clusters, database.Cluster{
+			Name:      ss.Name,
+			Namespace: ss.Namespace,
+		})
+	}
+
+	return clusters
+}
+
+func (s *State) GetDemand() (
+	state.Demand[clients.Resource, database.Database],
+	state.Demand[clients.Resource, database.User],
+	state.Demand[clients.Resource, database.Permission],
+	state.Demand[clients.Resource, secrets.Resource],
+) {
+	dbRequests, userRequests, permissionRequests, secretRequests := s.getRequests()
+
+	s.clearPasswords()
+	dbDemand := s.diffDatabases(dbRequests)
+	userDemand := s.diffUsers(userRequests)
+	permissionDemand := s.diffPermissions(permissionRequests)
+	secretsDemand := s.diffSecrets(secretRequests)
+
+	return dbDemand, userDemand, permissionDemand, secretsDemand
+}
+
 func (s *State) getRequests() (
 	bucket.Bucket[state.DemandTarget[clients.Resource, database.Database]],
 	bucket.Bucket[state.DemandTarget[clients.Resource, database.User]],
@@ -144,7 +192,7 @@ func (s *State) diffDatabases(requests bucket.Bucket[state.DemandTarget[clients.
 }
 
 var generatePassword = func(user string) string {
-	return utils.GeneratePassword(32, true, true)
+	return utils.GeneratePassword(32, true, false)
 }
 
 func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Resource, database.User]]) state.Demand[clients.Resource, database.User] {
@@ -160,8 +208,7 @@ func (s *State) diffUsers(requests bucket.Bucket[state.DemandTarget[clients.Reso
 		}
 
 		if !userExists {
-			s.passwords[request.Parent.Name+":"+request.Parent.Namespace] = generatePassword(request.Target.Name)
-			request.Target.Password = s.passwords[request.Parent.Name+":"+request.Parent.Namespace]
+			request.Target.Password = s.getPassword(request.Parent)
 			demand.ToAdd.Add(request)
 		}
 	}
@@ -190,7 +237,7 @@ func (s *State) diffSecrets(
 		}
 
 		if !secretExists {
-			request.Target.Password = s.passwords[request.Parent.Name+":"+request.Parent.Namespace]
+			request.Target.Password = s.getPassword(request.Parent)
 			demand.ToAdd.Add(request)
 		}
 	}
@@ -232,38 +279,4 @@ func (s *State) diffPermissions(
 	}
 
 	return demand
-}
-
-func (s *State) GetDemand() (
-	state.Demand[clients.Resource, database.Database],
-	state.Demand[clients.Resource, database.User],
-	state.Demand[clients.Resource, database.Permission],
-	state.Demand[clients.Resource, secrets.Resource],
-) {
-	dbRequests, userRequests, permissionRequests, secretRequests := s.getRequests()
-
-	s.passwords = map[string]string{}
-	dbDemand := s.diffDatabases(dbRequests)
-	userDemand := s.diffUsers(userRequests)
-	permissionDemand := s.diffPermissions(permissionRequests)
-	secretsDemand := s.diffSecrets(secretRequests)
-
-	return dbDemand, userDemand, permissionDemand, secretsDemand
-}
-
-func (s *State) GetActiveClusters() []database.Cluster {
-	clusters := []database.Cluster{}
-
-	for _, ss := range s.statefulSets.List() {
-		if !ss.IsReady() {
-			continue
-		}
-
-		clusters = append(clusters, database.Cluster{
-			Name:      ss.Name,
-			Namespace: ss.Namespace,
-		})
-	}
-
-	return clusters
 }

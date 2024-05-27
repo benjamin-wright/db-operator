@@ -12,7 +12,8 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clusters"
 	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
 	postgres_helpers "github.com/benjamin-wright/db-operator/internal/test_utils/postgres"
-	"github.com/benjamin-wright/db-operator/pkg/postgres"
+	"github.com/benjamin-wright/db-operator/pkg/postgres/config"
+	"github.com/benjamin-wright/db-operator/pkg/postgres/migrations"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,6 +28,8 @@ func TestPostgresIntegration(t *testing.T) {
 	} else {
 		zerolog.SetGlobalLevel(zerolog.Disabled)
 	}
+
+	seed := randomString(8)
 
 	client, err := k8s.New()
 	if !assert.NoError(t, err) {
@@ -50,9 +53,12 @@ func TestPostgresIntegration(t *testing.T) {
 		return nil
 	}))
 
+	clusterName := "test-db-" + seed
+	dbName := "db-" + seed
+
 	mustPass(t, client.Clusters().Create(context.Background(), clusters.Resource{
 		Comparable: clusters.Comparable{
-			Name:      "different-db",
+			Name:      clusterName,
 			Namespace: namespace,
 			Storage:   "256Mi",
 		},
@@ -60,45 +66,63 @@ func TestPostgresIntegration(t *testing.T) {
 
 	mustPass(t, client.Clients().Create(context.Background(), clients.Resource{
 		Comparable: clients.Comparable{
-			Cluster:   clients.Cluster{Name: "different-db", Namespace: namespace},
-			Database:  "new_db",
-			Name:      "my-client",
+			Cluster:   clients.Cluster{Name: clusterName, Namespace: namespace},
+			Database:  dbName,
+			Name:      "my-client-" + seed,
 			Namespace: namespace,
 			Username:  "my_user",
-			Secret:    "my-secret",
+			Secret:    "my-secret-" + seed,
 			Owner:     true,
 		},
 	}))
 
 	mustPass(t, client.Clients().Create(context.Background(), clients.Resource{
 		Comparable: clients.Comparable{
-			Cluster:   clients.Cluster{Name: "different-db", Namespace: namespace},
-			Database:  "new_db",
-			Name:      "other-client",
+			Cluster:   clients.Cluster{Name: clusterName, Namespace: namespace},
+			Database:  dbName,
+			Name:      "other-client-" + seed,
 			Namespace: namespace,
 			Username:  "other_user",
-			Secret:    "other-secret",
+			Secret:    "other-secret-" + seed,
 		},
 	}))
 
-	secret := waitForResult(t, func() (secrets.Resource, error) {
-		return client.Secrets().Get(context.Background(), "my-secret", namespace)
+	owner := waitForResult(t, func() (secrets.Resource, error) {
+		return client.Secrets().Get(context.Background(), "my-secret-"+seed, namespace)
 	})
 
-	port, err := strconv.ParseInt(secret.GetPort(), 10, 0)
+	ownerPort, err := strconv.ParseInt(owner.GetPort(), 10, 0)
 	mustPass(t, err)
 
-	pg, err := postgres_helpers.New(postgres.ConnectConfig{
-		Host:     secret.GetHost(),
-		Port:     int(port),
-		Username: secret.User,
-		Password: secret.Password,
-		Database: secret.Database,
+	mig, err := migrations.New(config.Config{
+		Host:     owner.GetHost(),
+		Port:     int(ownerPort),
+		Username: owner.User,
+		Password: owner.Password,
+		Database: owner.Database,
+	})
+	mustPass(t, err)
+
+	mustPass(t, mig.Init())
+
+	user := waitForResult(t, func() (secrets.Resource, error) {
+		return client.Secrets().Get(context.Background(), "other-secret-"+seed, namespace)
+	})
+
+	userPort, err := strconv.ParseInt(user.GetPort(), 10, 0)
+	mustPass(t, err)
+
+	pg, err := postgres_helpers.New(config.Config{
+		Host:     user.GetHost(),
+		Port:     int(userPort),
+		Username: user.User,
+		Password: user.Password,
+		Database: user.Database,
 	})
 	mustPass(t, err)
 
 	tables := pg.GetTableNames(t)
 
-	expected := []string{}
+	expected := []string{"migrations"}
 	assert.Equal(t, expected, tables)
 }

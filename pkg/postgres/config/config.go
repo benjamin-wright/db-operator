@@ -1,4 +1,4 @@
-package postgres
+package config
 
 import (
 	"errors"
@@ -6,18 +6,21 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"time"
 )
 
-type ConnectConfig struct {
+type Config struct {
 	Host     string
 	Port     int
 	Username string
 	Password string
 	Database string
+	Timeout  time.Duration
+	Retry    bool
 }
 
-func ConfigFromEnv() (ConnectConfig, error) {
-	empty := ConnectConfig{}
+func FromEnv() (Config, error) {
+	empty := Config{}
 
 	host, ok := os.LookupEnv("POSTGRES_HOST")
 	if !ok {
@@ -46,17 +49,18 @@ func ConfigFromEnv() (ConnectConfig, error) {
 		database = "default"
 	}
 
-	return ConnectConfig{
+	return Config{
 		Host:     host,
 		Port:     port,
 		Username: user,
 		Password: password,
 		Database: database,
+		Retry:    true,
 	}, nil
 }
 
-func AdminFromEnv() (ConnectConfig, error) {
-	empty := ConnectConfig{}
+func AdminFromEnv() (Config, error) {
+	empty := Config{}
 
 	host, ok := os.LookupEnv("POSTGRES_HOST")
 	if !ok {
@@ -80,15 +84,16 @@ func AdminFromEnv() (ConnectConfig, error) {
 
 	password, _ := os.LookupEnv("POSTGRES_ADMIN_PASS")
 
-	return ConnectConfig{
+	return Config{
 		Host:     host,
 		Port:     port,
 		Username: user,
 		Password: password,
+		Retry:    true,
 	}, nil
 }
 
-func (c ConnectConfig) ConnectionString() string {
+func (c Config) ConnectionString() string {
 	dbSuffix := ""
 	if c.Database != "" {
 		dbSuffix = "/" + c.Database
@@ -102,7 +107,7 @@ func (c ConnectConfig) ConnectionString() string {
 	return fmt.Sprintf("postgresql://%s%s@%s:%d%s", c.Username, password, c.Host, c.Port, dbSuffix)
 }
 
-func (c ConnectConfig) String() string {
+func (c Config) String() string {
 	dbSuffix := ""
 	if c.Database != "" {
 		dbSuffix = "/" + c.Database
