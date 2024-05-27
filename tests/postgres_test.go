@@ -104,6 +104,17 @@ func TestPostgresIntegration(t *testing.T) {
 	mustPass(t, err)
 
 	mustPass(t, mig.Init())
+	mustPass(t, mig.Run([]migrations.Migration{
+		{
+			Index: 1,
+			Query: `
+				CREATE TABLE test_table (
+					id SERIAL PRIMARY KEY,
+					name VARCHAR(255) NOT NULL
+				)
+			`,
+		},
+	}))
 
 	user := waitForResult(t, func() (secrets.Resource, error) {
 		return client.Secrets().Get(context.Background(), "other-secret-"+seed, namespace)
@@ -123,6 +134,6 @@ func TestPostgresIntegration(t *testing.T) {
 
 	tables := pg.GetTableNames(t)
 
-	expected := []string{"migrations"}
+	expected := []string{"migrations", "test_table"}
 	assert.Equal(t, expected, tables)
 }

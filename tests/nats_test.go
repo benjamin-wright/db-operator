@@ -8,12 +8,19 @@ import (
 	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s"
 	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clients"
 	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clusters"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNatsIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
+	}
+
+	if testing.Verbose() {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	} else {
+		zerolog.SetGlobalLevel(zerolog.Disabled)
 	}
 
 	namespace := os.Getenv("NAMESPACE")
