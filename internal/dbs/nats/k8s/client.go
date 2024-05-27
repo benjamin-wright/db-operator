@@ -1,22 +1,22 @@
 package k8s
 
 import (
-	"context"
 	"fmt"
 
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/deployments"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/services"
 	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
 )
 
-type K8sClient[T any] interface {
-	Watch(ctx context.Context, cancel context.CancelFunc) (<-chan k8s_generic.Update[T], error)
-	Create(ctx context.Context, resource T) error
-	Delete(ctx context.Context, name string, namespace string) error
-	Update(ctx context.Context, resource T) error
-	Event(ctx context.Context, obj T, eventtype, reason, message string)
-}
-
 type Client struct {
-	builder *k8s_generic.Builder
+	clients     *k8s_generic.Client[clients.Resource]
+	clusters    *k8s_generic.Client[clusters.Resource]
+	secrets     *k8s_generic.Client[secrets.Resource]
+	deployments *k8s_generic.Client[deployments.Resource]
+	services    *k8s_generic.Client[services.Resource]
 }
 
 func New() (*Client, error) {
@@ -26,6 +26,30 @@ func New() (*Client, error) {
 	}
 
 	return &Client{
-		builder: builder,
+		clients:     k8s_generic.NewClient(builder, clients.ClientArgs),
+		clusters:    k8s_generic.NewClient(builder, clusters.ClientArgs),
+		secrets:     k8s_generic.NewClient(builder, secrets.ClientArgs),
+		deployments: k8s_generic.NewClient(builder, deployments.ClientArgs),
+		services:    k8s_generic.NewClient(builder, services.ClientArgs),
 	}, nil
+}
+
+func (c *Client) Clients() *k8s_generic.Client[clients.Resource] {
+	return c.clients
+}
+
+func (c *Client) Clusters() *k8s_generic.Client[clusters.Resource] {
+	return c.clusters
+}
+
+func (c *Client) Secrets() *k8s_generic.Client[secrets.Resource] {
+	return c.secrets
+}
+
+func (c *Client) Deployments() *k8s_generic.Client[deployments.Resource] {
+	return c.deployments
+}
+
+func (c *Client) Services() *k8s_generic.Client[services.Resource] {
+	return c.services
 }

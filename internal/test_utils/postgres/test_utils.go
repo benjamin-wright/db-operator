@@ -4,16 +4,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/benjamin-wright/db-operator/pkg/postgres"
-	"github.com/jackc/pgx/v4"
+	"github.com/benjamin-wright/db-operator/pkg/postgres/config"
+	"github.com/jackc/pgx/v5"
 )
 
 type TestUtils struct {
 	conn *pgx.Conn
 }
 
-func New(cfg postgres.ConnectConfig) (*TestUtils, error) {
-	conn, err := postgres.Connect(cfg)
+func New(cfg config.Config) (*TestUtils, error) {
+	conn, err := config.Connect(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (u *TestUtils) GetTableNames(t *testing.T) []string {
 	}
 	defer rows.Close()
 
-	var tableNames []string
+	tableNames := []string{}
 	for rows.Next() {
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {

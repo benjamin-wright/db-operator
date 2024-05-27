@@ -1,23 +1,22 @@
 package types
 
-type Nameable[T any] interface {
-	*T
+type Nameable interface {
 	GetName() string
 	GetNamespace() string
 }
 
-type HasStorage[T any] interface {
-	Nameable[T]
+type HasStorage interface {
+	Nameable
 	GetStorage() string
 }
 
-type Readyable[T any] interface {
-	Nameable[T]
+type Readyable interface {
+	Nameable
 	IsReady() bool
 }
 
-type Targetable[T any] interface {
-	Nameable[T]
+type Targetable interface {
+	Nameable
 	GetTarget() string
 	GetTargetNamespace() string
 }

@@ -27,6 +27,14 @@ func GetEncodedProperty(u *unstructured.Unstructured, args ...string) (string, e
 	return string(decoded), nil
 }
 
+type MissingError struct {
+	message string
+}
+
+func (m *MissingError) Error() string {
+	return m.message
+}
+
 func GetProperty[T BasicType](u *unstructured.Unstructured, args ...string) (T, error) {
 	var current interface{} = u.Object
 	var empty T
@@ -36,7 +44,7 @@ func GetProperty[T BasicType](u *unstructured.Unstructured, args ...string) (T, 
 		case map[string]interface{}:
 			value, ok := c[arg]
 			if !ok {
-				return empty, fmt.Errorf("object doesn't have property %s in %s", arg, strings.Join(args, "."))
+				return empty, &MissingError{message: fmt.Sprintf("object doesn't have property %s in %s", arg, strings.Join(args, "."))}
 			}
 
 			current = value

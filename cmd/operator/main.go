@@ -25,6 +25,7 @@ func main() {
 	}
 
 	zerolog.SetGlobalLevel(level)
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
 	log.Info().Msg("Starting operator...")
 

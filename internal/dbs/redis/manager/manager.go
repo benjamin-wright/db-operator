@@ -6,6 +6,12 @@ import (
 	"time"
 
 	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/pvcs"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/services"
+	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/stateful_sets"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/rs/zerolog/log"
@@ -27,14 +33,14 @@ func New(
 ) (*Manager, error) {
 	client, err := k8s.New()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach client: %+v", err)
+		return nil, fmt.Errorf("failed to create postgres client: %+v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	updates := make(chan any)
 
 	for _, f := range []WatchFunc{
-		client.DBs().Watch,
+		client.Clusters().Watch,
 		client.Clients().Watch,
 		client.StatefulSets().Watch,
 		client.PVCs().Watch,
@@ -48,12 +54,12 @@ func New(
 	}
 
 	state := State{
-		dbs:          bucket.NewBucket[k8s.RedisDB](),
-		clients:      bucket.NewBucket[k8s.RedisClient](),
-		statefulSets: bucket.NewBucket[k8s.RedisStatefulSet](),
-		pvcs:         bucket.NewBucket[k8s.RedisPVC](),
-		services:     bucket.NewBucket[k8s.RedisService](),
-		secrets:      bucket.NewBucket[k8s.RedisSecret](),
+		clusters:     bucket.NewBucket[clusters.Resource](),
+		clients:      bucket.NewBucket[clients.Resource](),
+		statefulSets: bucket.NewBucket[stateful_sets.Resource](),
+		pvcs:         bucket.NewBucket[pvcs.Resource](),
+		services:     bucket.NewBucket[services.Resource](),
+		secrets:      bucket.NewBucket[secrets.Resource](),
 	}
 
 	return &Manager{
@@ -91,10 +97,10 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		log.Info().Msg("Processing redis started")
+		log.Debug().Msg("Processing redis started")
 		m.processRedisDBs()
 		m.processRedisStatefulSets()
-		log.Info().Msg("Processing redis finished")
+		log.Debug().Msg("Processing redis finished")
 	}
 }
 
@@ -103,18 +109,18 @@ func (m *Manager) processRedisDBs() {
 	svcDemand := m.state.GetServiceDemand()
 	pvcsToRemove := m.state.GetPVCDemand()
 
-	for _, db := range ssDemand.ToRemove {
-		log.Info().Msgf("Deleting db: %s/%s", db.Target.Namespace, db.Target.Name)
-		err := m.client.StatefulSets().Delete(m.ctx, db.Target.Name, db.Target.Namespace)
+	for _, db := range ssDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting db: %s/%s", db.Namespace, db.Name)
+		err := m.client.StatefulSets().Delete(m.ctx, db.Name, db.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete redis stateful set")
 		}
 	}
 
-	for _, svc := range svcDemand.ToRemove {
-		log.Info().Msgf("Deleting service: %s/%s", svc.Target.Namespace, svc.Target.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Target.Name, svc.Target.Namespace)
+	for _, svc := range svcDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting service: %s/%s", svc.Namespace, svc.Name)
+		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete redis service")
@@ -130,18 +136,18 @@ func (m *Manager) processRedisDBs() {
 		}
 	}
 
-	for _, db := range ssDemand.ToAdd {
+	for _, db := range ssDemand.ToAdd.List() {
 		log.Info().Msgf("Creating db: %s", db.Target.Name)
 		err := m.client.StatefulSets().Create(m.ctx, db.Target)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create redis stateful set")
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
 		} else {
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
 		}
 	}
 
-	for _, svc := range svcDemand.ToAdd {
+	for _, svc := range svcDemand.ToAdd.List() {
 		log.Info().Msgf("Creating service: %s/%s", svc.Target.Namespace, svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
@@ -154,16 +160,16 @@ func (m *Manager) processRedisDBs() {
 func (m *Manager) processRedisStatefulSets() {
 	secretsDemand := m.state.GetSecretsDemand()
 
-	for _, secret := range secretsDemand.ToRemove {
-		log.Info().Msgf("Deleting secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
-		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name, secret.Target.Namespace)
+	for _, secret := range secretsDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting secret: %s/%s", secret.Namespace, secret.Name)
+		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete redis secret")
 		}
 	}
 
-	for _, secret := range secretsDemand.ToAdd {
+	for _, secret := range secretsDemand.ToAdd.List() {
 		log.Info().Msgf("Creating secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 

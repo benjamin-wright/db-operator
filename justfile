@@ -44,10 +44,18 @@ tilt:
 test:
     go test --short -v ./...
 
+int-test:
+    NAMESPACE=test-ns go test -v ./tests/...
+
 build IMAGE_TAG:
     mkdir -p ./dist
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ./dist/app ./cmd/operator/main.go
-    docker build -t "{{IMAGE_TAG}}" -f deploy/Dockerfile ./dist
+    docker build -t "{{IMAGE_TAG}}" --build-arg BINARY_NAME=app -f deploy/Dockerfile ./dist
+
+build-mig IMAGE_TAG:
+    mkdir -p ./dist
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ./dist/mig ./cmd/migrations/main.go
+    docker build -t "{{IMAGE_TAG}}" --build-arg BINARY_NAME=mig -f deploy/Dockerfile ./dist
 
 build-test IMAGE_TAG:
     mkdir -p ./dist

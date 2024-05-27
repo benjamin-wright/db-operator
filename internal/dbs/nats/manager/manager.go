@@ -6,6 +6,11 @@ import (
 	"time"
 
 	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clients"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/deployments"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/services"
 	"github.com/benjamin-wright/db-operator/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/internal/utils"
 	"github.com/rs/zerolog/log"
@@ -27,14 +32,14 @@ func New(
 ) (*Manager, error) {
 	client, err := k8s.New()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach client: %+v", err)
+		return nil, fmt.Errorf("failed to create postgres client: %+v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	updates := make(chan any)
 
 	for _, f := range []WatchFunc{
-		client.DBs().Watch,
+		client.Clusters().Watch,
 		client.Clients().Watch,
 		client.Deployments().Watch,
 		client.Services().Watch,
@@ -47,11 +52,11 @@ func New(
 	}
 
 	state := State{
-		dbs:          bucket.NewBucket[k8s.NatsDB](),
-		clients:      bucket.NewBucket[k8s.NatsClient](),
-		statefulSets: bucket.NewBucket[k8s.NatsDeployment](),
-		services:     bucket.NewBucket[k8s.NatsService](),
-		secrets:      bucket.NewBucket[k8s.NatsSecret](),
+		clusters:    bucket.NewBucket[clusters.Resource](),
+		clients:     bucket.NewBucket[clients.Resource](),
+		deployments: bucket.NewBucket[deployments.Resource](),
+		services:    bucket.NewBucket[services.Resource](),
+		secrets:     bucket.NewBucket[secrets.Resource](),
 	}
 
 	return &Manager{
@@ -89,10 +94,10 @@ func (m *Manager) refresh() {
 		m.state.Apply(update)
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
-		log.Info().Msg("Processing nats started")
+		log.Debug().Msg("Processing nats started")
 		m.processNatsDBs()
 		m.processNatsDeployments()
-		log.Info().Msg("Processing nats finished")
+		log.Debug().Msg("Processing nats finished")
 	}
 }
 
@@ -100,36 +105,36 @@ func (m *Manager) processNatsDBs() {
 	dDemand := m.state.GetDeploymentDemand()
 	svcDemand := m.state.GetServiceDemand()
 
-	for _, db := range dDemand.ToRemove {
-		log.Info().Msgf("Deleting db: %s/%s", db.Target.Namespace, db.Target.Name)
-		err := m.client.Deployments().Delete(m.ctx, db.Target.Name, db.Target.Namespace)
+	for _, db := range dDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting db: %s/%s", db.Namespace, db.Name)
+		err := m.client.Deployments().Delete(m.ctx, db.Name, db.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete nats deployment")
 		}
 	}
 
-	for _, svc := range svcDemand.ToRemove {
-		log.Info().Msgf("Deleting service: %s/%s", svc.Target.Namespace, svc.Target.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Target.Name, svc.Target.Namespace)
+	for _, svc := range svcDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting service: %s/%s", svc.Namespace, svc.Name)
+		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete nats service")
 		}
 	}
 
-	for _, db := range dDemand.ToAdd {
+	for _, db := range dDemand.ToAdd.List() {
 		log.Info().Msgf("Creating db: %s/%s", db.Target.Namespace, db.Target.Name)
 		err := m.client.Deployments().Create(m.ctx, db.Target)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create nats deployment")
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create deployment: %s", err.Error()))
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create deployment: %s", err.Error()))
 		} else {
-			m.client.DBs().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created deployment")
+			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created deployment")
 		}
 	}
 
-	for _, svc := range svcDemand.ToAdd {
+	for _, svc := range svcDemand.ToAdd.List() {
 		log.Info().Msgf("Creating service: %s/%s", svc.Target.Namespace, svc.Target.Name)
 		err := m.client.Services().Create(m.ctx, svc.Target)
 
@@ -142,16 +147,16 @@ func (m *Manager) processNatsDBs() {
 func (m *Manager) processNatsDeployments() {
 	secretsDemand := m.state.GetSecretsDemand()
 
-	for _, secret := range secretsDemand.ToRemove {
-		log.Info().Msgf("Deleting secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
-		err := m.client.Secrets().Delete(m.ctx, secret.Target.Name, secret.Target.Namespace)
+	for _, secret := range secretsDemand.ToRemove.List() {
+		log.Info().Msgf("Deleting secret: %s/%s", secret.Namespace, secret.Name)
+		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to delete nats secret")
 		}
 	}
 
-	for _, secret := range secretsDemand.ToAdd {
+	for _, secret := range secretsDemand.ToAdd.List() {
 		log.Info().Msgf("Creating secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
 		err := m.client.Secrets().Create(m.ctx, secret.Target)
 

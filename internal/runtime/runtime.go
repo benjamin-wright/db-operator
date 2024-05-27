@@ -4,24 +4,24 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/managers/database"
-	"github.com/benjamin-wright/db-operator/internal/dbs/cockroach/managers/deployment"
 	nats "github.com/benjamin-wright/db-operator/internal/dbs/nats/manager"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/managers/database"
+	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/managers/deployment"
 	redis "github.com/benjamin-wright/db-operator/internal/dbs/redis/manager"
 )
 
 func Run() (func(), error) {
-	cockroachDeployManager, err := deployment.New(5 * time.Second)
+	postgresDeployManager, err := deployment.New(5 * time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach deployment manager: %+v", err)
+		return nil, fmt.Errorf("failed to create postgres deployment manager: %+v", err)
 	}
-	cockroachDeployManager.Start()
+	postgresDeployManager.Start()
 
-	cockroachDBManager, err := database.New(5 * time.Second)
+	postgresDBManager, err := database.New(5 * time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cockroach database manager: %+v", err)
+		return nil, fmt.Errorf("failed to create postgres database manager: %+v", err)
 	}
-	cockroachDBManager.Start()
+	postgresDBManager.Start()
 
 	redisDeployManager, err := redis.New(5 * time.Second)
 	if err != nil {
@@ -36,8 +36,8 @@ func Run() (func(), error) {
 	natsDeployManager.Start()
 
 	return func() {
-		cockroachDeployManager.Stop()
-		cockroachDBManager.Stop()
+		postgresDeployManager.Stop()
+		postgresDBManager.Stop()
 		redisDeployManager.Stop()
 		natsDeployManager.Stop()
 	}, nil
