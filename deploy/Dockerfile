@@ -1,5 +1,7 @@
 FROM scratch
 
-COPY app /app
+ARG BINARY_NAME
+
+COPY ${BINARY_NAME} /app
 
 ENTRYPOINT [ "/app" ]
