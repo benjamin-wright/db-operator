@@ -2,6 +2,6 @@ FROM scratch
 
 ARG BINARY_NAME
 
-COPY ${BINARY_NAME} /app
+COPY /${BINARY_NAME} /app
 
 ENTRYPOINT [ "/app" ]
