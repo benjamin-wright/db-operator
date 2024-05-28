@@ -32,6 +32,8 @@ jobs:
         with:
           context: ./dist
           file: ./deploy/Dockerfile
+          build-args: |
+            BINARY_NAME=app
           push: true
           tags: benwright/db-operator:${{ github.ref_name }}
   migrations:
@@ -61,6 +63,8 @@ jobs:
         with:
           context: ./dist
           file: ./deploy/Dockerfile
+          build-args: |
+            BINARY_NAME=mig
           push: true
           tags: benwright/db-pg-migrations:${{ github.ref_name }}
   chart:
