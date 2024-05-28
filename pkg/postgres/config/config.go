@@ -42,7 +42,7 @@ func FromEnv() (Config, error) {
 		return empty, errors.New("failed to lookup POSTGRES_USER env var")
 	}
 
-	password, _ := os.LookupEnv("POSTGRES_PASS")
+	password, _ := os.LookupEnv("POSTGRES_PASSWORD")
 
 	database, ok := os.LookupEnv("POSTGRES_NAME")
 	if !ok {
