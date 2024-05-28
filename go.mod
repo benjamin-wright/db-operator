@@ -1,4 +1,4 @@
-module github.com/benjamin-wright/db-operator
+module github.com/benjamin-wright/db-operator/v2
 
 go 1.22.0
 
