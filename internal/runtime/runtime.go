@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	nats "github.com/benjamin-wright/db-operator/internal/dbs/nats/manager"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/managers/database"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/managers/deployment"
-	redis "github.com/benjamin-wright/db-operator/internal/dbs/redis/manager"
+	nats "github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/manager"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/managers/database"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/managers/deployment"
+	redis "github.com/benjamin-wright/db-operator/v2/internal/dbs/redis/manager"
 )
 
 func Run() (func(), error) {

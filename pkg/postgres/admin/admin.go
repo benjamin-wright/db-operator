@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/benjamin-wright/db-operator/pkg/postgres/config"
+	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
 	"github.com/jackc/pgx/v5"
 )
 

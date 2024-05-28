@@ -3,13 +3,13 @@ package k8s
 import (
 	"fmt"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clusters"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/pvcs"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/services"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
-	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clients"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/pvcs"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/services"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/stateful_sets"
+	"github.com/benjamin-wright/db-operator/v2/pkg/k8s_generic"
 )
 
 type Client struct {

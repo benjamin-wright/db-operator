@@ -1,14 +1,14 @@
 package database
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/database"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
-	"github.com/benjamin-wright/db-operator/internal/state"
-	"github.com/benjamin-wright/db-operator/internal/state/bucket"
-	"github.com/benjamin-wright/db-operator/internal/utils"
-	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/database"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clients"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/stateful_sets"
+	"github.com/benjamin-wright/db-operator/v2/internal/state"
+	"github.com/benjamin-wright/db-operator/v2/internal/state/bucket"
+	"github.com/benjamin-wright/db-operator/v2/internal/utils"
+	"github.com/benjamin-wright/db-operator/v2/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 

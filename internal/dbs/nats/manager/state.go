@@ -1,14 +1,14 @@
 package manager
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clients"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clusters"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/deployments"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/secrets"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/services"
-	"github.com/benjamin-wright/db-operator/internal/state"
-	"github.com/benjamin-wright/db-operator/internal/state/bucket"
-	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/clients"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/deployments"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/services"
+	"github.com/benjamin-wright/db-operator/v2/internal/state"
+	"github.com/benjamin-wright/db-operator/v2/internal/state/bucket"
+	"github.com/benjamin-wright/db-operator/v2/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 

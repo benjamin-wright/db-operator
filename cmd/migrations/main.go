@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"github.com/benjamin-wright/db-operator/pkg/postgres/config"
-	"github.com/benjamin-wright/db-operator/pkg/postgres/migrations"
+	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
+	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/migrations"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )

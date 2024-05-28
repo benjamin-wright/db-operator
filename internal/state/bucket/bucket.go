@@ -1,8 +1,8 @@
 package bucket
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/state/types"
-	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
+	"github.com/benjamin-wright/db-operator/v2/internal/state/types"
+	"github.com/benjamin-wright/db-operator/v2/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 

@@ -4,12 +4,12 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/database"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/clients"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/secrets"
-	"github.com/benjamin-wright/db-operator/internal/dbs/postgres/k8s/stateful_sets"
-	"github.com/benjamin-wright/db-operator/internal/state"
-	"github.com/benjamin-wright/db-operator/internal/state/bucket"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/database"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clients"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/stateful_sets"
+	"github.com/benjamin-wright/db-operator/v2/internal/state"
+	"github.com/benjamin-wright/db-operator/v2/internal/state/bucket"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -1,8 +1,8 @@
 package state
 
 import (
-	"github.com/benjamin-wright/db-operator/internal/state/bucket"
-	"github.com/benjamin-wright/db-operator/internal/state/types"
+	"github.com/benjamin-wright/db-operator/v2/internal/state/bucket"
+	"github.com/benjamin-wright/db-operator/v2/internal/state/types"
 )
 
 func NewDemandTarget[T types.Nameable, U types.Nameable](parent T, target U) DemandTarget[T, U] {

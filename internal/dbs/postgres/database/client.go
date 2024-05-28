@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/benjamin-wright/db-operator/pkg/postgres/admin"
-	"github.com/benjamin-wright/db-operator/pkg/postgres/config"
+	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/admin"
+	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )

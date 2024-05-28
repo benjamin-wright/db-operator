@@ -1,7 +1,7 @@
 package clusters
 
 import (
-	"github.com/benjamin-wright/db-operator/pkg/k8s_generic"
+	"github.com/benjamin-wright/db-operator/v2/pkg/k8s_generic"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )

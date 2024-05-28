@@ -4,7 +4,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/benjamin-wright/db-operator/internal/runtime"
+	"github.com/benjamin-wright/db-operator/v2/internal/runtime"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )

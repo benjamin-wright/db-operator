@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clients"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/clusters"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/deployments"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/secrets"
-	"github.com/benjamin-wright/db-operator/internal/dbs/nats/k8s/services"
-	"github.com/benjamin-wright/db-operator/internal/state/bucket"
-	"github.com/benjamin-wright/db-operator/internal/utils"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/clients"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/deployments"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/secrets"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/services"
+	"github.com/benjamin-wright/db-operator/v2/internal/state/bucket"
+	"github.com/benjamin-wright/db-operator/v2/internal/utils"
 	"github.com/rs/zerolog/log"
 )
 

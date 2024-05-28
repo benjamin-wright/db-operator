@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s"
-	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clients"
-	"github.com/benjamin-wright/db-operator/internal/dbs/redis/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/redis/k8s"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/redis/k8s/clients"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/redis/k8s/clusters"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
