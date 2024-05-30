@@ -128,7 +128,7 @@ func (m *Manager) processNatsDBs() {
 		err := m.client.Deployments().Create(m.ctx, db.Target)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create nats deployment")
-			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create deployment: %s", err.Error()))
+			m.client.Clusters().Event(m.ctx, db.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create deployment: %s", err.Error()))
 		} else {
 			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created deployment")
 		}
@@ -140,6 +140,9 @@ func (m *Manager) processNatsDBs() {
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create nats service")
+			m.client.Clusters().Event(m.ctx, svc.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create service: %s", err.Error()))
+		} else {
+			m.client.Clusters().Event(m.ctx, svc.Parent, "Normal", "ProvisioningSucceeded", "Created service")
 		}
 	}
 }
@@ -162,6 +165,9 @@ func (m *Manager) processNatsDeployments() {
 
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create nats secret")
+			m.client.Clients().Event(m.ctx, secret.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create secret: %s", err.Error()))
+		} else {
+			m.client.Clients().Event(m.ctx, secret.Parent, "Normal", "ProvisioningSucceeded", "Created secret")
 		}
 	}
 }

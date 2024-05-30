@@ -14,7 +14,7 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 		Version:  "v1alpha1",
 		Resource: "natsclients",
 	},
-	Kind:             "Resource",
+	Kind:             "NatsClient",
 	FromUnstructured: fromUnstructured,
 }
 

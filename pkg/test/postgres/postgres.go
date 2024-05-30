@@ -15,18 +15,17 @@ import (
 func Run(name string, port int64) func() {
 	os.Setenv("POSTGRES_HOST", "127.0.0.1")
 	os.Setenv("POSTGRES_PORT", strconv.FormatInt(port, 10))
-	os.Setenv("POSTGRES_USER", "root")
+	os.Setenv("POSTGRES_USER", "postgres")
 	os.Setenv("POSTGRES_NAME", "defaultdb")
 
 	// Try to remove any existing containers
 	exec.Command("docker", "stop", name).Run()
 
 	image := "postgres:16.3"
-	args := "--logtostderr start-single-node --insecure --listen-addr 0.0.0.0:" + strconv.FormatInt(port, 10)
 
 	cmdString := fmt.Sprintf(
-		"run --rm -d -p %d:%d --name %s %s %s",
-		port, port, name, image, args,
+		"run --rm -d -p %d:5432 --name %s %s",
+		port, name, image,
 	)
 
 	cmd := exec.Command("docker", strings.Split(cmdString, " ")...)
