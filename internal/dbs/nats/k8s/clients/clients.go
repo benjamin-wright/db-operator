@@ -84,6 +84,10 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	return cli, nil
 }
 
+func (cli Resource) GetID() string {
+	return cli.Name + "@" + cli.Namespace
+}
+
 func (cli Resource) GetName() string {
 	return cli.Name
 }
@@ -100,12 +104,8 @@ func (cli Resource) GetResourceVersion() string {
 	return cli.ResourceVersion
 }
 
-func (cli Resource) GetTarget() string {
-	return cli.Cluster.Name
-}
-
-func (cli Resource) GetTargetNamespace() string {
-	return cli.Cluster.Namespace
+func (cli Resource) GetTargetID() string {
+	return cli.Cluster.Name + "@" + cli.Cluster.Namespace
 }
 
 func (cli Resource) Equal(obj k8s_generic.Resource) bool {

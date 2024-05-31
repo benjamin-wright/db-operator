@@ -91,6 +91,10 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	return r, nil
 }
 
+func (r Resource) GetID() string {
+	return r.Name + "@" + r.Namespace
+}
+
 func (r Resource) GetName() string {
 	return r.Name
 }
@@ -107,12 +111,8 @@ func (r Resource) GetResourceVersion() string {
 	return r.ResourceVersion
 }
 
-func (r Resource) GetTarget() string {
-	return r.Cluster.Name
-}
-
-func (r Resource) GetTargetNamespace() string {
-	return r.Cluster.Namespace
+func (r Resource) GetTargetID() string {
+	return r.Cluster.Name + "@" + r.Cluster.Namespace
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {

@@ -5,36 +5,32 @@ import (
 	"github.com/benjamin-wright/db-operator/v2/internal/state/types"
 )
 
-func NewDemandTarget[T types.Nameable, U types.Nameable](parent T, target U) DemandTarget[T, U] {
+func NewDemandTarget[T types.HasID, U types.HasID](parent T, target U) DemandTarget[T, U] {
 	return DemandTarget[T, U]{Parent: parent, Target: target}
 }
 
-type DemandTarget[T types.Nameable, U types.Nameable] struct {
+type DemandTarget[T types.HasID, U types.HasID] struct {
 	Parent T
 	Target U
 }
 
-func (d DemandTarget[T, U]) GetName() string {
-	return d.Target.GetName()
+func (d DemandTarget[T, U]) GetID() string {
+	return d.Target.GetID()
 }
 
-func (d DemandTarget[T, U]) GetNamespace() string {
-	return d.Target.GetNamespace()
-}
-
-type Demand[T types.Nameable, U types.Nameable] struct {
+type Demand[T types.HasID, U types.HasID] struct {
 	ToAdd    bucket.Bucket[DemandTarget[T, U]]
 	ToRemove bucket.Bucket[U]
 }
 
-func NewDemand[T types.Nameable, U types.Nameable]() Demand[T, U] {
+func NewDemand[T types.HasID, U types.HasID]() Demand[T, U] {
 	return Demand[T, U]{
 		ToAdd:    bucket.NewBucket[DemandTarget[T, U]](),
 		ToRemove: bucket.NewBucket[U](),
 	}
 }
 
-func NewInitializedDemand[T types.Nameable, U types.Nameable](toAdd []DemandTarget[T, U], toRemove []U) Demand[T, U] {
+func NewInitializedDemand[T types.HasID, U types.HasID](toAdd []DemandTarget[T, U], toRemove []U) Demand[T, U] {
 	d := NewDemand[T, U]()
 
 	for _, obj := range toAdd {
@@ -49,20 +45,20 @@ func NewInitializedDemand[T types.Nameable, U types.Nameable](toAdd []DemandTarg
 }
 
 func GetOneForOne[
-	T types.Nameable,
-	U types.Nameable,
+	T types.HasID,
+	U types.HasID,
 ](request bucket.Bucket[T], existing bucket.Bucket[U], transform func(T) U) Demand[T, U] {
 	toAdd := bucket.NewBucket[DemandTarget[T, U]]()
 	toRemove := bucket.NewBucket[U]()
 
 	for _, obj := range request.List() {
-		if _, ok := existing.Get(obj.GetName(), obj.GetNamespace()); !ok {
+		if _, ok := existing.Get(obj.GetID()); !ok {
 			toAdd.Add(DemandTarget[T, U]{Parent: obj, Target: transform(obj)})
 		}
 	}
 
 	for _, obj := range existing.List() {
-		if _, ok := request.Get(obj.GetName(), obj.GetNamespace()); !ok {
+		if _, ok := request.Get(obj.GetID()); !ok {
 			toRemove.Add(obj)
 		}
 	}
@@ -74,8 +70,8 @@ func GetOneForOne[
 }
 
 func GetOrphaned[
-	T types.Nameable,
-	U types.Nameable,
+	T types.HasID,
+	U types.HasID,
 ](demand bucket.Bucket[T], existing bucket.Bucket[U], equals func(T, U) bool) []U {
 	toRemove := []U{}
 
@@ -109,7 +105,7 @@ func GetStorageBound[
 	toRemove := bucket.NewBucket[U]()
 
 	for _, db := range demand.List() {
-		if ss, ok := existing.Get(db.GetName(), db.GetNamespace()); !ok {
+		if ss, ok := existing.Get(db.GetID()); !ok {
 			toAdd.Add(DemandTarget[T, U]{Parent: db, Target: transform(db)})
 		} else {
 			if db.GetStorage() != ss.GetStorage() {
@@ -120,7 +116,7 @@ func GetStorageBound[
 	}
 
 	for _, db := range existing.List() {
-		if _, ok := demand.Get(db.GetName(), db.GetNamespace()); !ok {
+		if _, ok := demand.Get(db.GetID()); !ok {
 			toRemove.Add(db)
 		}
 	}
@@ -131,7 +127,7 @@ func GetStorageBound[
 	}
 }
 
-func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
+func GetServiceBound[T types.Targetable, U types.HasID, V types.Readyable](
 	demand bucket.Bucket[T],
 	existing bucket.Bucket[U],
 	servers bucket.Bucket[V],
@@ -145,7 +141,7 @@ func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
 	seen := bucket.NewBucket[U]()
 
 	for _, client := range demand.List() {
-		ss, hasSS := servers.Get(client.GetTarget(), client.GetTargetNamespace())
+		ss, hasSS := servers.Get(client.GetTargetID())
 
 		if !hasSS || !ss.IsReady() {
 			continue
@@ -154,13 +150,13 @@ func GetServiceBound[T types.Targetable, U types.Nameable, V types.Readyable](
 		desired := transform(client)
 		seen.Add(desired)
 
-		if _, ok := existing.Get(desired.GetName(), desired.GetNamespace()); !ok {
+		if _, ok := existing.Get(desired.GetID()); !ok {
 			d.ToAdd.Add(DemandTarget[T, U]{Parent: client, Target: desired})
 		}
 	}
 
 	for _, e := range existing.List() {
-		if _, ok := seen.Get(e.GetName(), e.GetNamespace()); !ok {
+		if _, ok := seen.Get(e.GetID()); !ok {
 			d.ToRemove.Add(e)
 		}
 	}

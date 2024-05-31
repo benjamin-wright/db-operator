@@ -66,24 +66,25 @@ func TestPostgresIntegration(t *testing.T) {
 
 	mustPass(t, client.Clients().Create(context.Background(), clients.Resource{
 		Comparable: clients.Comparable{
-			Cluster:   clients.Cluster{Name: clusterName, Namespace: namespace},
-			Database:  dbName,
-			Name:      "my-client-" + seed,
-			Namespace: namespace,
-			Username:  "my_user",
-			Secret:    "my-secret-" + seed,
-			Owner:     true,
+			Cluster:    clients.Cluster{Name: clusterName, Namespace: namespace},
+			Database:   dbName,
+			Name:       "my-client-" + seed,
+			Namespace:  namespace,
+			Username:   "my_user",
+			Secret:     "my-secret-" + seed,
+			Permission: clients.PermissionAdmin,
 		},
 	}))
 
 	mustPass(t, client.Clients().Create(context.Background(), clients.Resource{
 		Comparable: clients.Comparable{
-			Cluster:   clients.Cluster{Name: clusterName, Namespace: namespace},
-			Database:  dbName,
-			Name:      "other-client-" + seed,
-			Namespace: namespace,
-			Username:  "other_user",
-			Secret:    "other-secret-" + seed,
+			Cluster:    clients.Cluster{Name: clusterName, Namespace: namespace},
+			Database:   dbName,
+			Name:       "other-client-" + seed,
+			Namespace:  namespace,
+			Username:   "other_user",
+			Secret:     "other-secret-" + seed,
+			Permission: clients.PermissionWrite,
 		},
 	}))
 

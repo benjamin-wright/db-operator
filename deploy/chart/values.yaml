@@ -11,5 +11,5 @@ rbacs:
   resources: ["persistentvolumeclaims"]
   verbs: ["get", "list", "watch", "delete"]
 - apiGroups: ["ponglehub.co.uk"]
-  resources: ["postgresclusters", "postgresmigrations", "postgresclients", "redisclusters", "redisclients", "natsclusters", "natsclients"]
+  resources: ["postgresclusters", "postgresclusters/status", "postgresmigrations", "postgresclients", "postgresclients/status", "redisclusters", "redisclients", "natsclusters", "natsclients"]
   verbs: ["get", "list", "watch", "update"]

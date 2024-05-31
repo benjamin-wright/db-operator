@@ -13,6 +13,19 @@ type Model struct {
 	Clusters map[string]*Cluster
 }
 
+func (m Model) Owns(obj interface{}) bool {
+	switch obj := obj.(type) {
+	case stateful_sets.Resource:
+		_, ok := m.Clusters[obj.GetID()]
+		return ok
+	case services.Resource:
+		_, ok := m.Clusters[obj.GetID()]
+		return ok
+	}
+
+	return false
+}
+
 type Cluster struct {
 	Name        string
 	Namespace   string
@@ -23,7 +36,7 @@ type Cluster struct {
 }
 
 type UserData struct {
-	Password string
+	ClientID string
 	Secret   secrets.Resource
 }
 
@@ -72,6 +85,7 @@ func NewModel(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucke
 		}
 
 		cluster.Users[client.Name] = &UserData{
+			ClientID: client.GetID(),
 			Secret: secrets.Resource{
 				Comparable: secrets.Comparable{
 					Name:      client.Name,

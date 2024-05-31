@@ -37,8 +37,10 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "PostgresCluster",
 		"metadata": map[string]interface{}{
-			"name":      r.Name,
-			"namespace": r.Namespace,
+			"name":            r.Name,
+			"namespace":       r.Namespace,
+			"resourceVersion": r.ResourceVersion,
+			"uid":             r.UID,
 		},
 		"spec": map[string]interface{}{
 			"storage": r.Storage,

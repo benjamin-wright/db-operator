@@ -173,9 +173,9 @@ func (c *Client) DeleteUser(user User) error {
 	return nil
 }
 
-func (c *Client) ListPermitted(db Database) ([]Permission, error) {
+func (c *Client) ListPermitted(db string) ([]Permission, error) {
 	permissions := []Permission{}
-	permitted, err := c.conn.ListPermitted(db.Name)
+	permitted, err := c.conn.ListPermitted(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
@@ -190,7 +190,7 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 				Name:      c.cluster,
 				Namespace: c.namespace,
 			},
-			Database: db.Name,
+			Database: db,
 			User:     user,
 		})
 	}
