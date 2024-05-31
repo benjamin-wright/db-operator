@@ -140,6 +140,16 @@ func (c *Client[T]) Update(ctx context.Context, resource T) error {
 	return nil
 }
 
+func (c *Client[T]) UpdateStatus(ctx context.Context, resource T) error {
+	c.logger.Info().Msgf("Updating status for %s:%s", resource.GetNamespace(), resource.GetName())
+	_, err := c.client.Resource(c.schema).Namespace(resource.GetNamespace()).UpdateStatus(ctx, resource.ToUnstructured(), v1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update status for %s: %+v", resource.GetName(), err)
+	}
+
+	return nil
+}
+
 type Update[T any] struct {
 	ToAdd    []T
 	ToRemove []T

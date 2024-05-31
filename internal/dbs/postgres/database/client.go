@@ -21,7 +21,7 @@ type Client struct {
 func New(cluster string, namespace string, password string, database string) (*Client, error) {
 	cfg := config.Config{
 		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", cluster, namespace),
-		Port:     26257,
+		Port:     5432,
 		Username: "postgres",
 		Password: password,
 		Database: database,

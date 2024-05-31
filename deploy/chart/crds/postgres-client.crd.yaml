@@ -25,13 +25,19 @@ spec:
                   required: [ name, namespace ]
                 database:
                   type: string
-                owner:
-                  type: boolean
+                permission:
+                  type: string
+                  enum: [ admin, writer, reader ]
                 username:
                   type: string
                 secret:
                   type: string
-              required: [ cluster, database, username, secret ]
+              required:
+              - cluster
+              - database
+              - permission
+              - username
+              - secret
             status:
               type: object
               properties:

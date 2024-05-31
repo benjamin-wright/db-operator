@@ -6,11 +6,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type Bucket[T types.Nameable] struct {
+type Bucket[T types.HasID] struct {
 	state map[string]T
 }
 
-func NewBucket[T types.Nameable]() Bucket[T] {
+func NewBucket[T types.HasID]() Bucket[T] {
 	return Bucket[T]{
 		state: map[string]T{},
 	}
@@ -29,19 +29,15 @@ func (b *Bucket[T]) Apply(update k8s_generic.Update[T]) {
 }
 
 func (b *Bucket[T]) Add(obj T) {
-	key := obj.GetName() + ":" + obj.GetNamespace()
-
-	b.state[key] = obj
+	b.state[obj.GetID()] = obj
 }
 
 func (b *Bucket[T]) Remove(obj T) {
-	key := obj.GetName() + ":" + obj.GetNamespace()
-
-	delete(b.state, key)
+	delete(b.state, obj.GetID())
 }
 
-func (b *Bucket[T]) Get(name string, namespace string) (T, bool) {
-	value, ok := b.state[name+":"+namespace]
+func (b *Bucket[T]) Get(id string) (T, bool) {
+	value, ok := b.state[id]
 	return value, ok
 }
 

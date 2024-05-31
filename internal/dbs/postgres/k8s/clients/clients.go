@@ -18,19 +18,29 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 	FromUnstructured: fromUnstructured,
 }
 
+const (
+	PermissionAdmin string = "admin"
+	PermissionWrite string = "write"
+	PermissionRead  string = "read"
+)
+
 type Cluster struct {
 	Name      string
 	Namespace string
 }
 
+func (c Cluster) GetID() string {
+	return c.Name + "@" + c.Namespace
+}
+
 type Comparable struct {
-	Name      string
-	Namespace string
-	Cluster   Cluster
-	Database  string
-	Username  string
-	Secret    string
-	Owner     bool
+	Name       string
+	Namespace  string
+	Cluster    Cluster
+	Username   string
+	Secret     string
+	Database   string
+	Permission string
 }
 
 type Resource struct {
@@ -53,10 +63,10 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 				"name":      r.Cluster.Name,
 				"namespace": r.Cluster.Namespace,
 			},
-			"database": r.Database,
-			"username": r.Username,
-			"secret":   r.Secret,
-			"owner":    r.Owner,
+			"permission": r.Permission,
+			"username":   r.Username,
+			"secret":     r.Secret,
+			"database":   r.Database,
 		},
 	})
 
@@ -81,6 +91,11 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 		return r, fmt.Errorf("failed to get cluster ref namespace: %+v", err)
 	}
 
+	r.Permission, err = k8s_generic.GetProperty[string](obj, "spec", "permission")
+	if err != nil {
+		return r, fmt.Errorf("failed to get permission: %+v", err)
+	}
+
 	r.Database, err = k8s_generic.GetProperty[string](obj, "spec", "database")
 	if err != nil {
 		return r, fmt.Errorf("failed to get database: %+v", err)
@@ -96,14 +111,15 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 		return r, fmt.Errorf("failed to get secret: %+v", err)
 	}
 
-	r.Owner, err = k8s_generic.GetProperty[bool](obj, "spec", "owner")
-	if err != nil {
-		if _, ok := err.(*k8s_generic.MissingError); !ok {
-			return r, fmt.Errorf("failed to get owner: %+v", err)
-		}
-	}
-
 	return r, nil
+}
+
+func (r Resource) GetID() string {
+	return r.Name + "@" + r.Namespace
+}
+
+func (r Resource) GetClusterID() string {
+	return r.Cluster.Name + "@" + r.Cluster.Namespace
 }
 
 func (r Resource) GetName() string {
@@ -131,9 +147,14 @@ func (r Resource) GetTargetNamespace() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	if other, ok := obj.(Resource); ok {
-		return r.Comparable == other.Comparable
+	other, ok := obj.(Resource)
+	if !ok {
+		return false
 	}
 
-	return false
+	if r.Comparable != other.Comparable {
+		return false
+	}
+
+	return true
 }

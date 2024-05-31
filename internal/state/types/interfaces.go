@@ -1,22 +1,20 @@
 package types
 
-type Nameable interface {
-	GetName() string
-	GetNamespace() string
+type HasID interface {
+	GetID() string
 }
 
 type HasStorage interface {
-	Nameable
+	HasID
 	GetStorage() string
 }
 
 type Readyable interface {
-	Nameable
+	HasID
 	IsReady() bool
 }
 
 type Targetable interface {
-	Nameable
-	GetTarget() string
-	GetTargetNamespace() string
+	HasID
+	GetTargetID() string
 }
