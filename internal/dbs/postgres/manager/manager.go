@@ -154,6 +154,13 @@ func (m *Manager) resolve(demand model.Model) error {
 		if err != nil {
 			return fmt.Errorf("failed to resolve admin: %+v", err)
 		}
+
+		for name := range cluster.Databases {
+			err := m.resolveDatabase(cluster, name)
+			if err != nil {
+				return fmt.Errorf("failed to resolve database: %+v", err)
+			}
+		}
 	}
 
 	return nil
@@ -216,22 +223,6 @@ func (m *Manager) resolveAdmin(cluster *model.Cluster) error {
 		}
 	}
 
-	for name, data := range cluster.Databases {
-		if _, ok := existingDBs[name]; !ok {
-			err := db.CreateDB(database.Database{
-				Name:  name,
-				Owner: data.Owner,
-				Cluster: database.Cluster{
-					Name:      cluster.Name,
-					Namespace: cluster.Namespace,
-				},
-			})
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to create database")
-			}
-		}
-	}
-
 	for _, user := range existingUsers {
 		if _, ok := cluster.Users[user.Name]; !ok {
 			err := db.DeleteUser(user)
@@ -270,6 +261,7 @@ func (m *Manager) resolveAdmin(cluster *model.Cluster) error {
 			if err != nil {
 				m.client.Clients().Event(context.TODO(), client, "Warning", "SecretDeleteFailed", err.Error())
 			} else {
+				secretExists = false
 				m.client.Clients().Event(context.TODO(), client, "Normal", "SecretDeleted", "Missing user so regenerating secret")
 			}
 		}
@@ -299,6 +291,28 @@ func (m *Manager) resolveAdmin(cluster *model.Cluster) error {
 			m.client.Clients().Event(context.TODO(), client, "Warning", "SecretCreateFailed", err.Error())
 		} else {
 			m.client.Clients().Event(context.TODO(), client, "Normal", "SecretCreated", "Secret created")
+		}
+	}
+
+	for name, data := range cluster.Databases {
+		if existing, ok := existingDBs[name]; !ok {
+			err := db.CreateDB(database.Database{
+				Name:  name,
+				Owner: data.Owner,
+				Cluster: database.Cluster{
+					Name:      cluster.Name,
+					Namespace: cluster.Namespace,
+				},
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to create database")
+			}
+		} else if existing.Owner != data.Owner {
+			existing.Owner = data.Owner
+			err := db.SetOwner(existing)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to update database owner")
+			}
 		}
 	}
 
@@ -332,10 +346,77 @@ func (m *Manager) getClusterState(db *database.Client) (map[string]database.Data
 }
 
 func (m *Manager) resolveDatabase(cluster *model.Cluster, name string) error {
-	db, err := database.New(cluster.Name, cluster.Namespace, "postgres", name)
+	client, err := database.New(cluster.Name, cluster.Namespace, "postgres", name)
 	if err != nil {
 		return fmt.Errorf("failed to create database: %+v", err)
 	}
+	defer client.Stop()
 
-	existingPermissions, err := db.ListPermitted(name)
+	db, ok := cluster.Databases[name]
+	if !ok {
+		return fmt.Errorf("database %s not found", name)
+	}
+
+	existingPermissions, err := client.ListPermitted(name)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list permissions")
+		return fmt.Errorf("failed to list permissions: %+v", err)
+	}
+
+	for _, permission := range existingPermissions {
+		owned := false
+		switch permission.Write {
+		case true:
+			if _, ok := db.Writers[permission.User]; ok {
+				owned = true
+			}
+		case false:
+			if _, ok := db.Readers[permission.User]; ok {
+				owned = true
+			}
+		}
+
+		if !owned {
+			err := client.RevokePermission(permission)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to drop permission")
+			}
+		}
+	}
+
+	lookup := map[string]database.Permission{}
+	for _, permission := range existingPermissions {
+		lookup[permission.User] = permission
+	}
+
+	for user := range db.Writers {
+		permission := database.Permission{
+			User:     user,
+			Database: name,
+			Cluster: database.Cluster{
+				Name:      cluster.Name,
+				Namespace: cluster.Namespace,
+			},
+			Write: true,
+		}
+
+		existing, exists := lookup[user]
+
+		if exists && permission.Write != existing.Write {
+			exists = false
+			err := client.RevokePermission(existing)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to revoke permission")
+			}
+		}
+
+		if !exists {
+			err := client.GrantPermission(permission)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to grant permission")
+			}
+		}
+	}
+
+	return nil
 }

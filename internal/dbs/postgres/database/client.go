@@ -99,6 +99,17 @@ func (c *Client) ListDBs() ([]Database, error) {
 	return databases, nil
 }
 
+func (c *Client) SetOwner(db Database) error {
+	c.logger.Info().Msgf("Setting owner of database %s to %s", db.Name, db.Owner)
+
+	err := c.conn.SetOwner(db.Name, db.Owner)
+	if err != nil {
+		return fmt.Errorf("failed to set owner of database %s to %s: %+v", db.Name, db.Owner, err)
+	}
+
+	return nil
+}
+
 func (c *Client) CreateDB(db Database) error {
 	c.logger.Info().Msgf("Creating database %s", db.Name)
 

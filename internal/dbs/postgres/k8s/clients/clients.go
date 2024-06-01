@@ -20,8 +20,8 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 
 const (
 	PermissionAdmin string = "admin"
-	PermissionWrite string = "write"
-	PermissionRead  string = "read"
+	PermissionWrite string = "writer"
+	PermissionRead  string = "reader"
 )
 
 type Cluster struct {

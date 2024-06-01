@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
 	"github.com/jackc/pgx/v5"
@@ -143,11 +144,15 @@ func (c *Client) GetOwner(database string) (string, error) {
 var ACL_REGEX = regexp.MustCompile(`^{(\w+)=.*\/.*}$`)
 
 func (c *Client) ListPermitted(database string) ([]string, error) {
-	rows, err := c.conn.Query(context.Background(), "SELECT defaclacl FROM pg_default_acl")
+	rows, err := c.conn.Query(context.Background(), "SELECT defaclacl, defaclobjtype FROM pg_default_acl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
 	defer rows.Close()
+	// oid  | defaclrole | defaclnamespace | defaclobjtype |         defaclacl
+	// -------+------------+-----------------+---------------+---------------------------
+	//  16425 |      16384 |            2200 | r             | {other_user=arwd/my_user}
+	//  16426 |      16384 |            2200 | S             | {other_user=rw/my_user}
 
 	permittedMap := map[string]struct{}{}
 
@@ -178,17 +183,30 @@ func (c *Client) ListPermitted(database string) ([]string, error) {
 	return permitted, nil
 }
 
-func (c *Client) GrantPermissions(username string, owner string) error {
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT INSERT, SELECT, UPDATE, DELETE ON TABLES TO %s", sanitize(owner), sanitize(username))); err != nil {
+var readPermissions = []string{"SELECT"}
+var writePermissions = []string{"INSERT", "UPDATE", "DELETE"}
+
+func (c *Client) GrantPermissions(username string, owner string, writer bool) error {
+	permissions := readPermissions[:]
+	if writer {
+		permissions = append(permissions, writePermissions...)
+	}
+
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT %s ON TABLES TO %s", strings.Join(permissions, ", "), sanitize(owner), sanitize(username))); err != nil {
 		return fmt.Errorf("failed to grant default table permissions: %+v", err)
 	}
 
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT SELECT, UPDATE ON SEQUENCES TO %s", sanitize(owner), sanitize(username))); err != nil {
-		return fmt.Errorf("failed to grant default sequence permissions: %+v", err)
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("GRANT %s ON ALL TABLES IN SCHEMA public TO %s", strings.Join(permissions, ", "), sanitize(username))); err != nil {
+		return fmt.Errorf("failed to grant existing table permissions: %+v", err)
 	}
 
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("GRANT INSERT, SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %s", sanitize(username))); err != nil {
-		return fmt.Errorf("failed to grant existing table permissions: %+v", err)
+	permissions = readPermissions[:]
+	if writer {
+		permissions = append(permissions, "UPDATE")
+	}
+
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT %s ON SEQUENCES TO %s", strings.Join(permissions, ", "), sanitize(owner), sanitize(username))); err != nil {
+		return fmt.Errorf("failed to grant default sequence permissions: %+v", err)
 	}
 
 	return nil

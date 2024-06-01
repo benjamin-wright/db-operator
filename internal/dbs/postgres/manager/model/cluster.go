@@ -42,8 +42,8 @@ type UserData struct {
 
 type DatabaseData struct {
 	Owner   string
-	Writers []string
-	Readers []string
+	Writers map[string]struct{}
+	Readers map[string]struct{}
 }
 
 func (c *Cluster) GetID() string {
@@ -84,12 +84,13 @@ func NewModel(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucke
 			continue
 		}
 
-		cluster.Users[client.Name] = &UserData{
+		cluster.Users[client.Username] = &UserData{
 			ClientID: client.GetID(),
 			Secret: secrets.Resource{
 				Comparable: secrets.Comparable{
 					Name:      client.Name,
 					Namespace: client.Namespace,
+					User:      client.Username,
 					Cluster: secrets.Cluster{
 						Name:      cluster.Name,
 						Namespace: cluster.Namespace,
@@ -99,16 +100,19 @@ func NewModel(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucke
 		}
 
 		if _, ok := cluster.Databases[client.Database]; !ok {
-			cluster.Databases[client.Database] = &DatabaseData{}
+			cluster.Databases[client.Database] = &DatabaseData{
+				Writers: make(map[string]struct{}),
+				Readers: make(map[string]struct{}),
+			}
 		}
 
 		switch client.Permission {
 		case clients.PermissionAdmin:
 			cluster.Databases[client.Database].Owner = client.Username
 		case clients.PermissionWrite:
-			cluster.Databases[client.Database].Writers = append(cluster.Databases[client.Database].Writers, client.Username)
+			cluster.Databases[client.Database].Writers[client.Username] = struct{}{}
 		case clients.PermissionRead:
-			cluster.Databases[client.Database].Readers = append(cluster.Databases[client.Database].Readers, client.Username)
+			cluster.Databases[client.Database].Readers[client.Username] = struct{}{}
 		}
 	}
 
