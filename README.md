@@ -9,7 +9,6 @@ Currently supports:
 
 ## TODO
 
-- PG tests to wait for client readiness
 - Clean up postgres PVCs
 - Clean up a bit:
   - Move existing-state-related functions to state.go

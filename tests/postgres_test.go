@@ -92,6 +92,19 @@ func TestPostgresIntegration(t *testing.T) {
 		return client.Secrets().Get(context.Background(), "my-secret-"+seed, namespace)
 	})
 
+	mustPass(t, waitFor(func() error {
+		cli, err := client.Clients().Get(context.Background(), "my-client-"+seed, namespace)
+		if err != nil {
+			return err
+		}
+
+		if !cli.Ready {
+			return errors.New("client not ready")
+		}
+
+		return nil
+	}))
+
 	ownerPort, err := strconv.ParseInt(owner.GetPort(), 10, 0)
 	mustPass(t, err)
 
