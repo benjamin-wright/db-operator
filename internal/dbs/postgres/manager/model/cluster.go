@@ -3,6 +3,7 @@ package model
 import (
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clients"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clusters"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/pvcs"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/secrets"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/services"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/stateful_sets"
@@ -20,6 +21,9 @@ func (m Model) Owns(obj interface{}) bool {
 		return ok
 	case services.Resource:
 		_, ok := m.Clusters[obj.GetID()]
+		return ok
+	case pvcs.Resource:
+		_, ok := m.Clusters[obj.GetClusterID()]
 		return ok
 	case secrets.Resource:
 		cluster, ok := m.Clusters[obj.Cluster.Name+"@"+obj.Cluster.Namespace]

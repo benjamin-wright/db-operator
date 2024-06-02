@@ -145,6 +145,16 @@ func (m *Manager) clean(demand model.Model) error {
 		}
 	}
 
+	for _, pvc := range m.state.pvcs.List() {
+		if !demand.Owns(pvc) {
+			err := m.client.PVCs().Delete(context.TODO(), pvc.Name, pvc.Namespace)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to delete orphaned postgres pvc")
+			}
+		}
+
+	}
+
 	return nil
 }
 
