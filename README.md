@@ -9,6 +9,3 @@ Currently supports:
 
 ## TODO
 
-- Clean up a bit:
-  - Move existing-state-related functions to state.go
-  - Find things like event logic to DRY up
