@@ -11,6 +11,7 @@ import (
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/deployments"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/secrets"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/k8s/services"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/nats/manager/model"
 	"github.com/benjamin-wright/db-operator/v2/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/v2/internal/utils"
 	"github.com/rs/zerolog/log"
@@ -95,79 +96,113 @@ func (m *Manager) refresh() {
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
 		log.Debug().Msg("Processing nats started")
-		m.processNatsDBs()
-		m.processNatsDeployments()
+		demand := model.New(m.state.clusters, m.state.clients)
+		m.clean(demand)
+		// m.processNatsDBs()
+		// m.processNatsDeployments()
 		log.Debug().Msg("Processing nats finished")
 	}
 }
 
-func (m *Manager) processNatsDBs() {
-	dDemand := m.state.GetDeploymentDemand()
-	svcDemand := m.state.GetServiceDemand()
-
-	for _, db := range dDemand.ToRemove.List() {
-		log.Info().Msgf("Deleting db: %s/%s", db.Namespace, db.Name)
-		err := m.client.Deployments().Delete(m.ctx, db.Name, db.Namespace)
-
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to delete nats deployment")
+func (m *Manager) clean(demand *model.Model) {
+	for _, deployment := range m.state.deployments.List() {
+		if !demand.Owns(deployment) {
+			log.Info().Msgf("Deleting deployment: %s/%s", deployment.Namespace, deployment.Name)
+			err := m.client.Deployments().Delete(m.ctx, deployment.Name, deployment.Namespace)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to delete orphaned nats deployment")
+			}
 		}
 	}
 
-	for _, svc := range svcDemand.ToRemove.List() {
-		log.Info().Msgf("Deleting service: %s/%s", svc.Namespace, svc.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
-
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to delete nats service")
+	for _, service := range m.state.services.List() {
+		if !demand.Owns(service) {
+			log.Info().Msgf("Deleting service: %s/%s", service.Namespace, service.Name)
+			err := m.client.Services().Delete(m.ctx, service.Name, service.Namespace)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to delete orphaned nats service")
+			}
 		}
 	}
 
-	for _, db := range dDemand.ToAdd.List() {
-		log.Info().Msgf("Creating db: %s/%s", db.Target.Namespace, db.Target.Name)
-		err := m.client.Deployments().Create(m.ctx, db.Target)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to create nats deployment")
-			m.client.Clusters().Event(m.ctx, db.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create deployment: %s", err.Error()))
-		} else {
-			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created deployment")
-		}
-	}
-
-	for _, svc := range svcDemand.ToAdd.List() {
-		log.Info().Msgf("Creating service: %s/%s", svc.Target.Namespace, svc.Target.Name)
-		err := m.client.Services().Create(m.ctx, svc.Target)
-
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to create nats service")
-			m.client.Clusters().Event(m.ctx, svc.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create service: %s", err.Error()))
-		} else {
-			m.client.Clusters().Event(m.ctx, svc.Parent, "Normal", "ProvisioningSucceeded", "Created service")
+	for _, secret := range m.state.secrets.List() {
+		if !demand.Owns(secret) {
+			log.Info().Msgf("Deleting secret: %s/%s", secret.Namespace, secret.Name)
+			err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to delete orphaned nats secret")
+			}
 		}
 	}
 }
 
-func (m *Manager) processNatsDeployments() {
-	secretsDemand := m.state.GetSecretsDemand()
+// func (m *Manager) processNatsDBs() {
+// 	dDemand := m.state.GetDeploymentDemand()
+// 	svcDemand := m.state.GetServiceDemand()
 
-	for _, secret := range secretsDemand.ToRemove.List() {
-		log.Info().Msgf("Deleting secret: %s/%s", secret.Namespace, secret.Name)
-		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
+// 	for _, db := range dDemand.ToRemove.List() {
+// 		log.Info().Msgf("Deleting db: %s/%s", db.Namespace, db.Name)
+// 		err := m.client.Deployments().Delete(m.ctx, db.Name, db.Namespace)
 
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to delete nats secret")
-		}
-	}
+// 		if err != nil {
+// 			log.Error().Err(err).Msg("Failed to delete nats deployment")
+// 		}
+// 	}
 
-	for _, secret := range secretsDemand.ToAdd.List() {
-		log.Info().Msgf("Creating secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
-		err := m.client.Secrets().Create(m.ctx, secret.Target)
+// 	for _, svc := range svcDemand.ToRemove.List() {
+// 		log.Info().Msgf("Deleting service: %s/%s", svc.Namespace, svc.Name)
+// 		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
 
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to create nats secret")
-			m.client.Clients().Event(m.ctx, secret.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create secret: %s", err.Error()))
-		} else {
-			m.client.Clients().Event(m.ctx, secret.Parent, "Normal", "ProvisioningSucceeded", "Created secret")
-		}
-	}
-}
+// 		if err != nil {
+// 			log.Error().Err(err).Msg("Failed to delete nats service")
+// 		}
+// 	}
+
+// 	for _, db := range dDemand.ToAdd.List() {
+// 		log.Info().Msgf("Creating db: %s/%s", db.Target.Namespace, db.Target.Name)
+// 		err := m.client.Deployments().Create(m.ctx, db.Target)
+// 		if err != nil {
+// 			log.Error().Err(err).Msg("Failed to create nats deployment")
+// 			m.client.Clusters().Event(m.ctx, db.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create deployment: %s", err.Error()))
+// 		} else {
+// 			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created deployment")
+// 		}
+// 	}
+
+// 	for _, svc := range svcDemand.ToAdd.List() {
+// 		log.Info().Msgf("Creating service: %s/%s", svc.Target.Namespace, svc.Target.Name)
+// 		err := m.client.Services().Create(m.ctx, svc.Target)
+
+// 		if err != nil {
+// 			log.Error().Err(err).Msg("Failed to create nats service")
+// 			m.client.Clusters().Event(m.ctx, svc.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create service: %s", err.Error()))
+// 		} else {
+// 			m.client.Clusters().Event(m.ctx, svc.Parent, "Normal", "ProvisioningSucceeded", "Created service")
+// 		}
+// 	}
+// }
+
+// func (m *Manager) processNatsDeployments() {
+// 	secretsDemand := m.state.GetSecretsDemand()
+
+// 	for _, secret := range secretsDemand.ToRemove.List() {
+// 		log.Info().Msgf("Deleting secret: %s/%s", secret.Namespace, secret.Name)
+// 		err := m.client.Secrets().Delete(m.ctx, secret.Name, secret.Namespace)
+
+// 		if err != nil {
+// 			log.Error().Err(err).Msg("Failed to delete nats secret")
+// 		}
+// 	}
+
+// 	for _, secret := range secretsDemand.ToAdd.List() {
+// 		log.Info().Msgf("Creating secret: %s/%s", secret.Target.Namespace, secret.Target.Name)
+// 		err := m.client.Secrets().Create(m.ctx, secret.Target)
+
+// 		if err != nil {
+// 			log.Error().Err(err).Msg("Failed to create nats secret")
+// 			m.client.Clients().Event(m.ctx, secret.Parent, "Warning", "ProvisioningFailed", fmt.Sprintf("Failed to create secret: %s", err.Error()))
+// 		} else {
+// 			m.client.Clients().Event(m.ctx, secret.Parent, "Normal", "ProvisioningSucceeded", "Created secret")
+// 		}
+// 	}
+// }

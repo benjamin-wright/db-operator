@@ -88,6 +88,10 @@ func (cli Resource) GetID() string {
 	return cli.Name + "@" + cli.Namespace
 }
 
+func (cli Resource) GetClusterID() string {
+	return cli.Cluster.Name + "@" + cli.Cluster.Namespace
+}
+
 func (cli Resource) GetName() string {
 	return cli.Name
 }
