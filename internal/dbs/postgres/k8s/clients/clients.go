@@ -41,6 +41,7 @@ type Comparable struct {
 	Secret     string
 	Database   string
 	Permission string
+	Ready      bool
 }
 
 type Resource struct {
@@ -55,8 +56,10 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "PostgresClient",
 		"metadata": map[string]interface{}{
-			"name":      r.Name,
-			"namespace": r.Namespace,
+			"name":            r.Name,
+			"namespace":       r.Namespace,
+			"uid":             r.UID,
+			"resourceVersion": r.ResourceVersion,
 		},
 		"spec": map[string]interface{}{
 			"cluster": map[string]interface{}{
@@ -67,6 +70,9 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 			"username":   r.Username,
 			"secret":     r.Secret,
 			"database":   r.Database,
+		},
+		"status": map[string]interface{}{
+			"ready": r.Ready,
 		},
 	})
 
@@ -109,6 +115,11 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	r.Secret, err = k8s_generic.GetProperty[string](obj, "spec", "secret")
 	if err != nil {
 		return r, fmt.Errorf("failed to get secret: %+v", err)
+	}
+
+	r.Ready, _, err = unstructured.NestedBool(obj.Object, "status", "ready")
+	if err != nil {
+		return r, fmt.Errorf("failed to get ready status: %+v", err)
 	}
 
 	return r, nil

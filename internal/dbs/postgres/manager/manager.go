@@ -122,7 +122,7 @@ func (m *Manager) clean(demand model.Model) error {
 		if !demand.Owns(ss) {
 			err := m.client.StatefulSets().Delete(context.TODO(), ss.Name, ss.Namespace)
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to delete postgres statefulset")
+				log.Error().Err(err).Msg("Failed to delete orphaned postgres statefulset")
 			}
 		}
 	}
@@ -131,7 +131,16 @@ func (m *Manager) clean(demand model.Model) error {
 		if !demand.Owns(service) {
 			err := m.client.Services().Delete(context.TODO(), service.Name, service.Namespace)
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to delete postgres service")
+				log.Error().Err(err).Msg("Failed to delete orphaned postgres service")
+			}
+		}
+	}
+
+	for _, secret := range m.state.secrets.List() {
+		if !demand.Owns(secret) {
+			err := m.client.Secrets().Delete(context.TODO(), secret.Name, secret.Namespace)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to delete orphaned postgres client secret")
 			}
 		}
 	}
@@ -266,31 +275,37 @@ func (m *Manager) resolveAdmin(cluster *model.Cluster) error {
 			}
 		}
 
-		if userExists && secretExists {
-			continue
+		if !userExists && !secretExists {
+			data.Secret.Password = utils.GeneratePassword(32, true, false)
+
+			err := db.CreateUser(database.User{
+				Name:     name,
+				Password: data.Secret.Password,
+				Cluster: database.Cluster{
+					Name:      cluster.Name,
+					Namespace: cluster.Namespace,
+				},
+			})
+			if err != nil {
+				m.client.Clients().Event(context.TODO(), client, "Warning", "UserCreateFailed", err.Error())
+			} else {
+				m.client.Clients().Event(context.TODO(), client, "Normal", "UserCreated", "User created")
+			}
+
+			err = m.client.Secrets().Create(context.TODO(), data.Secret)
+			if err != nil {
+				m.client.Clients().Event(context.TODO(), client, "Warning", "SecretCreateFailed", err.Error())
+			} else {
+				m.client.Clients().Event(context.TODO(), client, "Normal", "SecretCreated", "Secret created")
+			}
 		}
 
-		data.Secret.Password = utils.GeneratePassword(32, true, false)
-
-		err := db.CreateUser(database.User{
-			Name:     name,
-			Password: data.Secret.Password,
-			Cluster: database.Cluster{
-				Name:      cluster.Name,
-				Namespace: cluster.Namespace,
-			},
-		})
-		if err != nil {
-			m.client.Clients().Event(context.TODO(), client, "Warning", "UserCreateFailed", err.Error())
-		} else {
-			m.client.Clients().Event(context.TODO(), client, "Normal", "UserCreated", "User created")
-		}
-
-		err = m.client.Secrets().Create(context.TODO(), data.Secret)
-		if err != nil {
-			m.client.Clients().Event(context.TODO(), client, "Warning", "SecretCreateFailed", err.Error())
-		} else {
-			m.client.Clients().Event(context.TODO(), client, "Normal", "SecretCreated", "Secret created")
+		if client.Permission == clients.PermissionAdmin && !client.Ready {
+			client.Ready = true
+			err = m.client.Clients().UpdateStatus(context.TODO(), client)
+			if err != nil {
+				m.client.Clients().Event(context.TODO(), client, "Warning", "StatusUpdateFailed", err.Error())
+			}
 		}
 	}
 
@@ -389,7 +404,7 @@ func (m *Manager) resolveDatabase(cluster *model.Cluster, name string) error {
 		lookup[permission.User] = permission
 	}
 
-	for user := range db.Writers {
+	for user, cli := range db.Writers {
 		permission := database.Permission{
 			User:     user,
 			Database: name,
@@ -407,6 +422,9 @@ func (m *Manager) resolveDatabase(cluster *model.Cluster, name string) error {
 			err := client.RevokePermission(existing)
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to revoke permission")
+				m.client.Clients().Event(context.TODO(), cli, "Warning", "PermissionFailed", err.Error())
+			} else {
+				m.client.Clients().Event(context.TODO(), cli, "Normal", "PermissionRevoked", "Revoking to upgrade or downgrade permissions")
 			}
 		}
 
@@ -414,6 +432,59 @@ func (m *Manager) resolveDatabase(cluster *model.Cluster, name string) error {
 			err := client.GrantPermission(permission)
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to grant permission")
+				m.client.Clients().Event(context.TODO(), cli, "Warning", "PermissionFailed", err.Error())
+			} else {
+				m.client.Clients().Event(context.TODO(), cli, "Normal", "PermissionGranted", "Permission granted")
+			}
+		}
+
+		if !cli.Ready {
+			cli.Ready = true
+			err = m.client.Clients().UpdateStatus(context.TODO(), cli)
+			if err != nil {
+				m.client.Clients().Event(context.TODO(), cli, "Warning", "StatusUpdateFailed", err.Error())
+			}
+		}
+	}
+
+	for user, cli := range db.Readers {
+		permission := database.Permission{
+			User:     user,
+			Database: name,
+			Cluster: database.Cluster{
+				Name:      cluster.Name,
+				Namespace: cluster.Namespace,
+			},
+		}
+
+		existing, exists := lookup[user]
+
+		if exists && permission.Write != existing.Write {
+			exists = false
+			err := client.RevokePermission(existing)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to revoke permission")
+				m.client.Clients().Event(context.TODO(), cli, "Warning", "PermissionFailed", err.Error())
+			} else {
+				m.client.Clients().Event(context.TODO(), cli, "Normal", "PermissionRevoked", "Revoking to upgrade or downgrade permissions")
+			}
+		}
+
+		if !exists {
+			err := client.GrantPermission(permission)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to grant permission")
+				m.client.Clients().Event(context.TODO(), cli, "Warning", "PermissionFailed", err.Error())
+			} else {
+				m.client.Clients().Event(context.TODO(), cli, "Normal", "PermissionGranted", "Permission granted")
+			}
+		}
+
+		if !cli.Ready {
+			cli.Ready = true
+			err = m.client.Clients().UpdateStatus(context.TODO(), cli)
+			if err != nil {
+				m.client.Clients().Event(context.TODO(), cli, "Warning", "StatusUpdateFailed", err.Error())
 			}
 		}
 	}

@@ -186,12 +186,12 @@ func (c *Client) DeleteUser(user User) error {
 
 func (c *Client) ListPermitted(db string) ([]Permission, error) {
 	permissions := []Permission{}
-	permitted, err := c.conn.ListPermitted(db)
+	readers, writers, err := c.conn.ListPermitted(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
 
-	for _, user := range permitted {
+	for _, user := range readers {
 		if isReservedUser(user) {
 			continue
 		}
@@ -206,6 +206,22 @@ func (c *Client) ListPermitted(db string) ([]Permission, error) {
 		})
 	}
 
+	for _, user := range writers {
+		if isReservedUser(user) {
+			continue
+		}
+
+		permissions = append(permissions, Permission{
+			Cluster: Cluster{
+				Name:      c.cluster,
+				Namespace: c.namespace,
+			},
+			Database: db,
+			User:     user,
+			Write:    true,
+		})
+	}
+
 	return permissions, nil
 }
 
@@ -216,7 +232,7 @@ func (c *Client) GrantPermission(permission Permission) error {
 	}
 
 	c.logger.Info().Msgf("Granting '%s' permission to read/write to '%s'", permission.User, permission.Database)
-	err = c.conn.GrantPermissions(permission.User, owner)
+	err = c.conn.GrantPermissions(permission.User, owner, permission.Write)
 	if err != nil {
 		return fmt.Errorf("failed to grant permission: %+v", err)
 	}

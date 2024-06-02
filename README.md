@@ -7,6 +7,10 @@ Currently supports:
 - Redis
 - NATs
 
-## NOTES
+## TODO
 
-- use the database client to fetch the owner when setting and unsetting permissions
+- PG tests to wait for client readiness
+- Clean up postgres PVCs
+- Clean up a bit:
+  - Move existing-state-related functions to state.go
+  - Find things like event logic to DRY up

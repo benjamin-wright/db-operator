@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
@@ -141,46 +140,52 @@ func (c *Client) GetOwner(database string) (string, error) {
 	return owner, nil
 }
 
-var ACL_REGEX = regexp.MustCompile(`^{(\w+)=.*\/.*}$`)
+/*
+ListPermitted returns a list of users with read and write permissions on the database.
 
-func (c *Client) ListPermitted(database string) ([]string, error) {
-	rows, err := c.conn.Query(context.Background(), "SELECT defaclacl, defaclobjtype FROM pg_default_acl")
+Example:
+
+	readers, writers, err := client.ListPermitted("mydb")
+*/
+func (c *Client) ListPermitted(database string) ([]string, []string, error) {
+	rows, err := c.conn.Query(context.Background(), "SELECT defaclacl FROM pg_default_acl WHERE defaclobjtype = 'r'")
 	if err != nil {
-		return nil, fmt.Errorf("failed to list permissions: %+v", err)
+		return nil, nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
 	defer rows.Close()
-	// oid  | defaclrole | defaclnamespace | defaclobjtype |         defaclacl
-	// -------+------------+-----------------+---------------+---------------------------
-	//  16425 |      16384 |            2200 | r             | {other_user=arwd/my_user}
-	//  16426 |      16384 |            2200 | S             | {other_user=rw/my_user}
 
-	permittedMap := map[string]struct{}{}
+	readersMap := map[string]struct{}{}
+	writersMap := map[string]struct{}{}
 
 	for rows.Next() {
 		var acl string
 		if err := rows.Scan(&acl); err != nil {
-			return nil, fmt.Errorf("failed to decode user permission: %+v", err)
+			return nil, nil, fmt.Errorf("failed to decode user permission: %+v", err)
 		}
 
-		matches := ACL_REGEX.FindStringSubmatch(acl)
-		if len(matches) != 2 {
-			return nil, fmt.Errorf("failed to parse user permission: %s", acl)
+		permission, err := parseACL(acl)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to parse user permission: %+v", err)
 		}
 
-		user := matches[1]
-		if user == "" {
-			return nil, fmt.Errorf("failed to parse user permission: %s", acl)
+		if permission.Write {
+			writersMap[permission.For] = struct{}{}
+		} else {
+			readersMap[permission.For] = struct{}{}
 		}
-
-		permittedMap[user] = struct{}{}
 	}
 
-	permitted := make([]string, len(permittedMap))
-	for user := range permittedMap {
-		permitted = append(permitted, user)
+	writers := make([]string, 0, len(writersMap))
+	for writer := range writersMap {
+		writers = append(writers, writer)
 	}
 
-	return permitted, nil
+	readers := make([]string, 0, len(readersMap))
+	for reader := range readersMap {
+		readers = append(readers, reader)
+	}
+
+	return readers, writers, nil
 }
 
 var readPermissions = []string{"SELECT"}
@@ -192,7 +197,7 @@ func (c *Client) GrantPermissions(username string, owner string, writer bool) er
 		permissions = append(permissions, writePermissions...)
 	}
 
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT %s ON TABLES TO %s", strings.Join(permissions, ", "), sanitize(owner), sanitize(username))); err != nil {
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT %s ON TABLES TO %s", sanitize(owner), strings.Join(permissions, ", "), sanitize(username))); err != nil {
 		return fmt.Errorf("failed to grant default table permissions: %+v", err)
 	}
 
@@ -205,7 +210,7 @@ func (c *Client) GrantPermissions(username string, owner string, writer bool) er
 		permissions = append(permissions, "UPDATE")
 	}
 
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT %s ON SEQUENCES TO %s", strings.Join(permissions, ", "), sanitize(owner), sanitize(username))); err != nil {
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public GRANT %s ON SEQUENCES TO %s", sanitize(owner), strings.Join(permissions, ", "), sanitize(username))); err != nil {
 		return fmt.Errorf("failed to grant default sequence permissions: %+v", err)
 	}
 
@@ -213,15 +218,15 @@ func (c *Client) GrantPermissions(username string, owner string, writer bool) er
 }
 
 func (c *Client) RevokePermissions(username string, owner string) error {
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public REVOKE INSERT, SELECT, UPDATE, DELETE ON TABLES FROM %s", sanitize(owner), sanitize(username))); err != nil {
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public REVOKE ALL ON TABLES FROM %s", sanitize(owner), sanitize(username))); err != nil {
 		return fmt.Errorf("failed to revoke default table permissions: %+v", err)
 	}
 
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public REVOKE SELECT, UPDATE ON SEQUENCES FROM %s", sanitize(owner), sanitize(username))); err != nil {
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("ALTER DEFAULT PRIVILEGES FOR USER %s IN SCHEMA public REVOKE ALL ON SEQUENCES FROM %s", sanitize(owner), sanitize(username))); err != nil {
 		return fmt.Errorf("failed to revoke default sequence permissions: %+v", err)
 	}
 
-	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("REVOKE INSERT, SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM %s", sanitize(username))); err != nil {
+	if _, err := c.conn.Exec(context.Background(), fmt.Sprintf("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %s", sanitize(username))); err != nil {
 		return fmt.Errorf("failed to revoke existing table permissions: %+v", err)
 	}
 

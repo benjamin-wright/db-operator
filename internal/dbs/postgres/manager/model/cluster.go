@@ -21,6 +21,18 @@ func (m Model) Owns(obj interface{}) bool {
 	case services.Resource:
 		_, ok := m.Clusters[obj.GetID()]
 		return ok
+	case secrets.Resource:
+		cluster, ok := m.Clusters[obj.Cluster.Name+"@"+obj.Cluster.Namespace]
+		if !ok {
+			return false
+		}
+
+		user, ok := cluster.Users[obj.Comparable.User]
+		if !ok {
+			return false
+		}
+
+		return user.Secret.Name == obj.Name && user.Secret.Namespace == obj.Namespace
 	}
 
 	return false
@@ -42,8 +54,8 @@ type UserData struct {
 
 type DatabaseData struct {
 	Owner   string
-	Writers map[string]struct{}
-	Readers map[string]struct{}
+	Writers map[string]clients.Resource
+	Readers map[string]clients.Resource
 }
 
 func (c *Cluster) GetID() string {
@@ -88,9 +100,10 @@ func NewModel(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucke
 			ClientID: client.GetID(),
 			Secret: secrets.Resource{
 				Comparable: secrets.Comparable{
-					Name:      client.Name,
+					Name:      client.Secret,
 					Namespace: client.Namespace,
 					User:      client.Username,
+					Database:  client.Database,
 					Cluster: secrets.Cluster{
 						Name:      cluster.Name,
 						Namespace: cluster.Namespace,
@@ -101,8 +114,8 @@ func NewModel(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucke
 
 		if _, ok := cluster.Databases[client.Database]; !ok {
 			cluster.Databases[client.Database] = &DatabaseData{
-				Writers: make(map[string]struct{}),
-				Readers: make(map[string]struct{}),
+				Writers: make(map[string]clients.Resource),
+				Readers: make(map[string]clients.Resource),
 			}
 		}
 
@@ -110,9 +123,9 @@ func NewModel(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucke
 		case clients.PermissionAdmin:
 			cluster.Databases[client.Database].Owner = client.Username
 		case clients.PermissionWrite:
-			cluster.Databases[client.Database].Writers[client.Username] = struct{}{}
+			cluster.Databases[client.Database].Writers[client.Username] = client
 		case clients.PermissionRead:
-			cluster.Databases[client.Database].Readers[client.Username] = struct{}{}
+			cluster.Databases[client.Database].Readers[client.Username] = client
 		}
 	}
 
