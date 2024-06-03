@@ -1,16 +1,19 @@
 package bucket
 
 import (
-	"github.com/benjamin-wright/db-operator/v2/internal/state/types"
 	"github.com/benjamin-wright/db-operator/v2/pkg/k8s_generic"
 	"github.com/rs/zerolog/log"
 )
 
-type Bucket[T types.HasID] struct {
+type HasID interface {
+	GetID() string
+}
+
+type Bucket[T HasID] struct {
 	state map[string]T
 }
 
-func NewBucket[T types.HasID]() Bucket[T] {
+func NewBucket[T HasID]() Bucket[T] {
 	return Bucket[T]{
 		state: map[string]T{},
 	}

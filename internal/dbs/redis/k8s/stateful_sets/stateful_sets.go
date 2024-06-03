@@ -117,6 +117,7 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 							"name": "datadir",
 							"labels": k8s_generic.Merge(map[string]string{
 								"ponglehub.co.uk/resource-type": "redis",
+								"app":                           r.Name,
 							}, common.LABEL_FILTERS),
 						},
 						"spec": map[string]interface{}{

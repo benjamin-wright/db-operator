@@ -27,8 +27,9 @@ type Comparable struct {
 	Name      string
 	Namespace string
 	Cluster   Cluster
-	Unit      int64
+	Unit      int
 	Secret    string
+	Ready     bool
 }
 
 type Resource struct {
@@ -43,8 +44,10 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "RedisClient",
 		"metadata": map[string]interface{}{
-			"name":      r.Name,
-			"namespace": r.Namespace,
+			"name":            r.Name,
+			"namespace":       r.Namespace,
+			"uid":             r.UID,
+			"resourceVersion": r.ResourceVersion,
 		},
 		"spec": map[string]interface{}{
 			"cluster": map[string]interface{}{
@@ -53,6 +56,9 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 			},
 			"unit":   r.Unit,
 			"secret": r.Secret,
+		},
+		"status": map[string]interface{}{
+			"ready": r.Ready,
 		},
 	})
 
@@ -78,14 +84,20 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 		return r, fmt.Errorf("failed to get cluster namespace: %+v", err)
 	}
 
-	r.Unit, err = k8s_generic.GetProperty[int64](obj, "spec", "unit")
+	unit, err := k8s_generic.GetProperty[int64](obj, "spec", "unit")
 	if err != nil {
 		return r, fmt.Errorf("failed to get unit: %+v", err)
 	}
+	r.Unit = int(unit)
 
 	r.Secret, err = k8s_generic.GetProperty[string](obj, "spec", "secret")
 	if err != nil {
 		return r, fmt.Errorf("failed to get secret: %+v", err)
+	}
+
+	r.Ready, _, err = unstructured.NestedBool(obj.Object, "status", "ready")
+	if err != nil {
+		return r, fmt.Errorf("failed to get ready: %+v", err)
 	}
 
 	return r, nil
@@ -93,6 +105,10 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 
 func (r Resource) GetID() string {
 	return r.Name + "@" + r.Namespace
+}
+
+func (r Resource) GetClusterID() string {
+	return r.Cluster.Name + "@" + r.Cluster.Namespace
 }
 
 func (r Resource) GetName() string {

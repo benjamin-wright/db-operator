@@ -166,7 +166,7 @@ func (m *Manager) resolve(demand *model.Model) {
 			}
 		}
 
-		if deployment.Ready && !cluster.Cluster.Ready {
+		if !cluster.Cluster.Ready {
 			cluster.Cluster.Ready = true
 			err := m.client.Clusters().UpdateStatus(context.TODO(), cluster.Cluster)
 			if err != nil {
