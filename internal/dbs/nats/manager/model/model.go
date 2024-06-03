@@ -21,8 +21,8 @@ type Cluster struct {
 }
 
 type UserData struct {
-	ClientID string
-	Secret   secrets.Resource
+	Client clients.Resource
+	Secret secrets.Resource
 }
 
 func New(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucket.Bucket[clients.Resource]) *Model {
@@ -34,6 +34,19 @@ func New(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucket.Buc
 		model.Clusters[cluster.GetID()] = &Cluster{
 			Cluster: cluster,
 			Users:   map[string]*UserData{},
+			Deployment: deployments.Resource{
+				Comparable: deployments.Comparable{
+					Name:      cluster.Name,
+					Namespace: cluster.Namespace,
+					Ready:     cluster.Ready,
+				},
+			},
+			Service: services.Resource{
+				Comparable: services.Comparable{
+					Name:      cluster.Name,
+					Namespace: cluster.Namespace,
+				},
+			},
 		}
 	}
 
@@ -44,7 +57,7 @@ func New(clusterDemand bucket.Bucket[clusters.Resource], clientDemand bucket.Buc
 		}
 
 		cluster.Users[client.GetID()] = &UserData{
-			ClientID: client.GetID(),
+			Client: client,
 			Secret: secrets.Resource{
 				Comparable: secrets.Comparable{
 					Name:      client.Secret,

@@ -1,6 +1,8 @@
 package clusters
 
 import (
+	"fmt"
+
 	"github.com/benjamin-wright/db-operator/v2/pkg/k8s_generic"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -19,6 +21,7 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 type Comparable struct {
 	Name      string
 	Namespace string
+	Ready     bool
 }
 
 type Resource struct {
@@ -33,8 +36,13 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "NatsCluster",
 		"metadata": map[string]interface{}{
-			"name":      r.Name,
-			"namespace": r.Namespace,
+			"name":            r.Name,
+			"namespace":       r.Namespace,
+			"uid":             r.UID,
+			"resourceVersion": r.ResourceVersion,
+		},
+		"status": map[string]interface{}{
+			"ready": r.Ready,
 		},
 	})
 
@@ -48,6 +56,12 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	r.Namespace = obj.GetNamespace()
 	r.UID = string(obj.GetUID())
 	r.ResourceVersion = obj.GetResourceVersion()
+
+	var err error
+	r.Ready, _, err = unstructured.NestedBool(obj.Object, "status", "ready")
+	if err != nil {
+		return Resource{}, fmt.Errorf("failed to get ready status: %w", err)
+	}
 
 	return r, nil
 }
