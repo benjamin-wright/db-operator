@@ -1,4 +1,4 @@
-package deployment
+package manager
 
 import (
 	"context"
@@ -9,8 +9,10 @@ import (
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clients"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/clusters"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/pvcs"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/secrets"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/services"
 	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/k8s/stateful_sets"
+	"github.com/benjamin-wright/db-operator/v2/internal/dbs/postgres/manager/model"
 	"github.com/benjamin-wright/db-operator/v2/internal/state/bucket"
 	"github.com/benjamin-wright/db-operator/v2/internal/utils"
 	"github.com/rs/zerolog/log"
@@ -42,8 +44,9 @@ func New(
 		client.Clusters().Watch,
 		client.Clients().Watch,
 		client.StatefulSets().Watch,
-		client.PVCs().Watch,
+		client.Secrets().Watch,
 		client.Services().Watch,
+		client.PVCs().Watch,
 	} {
 		err := f(ctx, cancel, updates)
 		if err != nil {
@@ -55,8 +58,9 @@ func New(
 		clusters:     bucket.NewBucket[clusters.Resource](),
 		clients:      bucket.NewBucket[clients.Resource](),
 		statefulSets: bucket.NewBucket[stateful_sets.Resource](),
-		pvcs:         bucket.NewBucket[pvcs.Resource](),
+		secrets:      bucket.NewBucket[secrets.Resource](),
 		services:     bucket.NewBucket[services.Resource](),
+		pvcs:         bucket.NewBucket[pvcs.Resource](),
 	}
 
 	return &Manager{
@@ -87,6 +91,14 @@ func (m *Manager) Start() {
 	}()
 }
 
+func (m *Manager) clusterEvent(clusterObj clusters.Resource, eventType, reason, message string) {
+	m.client.Clusters().Event(context.TODO(), clusterObj, eventType, reason, message)
+}
+
+func (m *Manager) clientEvent(clientObj clients.Resource, eventType, reason, message string) {
+	m.client.Clients().Event(context.TODO(), clientObj, eventType, reason, message)
+}
+
 func (m *Manager) refresh() {
 	select {
 	case <-m.ctx.Done():
@@ -95,60 +107,46 @@ func (m *Manager) refresh() {
 		m.debouncer.Trigger()
 	case <-m.debouncer.Wait():
 		log.Debug().Msg("Processing postgres deployments started")
-		m.processPostgresDBs()
-		log.Debug().Msg("Processing postgres deployments finished")
+		demand := model.NewModel(m.state.clusters, m.state.clients)
+
+		err := m.clean(demand)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to clean postgres deployments")
+			return
+		}
+
+		err = m.resolve(demand)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to resolve postgres deployments")
+		} else {
+			log.Debug().Msg("Processing postgres deployments finished")
+		}
 	}
 }
 
-func (m *Manager) processPostgresDBs() {
-	ssDemand := m.state.GetStatefulSetDemand()
-	svcDemand := m.state.GetServiceDemand()
-	pvcsToRemove := m.state.GetPVCDemand()
+func (m *Manager) resolve(demand model.Model) error {
+	for _, cluster := range demand.Clusters {
+		clusterObj, exists := m.state.clusters.Get(cluster.GetID())
+		if !exists {
+			return fmt.Errorf("cluster %s not found", cluster.GetID())
+		}
 
-	for _, db := range ssDemand.ToRemove.List() {
-		log.Info().Msgf("Deleting db: %s", db.Name)
-		err := m.client.StatefulSets().Delete(m.ctx, db.Name, db.Namespace)
+		if !m.resolveK8s(cluster, clusterObj) {
+			continue
+		}
 
+		err := m.resolveCluster(cluster)
 		if err != nil {
-			log.Error().Err(err).Msgf("Failed to delete postgresdb stateful set: %+v", err)
+			return fmt.Errorf("failed to resolve admin: %+v", err)
+		}
+
+		for name := range cluster.Databases {
+			err := m.resolveDatabase(cluster, name)
+			if err != nil {
+				return fmt.Errorf("failed to resolve database: %+v", err)
+			}
 		}
 	}
 
-	for _, svc := range svcDemand.ToRemove.List() {
-		log.Info().Msgf("Deleting service: %s", svc.Name)
-		err := m.client.Services().Delete(m.ctx, svc.Name, svc.Namespace)
-
-		if err != nil {
-			log.Error().Err(err).Msgf("Failed to delete postgresdb service: %+v", err)
-		}
-	}
-
-	for _, pvc := range pvcsToRemove {
-		log.Info().Msgf("Deleting pvc: %s", pvc.Name)
-		err := m.client.PVCs().Delete(m.ctx, pvc.Name, pvc.Namespace)
-
-		if err != nil {
-			log.Error().Err(err).Msgf("Failed to delete postgresdb PVC: %+v", err)
-		}
-	}
-
-	for _, db := range ssDemand.ToAdd.List() {
-		log.Info().Msgf("Creating db: %s", db.Target.Name)
-		err := m.client.StatefulSets().Create(m.ctx, db.Target)
-		if err != nil {
-			log.Error().Err(err).Msgf("Failed to create postgresdb stateful set: %+v", err)
-			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningFailed", fmt.Sprintf("Failed to create stateful set: %s", err.Error()))
-		} else {
-			m.client.Clusters().Event(m.ctx, db.Parent, "Normal", "ProvisioningSucceeded", "Created stateful set")
-		}
-	}
-
-	for _, svc := range svcDemand.ToAdd.List() {
-		log.Info().Msgf("Creating service: %s", svc.Target.Name)
-		err := m.client.Services().Create(m.ctx, svc.Target)
-
-		if err != nil {
-			log.Error().Err(err).Msgf("Failed to create postgresdb service: %+v", err)
-		}
-	}
+	return nil
 }

@@ -28,6 +28,7 @@ type Comparable struct {
 	Namespace string
 	Cluster   Cluster
 	Secret    string
+	Ready     bool
 }
 
 type Resource struct {
@@ -42,8 +43,10 @@ func (cli Resource) ToUnstructured() *unstructured.Unstructured {
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "NatsClient",
 		"metadata": map[string]interface{}{
-			"name":      cli.Name,
-			"namespace": cli.Namespace,
+			"name":            cli.Name,
+			"namespace":       cli.Namespace,
+			"resourceVersion": cli.ResourceVersion,
+			"uid":             cli.UID,
 		},
 		"spec": map[string]interface{}{
 			"cluster": map[string]interface{}{
@@ -51,6 +54,9 @@ func (cli Resource) ToUnstructured() *unstructured.Unstructured {
 				"namespace": cli.Cluster.Namespace,
 			},
 			"secret": cli.Secret,
+		},
+		"status": map[string]interface{}{
+			"ready": cli.Ready,
 		},
 	})
 
@@ -81,7 +87,20 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 		return cli, fmt.Errorf("failed to get secret: %+v", err)
 	}
 
+	cli.Ready, _, err = unstructured.NestedBool(obj.Object, "status", "ready")
+	if err != nil {
+		return cli, fmt.Errorf("failed to get ready: %+v", err)
+	}
+
 	return cli, nil
+}
+
+func (cli Resource) GetID() string {
+	return cli.Name + "@" + cli.Namespace
+}
+
+func (cli Resource) GetClusterID() string {
+	return cli.Cluster.Name + "@" + cli.Cluster.Namespace
 }
 
 func (cli Resource) GetName() string {
@@ -100,12 +119,8 @@ func (cli Resource) GetResourceVersion() string {
 	return cli.ResourceVersion
 }
 
-func (cli Resource) GetTarget() string {
-	return cli.Cluster.Name
-}
-
-func (cli Resource) GetTargetNamespace() string {
-	return cli.Cluster.Namespace
+func (cli Resource) GetTargetID() string {
+	return cli.Cluster.Name + "@" + cli.Cluster.Namespace
 }
 
 func (cli Resource) Equal(obj k8s_generic.Resource) bool {

@@ -74,6 +74,10 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	return r, nil
 }
 
+func (r Resource) GetID() string {
+	return r.Name + "@" + r.Namespace
+}
+
 func (r Resource) GetName() string {
 	return r.Name
 }

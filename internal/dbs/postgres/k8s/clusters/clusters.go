@@ -22,6 +22,7 @@ type Comparable struct {
 	Name      string
 	Namespace string
 	Storage   string
+	Ready     bool
 }
 
 type Resource struct {
@@ -36,11 +37,16 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "PostgresCluster",
 		"metadata": map[string]interface{}{
-			"name":      r.Name,
-			"namespace": r.Namespace,
+			"name":            r.Name,
+			"namespace":       r.Namespace,
+			"resourceVersion": r.ResourceVersion,
+			"uid":             r.UID,
 		},
 		"spec": map[string]interface{}{
 			"storage": r.Storage,
+		},
+		"status": map[string]interface{}{
+			"ready": r.Ready,
 		},
 	})
 
@@ -59,8 +65,16 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	if err != nil {
 		return r, fmt.Errorf("failed to get storage: %+v", err)
 	}
+	r.Ready, _, err = unstructured.NestedBool(obj.Object, "status", "ready")
+	if err != nil {
+		return r, fmt.Errorf("failed to get ready: %+v", err)
+	}
 
 	return r, nil
+}
+
+func (r Resource) GetID() string {
+	return r.Name + "@" + r.Namespace
 }
 
 func (r Resource) GetName() string {

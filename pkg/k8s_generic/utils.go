@@ -35,7 +35,7 @@ func (m *MissingError) Error() string {
 	return m.message
 }
 
-func GetProperty[T BasicType](u *unstructured.Unstructured, args ...string) (T, error) {
+func GetProperty[T any](u *unstructured.Unstructured, args ...string) (T, error) {
 	var current interface{} = u.Object
 	var empty T
 

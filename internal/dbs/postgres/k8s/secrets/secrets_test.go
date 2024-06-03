@@ -41,7 +41,7 @@ func TestPostgresSecretFromUnstructured(t *testing.T) {
 	assert.Equal(t, "test-name", unstructured.Object["metadata"].(map[string]interface{})["labels"].(map[string]string)["app"])
 
 	assert.Equal(t, "test-db.db-namespace.svc.cluster.local", decode(t, unstructured.Object["data"].(map[string]interface{})["POSTGRES_HOST"]))
-	assert.Equal(t, "26257", decode(t, unstructured.Object["data"].(map[string]interface{})["POSTGRES_PORT"]))
+	assert.Equal(t, "5432", decode(t, unstructured.Object["data"].(map[string]interface{})["POSTGRES_PORT"]))
 	assert.Equal(t, "test-user", decode(t, unstructured.Object["data"].(map[string]interface{})["POSTGRES_USER"]))
 	assert.Equal(t, "test-database", decode(t, unstructured.Object["data"].(map[string]interface{})["POSTGRES_NAME"]))
 }

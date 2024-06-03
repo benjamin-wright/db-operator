@@ -39,6 +39,7 @@ type Permission struct {
 	User     string
 	Database string
 	Cluster  Cluster
+	Write    bool
 }
 
 func (u Permission) GetName() string {

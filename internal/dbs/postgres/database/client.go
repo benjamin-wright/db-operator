@@ -21,7 +21,7 @@ type Client struct {
 func New(cluster string, namespace string, password string, database string) (*Client, error) {
 	cfg := config.Config{
 		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", cluster, namespace),
-		Port:     26257,
+		Port:     5432,
 		Username: "postgres",
 		Password: password,
 		Database: database,
@@ -99,6 +99,17 @@ func (c *Client) ListDBs() ([]Database, error) {
 	return databases, nil
 }
 
+func (c *Client) SetOwner(db Database) error {
+	c.logger.Info().Msgf("Setting owner of database %s to %s", db.Name, db.Owner)
+
+	err := c.conn.SetOwner(db.Name, db.Owner)
+	if err != nil {
+		return fmt.Errorf("failed to set owner of database %s to %s: %+v", db.Name, db.Owner, err)
+	}
+
+	return nil
+}
+
 func (c *Client) CreateDB(db Database) error {
 	c.logger.Info().Msgf("Creating database %s", db.Name)
 
@@ -173,14 +184,14 @@ func (c *Client) DeleteUser(user User) error {
 	return nil
 }
 
-func (c *Client) ListPermitted(db Database) ([]Permission, error) {
+func (c *Client) ListPermitted(db string) ([]Permission, error) {
 	permissions := []Permission{}
-	permitted, err := c.conn.ListPermitted(db.Name)
+	readers, writers, err := c.conn.ListPermitted(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %+v", err)
 	}
 
-	for _, user := range permitted {
+	for _, user := range readers {
 		if isReservedUser(user) {
 			continue
 		}
@@ -190,8 +201,24 @@ func (c *Client) ListPermitted(db Database) ([]Permission, error) {
 				Name:      c.cluster,
 				Namespace: c.namespace,
 			},
-			Database: db.Name,
+			Database: db,
 			User:     user,
+		})
+	}
+
+	for _, user := range writers {
+		if isReservedUser(user) {
+			continue
+		}
+
+		permissions = append(permissions, Permission{
+			Cluster: Cluster{
+				Name:      c.cluster,
+				Namespace: c.namespace,
+			},
+			Database: db,
+			User:     user,
+			Write:    true,
 		})
 	}
 
@@ -205,7 +232,7 @@ func (c *Client) GrantPermission(permission Permission) error {
 	}
 
 	c.logger.Info().Msgf("Granting '%s' permission to read/write to '%s'", permission.User, permission.Database)
-	err = c.conn.GrantPermissions(permission.User, owner)
+	err = c.conn.GrantPermissions(permission.User, owner, permission.Write)
 	if err != nil {
 		return fmt.Errorf("failed to grant permission: %+v", err)
 	}

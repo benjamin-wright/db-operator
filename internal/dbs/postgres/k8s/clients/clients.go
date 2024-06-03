@@ -18,19 +18,30 @@ var ClientArgs = k8s_generic.ClientArgs[Resource]{
 	FromUnstructured: fromUnstructured,
 }
 
+const (
+	PermissionAdmin string = "admin"
+	PermissionWrite string = "writer"
+	PermissionRead  string = "reader"
+)
+
 type Cluster struct {
 	Name      string
 	Namespace string
 }
 
+func (c Cluster) GetID() string {
+	return c.Name + "@" + c.Namespace
+}
+
 type Comparable struct {
-	Name      string
-	Namespace string
-	Cluster   Cluster
-	Database  string
-	Username  string
-	Secret    string
-	Owner     bool
+	Name       string
+	Namespace  string
+	Cluster    Cluster
+	Username   string
+	Secret     string
+	Database   string
+	Permission string
+	Ready      bool
 }
 
 type Resource struct {
@@ -45,18 +56,23 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 		"apiVersion": "ponglehub.co.uk/v1alpha1",
 		"kind":       "PostgresClient",
 		"metadata": map[string]interface{}{
-			"name":      r.Name,
-			"namespace": r.Namespace,
+			"name":            r.Name,
+			"namespace":       r.Namespace,
+			"uid":             r.UID,
+			"resourceVersion": r.ResourceVersion,
 		},
 		"spec": map[string]interface{}{
 			"cluster": map[string]interface{}{
 				"name":      r.Cluster.Name,
 				"namespace": r.Cluster.Namespace,
 			},
-			"database": r.Database,
-			"username": r.Username,
-			"secret":   r.Secret,
-			"owner":    r.Owner,
+			"permission": r.Permission,
+			"username":   r.Username,
+			"secret":     r.Secret,
+			"database":   r.Database,
+		},
+		"status": map[string]interface{}{
+			"ready": r.Ready,
 		},
 	})
 
@@ -81,6 +97,11 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 		return r, fmt.Errorf("failed to get cluster ref namespace: %+v", err)
 	}
 
+	r.Permission, err = k8s_generic.GetProperty[string](obj, "spec", "permission")
+	if err != nil {
+		return r, fmt.Errorf("failed to get permission: %+v", err)
+	}
+
 	r.Database, err = k8s_generic.GetProperty[string](obj, "spec", "database")
 	if err != nil {
 		return r, fmt.Errorf("failed to get database: %+v", err)
@@ -96,14 +117,20 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 		return r, fmt.Errorf("failed to get secret: %+v", err)
 	}
 
-	r.Owner, err = k8s_generic.GetProperty[bool](obj, "spec", "owner")
+	r.Ready, _, err = unstructured.NestedBool(obj.Object, "status", "ready")
 	if err != nil {
-		if _, ok := err.(*k8s_generic.MissingError); !ok {
-			return r, fmt.Errorf("failed to get owner: %+v", err)
-		}
+		return r, fmt.Errorf("failed to get ready status: %+v", err)
 	}
 
 	return r, nil
+}
+
+func (r Resource) GetID() string {
+	return r.Name + "@" + r.Namespace
+}
+
+func (r Resource) GetClusterID() string {
+	return r.Cluster.Name + "@" + r.Cluster.Namespace
 }
 
 func (r Resource) GetName() string {
@@ -131,9 +158,14 @@ func (r Resource) GetTargetNamespace() string {
 }
 
 func (r Resource) Equal(obj k8s_generic.Resource) bool {
-	if other, ok := obj.(Resource); ok {
-		return r.Comparable == other.Comparable
+	other, ok := obj.(Resource)
+	if !ok {
+		return false
 	}
 
-	return false
+	if r.Comparable != other.Comparable {
+		return false
+	}
+
+	return true
 }

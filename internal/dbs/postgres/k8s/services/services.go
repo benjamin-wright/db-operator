@@ -48,7 +48,7 @@ func (r Resource) ToUnstructured() *unstructured.Unstructured {
 				"ports": []map[string]interface{}{
 					{
 						"name":       "grpc",
-						"port":       26257,
+						"port":       5432,
 						"protocol":   "TCP",
 						"targetPort": "grpc",
 					},
@@ -72,6 +72,10 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	r.ResourceVersion = obj.GetResourceVersion()
 
 	return r, nil
+}
+
+func (r Resource) GetID() string {
+	return r.Name + "@" + r.Namespace
 }
 
 func (r Resource) GetName() string {

@@ -7,6 +7,5 @@ Currently supports:
 - Redis
 - NATs
 
-## NOTES
+## TODO
 
-- use the database client to fetch the owner when setting and unsetting permissions

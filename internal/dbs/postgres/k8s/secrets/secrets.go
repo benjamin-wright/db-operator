@@ -37,9 +37,9 @@ type Comparable struct {
 	Name      string
 	Namespace string
 	Cluster   Cluster
-	Database  string
 	User      string
 	Password  string
+	Database  string
 }
 
 type Resource struct {
@@ -57,7 +57,7 @@ func (r Resource) GetHost() string {
 }
 
 func (r Resource) GetPort() string {
-	return "26257"
+	return "5432"
 }
 
 func (r Resource) ToUnstructured() *unstructured.Unstructured {
@@ -118,6 +118,10 @@ func fromUnstructured(obj *unstructured.Unstructured) (Resource, error) {
 	}
 
 	return r, nil
+}
+
+func (r Resource) GetID() string {
+	return r.Name + "@" + r.Namespace
 }
 
 func (r Resource) GetName() string {
