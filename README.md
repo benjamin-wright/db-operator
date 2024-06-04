@@ -8,4 +8,4 @@ Currently supports:
 - NATs
 
 ## TODO
-
+- update pgx to use pgpool, to better deal with simultaneous connections
