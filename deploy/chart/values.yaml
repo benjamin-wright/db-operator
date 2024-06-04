@@ -1,4 +1,4 @@
-# image:
+image: benwright/db-operator:v2.0.5
 
 name: db-operator
 replicas: 1
