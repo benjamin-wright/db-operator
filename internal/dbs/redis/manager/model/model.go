@@ -60,7 +60,7 @@ func New(clusterDemand bucket.Bucket[clusters.Resource], clientsDemand bucket.Bu
 					Client: client,
 					Secret: secrets.Resource{
 						Comparable: secrets.Comparable{
-							Name:      client.Name,
+							Name:      client.Secret,
 							Namespace: client.Namespace,
 							Cluster: secrets.Cluster{
 								Name:      cluster.Cluster.Name,
