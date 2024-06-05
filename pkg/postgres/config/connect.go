@@ -6,21 +6,22 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
-func getConnection(config *pgx.ConnConfig, retry bool) (*pgx.Conn, error) {
+func getConnection(config *pgx.ConnConfig, retry bool) (*pgxpool.Pool, error) {
 	attempts := 0
 	limit := 1
 	if retry {
 		limit = 10
 	}
 	backoff := time.Duration(1)
-	var connection *pgx.Conn
+	var connection *pgxpool.Pool
 	var err error
 	for attempts < limit {
 		attempts += 1
-		connection, err = pgx.ConnectConfig(context.Background(), config)
+		connection, err = pgxpool.New(context.Background(), config.ConnString())
 		if err != nil {
 			log.Debug().Err(err).Msg("Failed to connect")
 			time.Sleep(time.Second * backoff)
@@ -38,7 +39,7 @@ func getConnection(config *pgx.ConnConfig, retry bool) (*pgx.Conn, error) {
 	return connection, err
 }
 
-func Connect(config Config) (*pgx.Conn, error) {
+func Connect(config Config) (*pgxpool.Pool, error) {
 	connectionString := config.ConnectionString()
 
 	pgxConfig, err := pgx.ParseConfig(connectionString)

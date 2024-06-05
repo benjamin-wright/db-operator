@@ -7,10 +7,11 @@ import (
 
 	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Client struct {
-	conn *pgx.Conn
+	conn *pgxpool.Pool
 }
 
 func New(cfg config.Config) (*Client, error) {
@@ -23,7 +24,7 @@ func New(cfg config.Config) (*Client, error) {
 }
 
 func (c *Client) Stop() {
-	c.conn.Close(context.Background())
+	c.conn.Close()
 }
 
 func (c *Client) ListUsers() ([]string, error) {

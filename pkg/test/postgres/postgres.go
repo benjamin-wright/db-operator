@@ -51,7 +51,7 @@ func Migrate(path string) {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to connect to postgres")
 	}
-	defer conn.Close(context.TODO())
+	defer conn.Close()
 
 	data, err := os.ReadFile(path)
 	if err != nil {

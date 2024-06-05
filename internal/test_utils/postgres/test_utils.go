@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type TestUtils struct {
-	conn *pgx.Conn
+	conn *pgxpool.Pool
 }
 
 func New(cfg config.Config) (*TestUtils, error) {

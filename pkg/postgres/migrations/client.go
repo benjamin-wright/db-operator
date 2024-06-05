@@ -7,12 +7,12 @@ import (
 	"sort"
 
 	"github.com/benjamin-wright/db-operator/v2/pkg/postgres/config"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
 type Client struct {
-	conn *pgx.Conn
+	conn *pgxpool.Pool
 	cfg  config.Config
 }
 
@@ -30,7 +30,7 @@ func New(cfg config.Config) (*Client, error) {
 
 func (c *Client) Stop() {
 	log.Info().Msgf("Closing connection to DB %s[%s]", c.cfg.Host, c.cfg.Database)
-	c.conn.Close(context.TODO())
+	c.conn.Close()
 }
 
 func (c *Client) Init() error {
