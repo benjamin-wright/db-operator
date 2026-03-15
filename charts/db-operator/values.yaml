@@ -1,0 +1,62 @@
+# Number of operator replicas. Keep at 1 unless leader election is enabled.
+replicaCount: 1
+
+image:
+  repository: localhost:5001/db-operator
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Name override for Helm chart resources
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Name of the ServiceAccount to create. Defaults to the chart full name.
+  name: ""
+
+# Namespace the operator manages. Used as a label/annotation hint — RBAC is cluster-scoped.
+watchNamespace: ""
+
+# Operator command-line arguments
+args:
+  metricsBindAddress: ":8080"
+  healthProbeBindAddress: ":8081"
+  leaderElect: false
+  instanceName: "default"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+
+# Extra labels applied to all resources
+commonLabels: {}
+
+# Extra annotations applied to the Deployment pod template
+podAnnotations: {}
+
+# Node selector for the operator pod
+nodeSelector: {}
+
+# Tolerations for the operator pod
+tolerations: []
+
+# Affinity rules for the operator pod
+affinity: {}

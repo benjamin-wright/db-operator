@@ -1,0 +1,12 @@
+apiVersion: v2
+name: db-operator
+description: Kubernetes operator for managing PostgresDatabase and PostgresCredential custom resources
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - operator
+  - postgres
+  - database
+maintainers:
+  - name: games-hub

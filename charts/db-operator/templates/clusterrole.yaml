@@ -1,0 +1,88 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "db-operator.fullname" . }}-manager
+  labels:
+    {{- include "db-operator.labels" . | nindent 4 }}
+rules:
+  # Custom resources: PostgresDatabase and PostgresCredential
+  - apiGroups:
+      - db-operator.benjamin-wright.github.com
+    resources:
+      - postgresdatabases
+      - postgrescredentials
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Status subresources for both CRDs
+  - apiGroups:
+      - db-operator.benjamin-wright.github.com
+    resources:
+      - postgresdatabases/status
+      - postgrescredentials/status
+    verbs:
+      - get
+      - update
+      - patch
+  # Finalizer subresources for both CRDs
+  - apiGroups:
+      - db-operator.benjamin-wright.github.com
+    resources:
+      - postgresdatabases/finalizers
+      - postgrescredentials/finalizers
+    verbs:
+      - update
+  # StatefulSets and Services (owned by PostgresDatabase)
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Secrets (for PostgresCredential management)
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Events (read-only; controller-runtime emits events via the recorder)
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
