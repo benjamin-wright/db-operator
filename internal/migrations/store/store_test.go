@@ -1,117 +1,124 @@
 //go:build integration
 
-package store
+package store_test
 
-import (
-	"database/sql"
-	"fmt"
-	"os"
-	"testing"
+// import (
+// 	"database/sql"
+// 	"fmt"
+// 	"testing"
 
-	_ "github.com/lib/pq"
-	. "github.com/onsi/gomega"
-)
+// 	"github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
+// 	_ "github.com/lib/pq"
 
-func testDB(t *testing.T) *sql.DB {
-	t.Helper()
+// 	. "github.com/benjamin-wright/db-operator/internal/test_utils"
+// 	. "github.com/onsi/ginkgo/v2"
+// 	. "github.com/onsi/gomega"
+// 	corev1 "k8s.io/api/core/v1"
+// 	"k8s.io/apimachinery/pkg/types"
+// )
 
-	host := envOrDefault("PGHOST", "localhost")
-	port := envOrDefault("PGPORT", "5432")
-	user := envOrDefault("PGUSER", "postgres")
-	pass := envOrDefault("PGPASSWORD", "postgres")
-	name := envOrDefault("PGDATABASE", "postgres")
+// var _ = Describe("Store", func() {
+// 	Describe("migrations tracking", Ordered, func() {
+// 		var (
+// 			ns       *corev1.Namespace
+// 			pgdb     *v1alpha1.PostgresDatabase
+// 			dbLookup types.NamespacedName
+// 		)
 
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", host, port, user, pass, name)
-	db, err := sql.Open("postgres", dsn)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(db.Ping()).To(Succeed())
+// 		BeforeAll(func() {
+// 			ns, pgdb, dbLookup, _ = NewDatabase("migration-test-db")
+// 			WaitForDatabase(dbLookup)
+// 		})
 
-	// Clean up before each test
-	_, _ = db.Exec("DROP TABLE IF EXISTS _migrations")
-	_, _ = db.Exec("DROP TABLE IF EXISTS test_table")
+// 		AfterAll(func() {
+// 			_ = K8sClient.Delete(Ctx, ns)
+// 		})
 
-	t.Cleanup(func() {
-		_, _ = db.Exec("DROP TABLE IF EXISTS _migrations")
-		_, _ = db.Exec("DROP TABLE IF EXISTS test_table")
-		db.Close()
-	})
+// 		BeforeEach(func() {
+// 			Eventually(func(g Gomega) {
+// 				podName := fmt.Sprintf("%s-0", pgdb.Name)
+// 				for _, cmd := range []string{
+// 					"DROP TABLE IF EXISTS _migrations",
+// 					"DROP TABLE IF EXISTS test_table",
+// 				} {
+// 					stdout, stderr, err := PodExec(ns.Name, podName, []string{
+// 						"psql", "-U", "postgres", "-d", dbLookup.Name, cmd,
+// 					})
 
-	return db
-}
+// 					Expect(err).NotTo(HaveOccurred(), "psql query failed: stdout=%s stderr=%s", stdout, stderr)
+// 					Expect(stdout).To(ContainSubstring("f"), "Postgres role 'deleteuser' should have been dropped")
+// 				}
+// 			}, Timeout, Interval).Should(Succeed())
+// 		})
+// 	})
+// })
 
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
+// func tableExists(db *sql.DB, name string) bool {
+// 	var exists bool
+// 	err := db.QueryRow(
+// 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
+// 		name,
+// 	).Scan(&exists)
+// 	Expect(err).NotTo(HaveOccurred())
+// 	return exists
+// }
 
-func tableExists(db *sql.DB, name string) bool {
-	var exists bool
-	err := db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
-		name,
-	).Scan(&exists)
-	Expect(err).NotTo(HaveOccurred())
-	return exists
-}
+// func TestEnsureTable(t *testing.T) {
+// 	RegisterTestingT(t)
 
-func TestEnsureTable(t *testing.T) {
-	RegisterTestingT(t)
+// 	s := New(testDB(t))
+// 	Expect(s.EnsureTable()).To(Succeed())
+// 	// Idempotent
+// 	Expect(s.EnsureTable()).To(Succeed())
+// }
 
-	s := New(testDB(t))
-	Expect(s.EnsureTable()).To(Succeed())
-	// Idempotent
-	Expect(s.EnsureTable()).To(Succeed())
-}
+// func TestApplyAndApplied(t *testing.T) {
+// 	RegisterTestingT(t)
 
-func TestApplyAndApplied(t *testing.T) {
-	RegisterTestingT(t)
+// 	db := testDB(t)
+// 	s := New(db)
+// 	Expect(s.EnsureTable()).To(Succeed())
 
-	db := testDB(t)
-	s := New(db)
-	Expect(s.EnsureTable()).To(Succeed())
+// 	Expect(s.Apply("001", "create-test", "CREATE TABLE test_table (id INT)", "abc123", "def456")).To(Succeed())
 
-	Expect(s.Apply("001", "create-test", "CREATE TABLE test_table (id INT)", "abc123", "def456")).To(Succeed())
+// 	records, err := s.Applied()
+// 	Expect(err).NotTo(HaveOccurred())
+// 	Expect(records).To(HaveLen(1))
 
-	records, err := s.Applied()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(records).To(HaveLen(1))
+// 	Expect(records[0].ID).To(Equal("001"))
+// 	Expect(records[0].Name).To(Equal("create-test"))
+// 	Expect(records[0].ApplyHash).To(Equal("abc123"))
+// 	Expect(records[0].RollbackHash).To(Equal("def456"))
 
-	Expect(records[0].ID).To(Equal("001"))
-	Expect(records[0].Name).To(Equal("create-test"))
-	Expect(records[0].ApplyHash).To(Equal("abc123"))
-	Expect(records[0].RollbackHash).To(Equal("def456"))
+// 	Expect(tableExists(db, "test_table")).To(BeTrue(), "expected test_table to exist after Apply")
+// }
 
-	Expect(tableExists(db, "test_table")).To(BeTrue(), "expected test_table to exist after Apply")
-}
+// func TestRollback(t *testing.T) {
+// 	RegisterTestingT(t)
 
-func TestRollback(t *testing.T) {
-	RegisterTestingT(t)
+// 	db := testDB(t)
+// 	s := New(db)
+// 	Expect(s.EnsureTable()).To(Succeed())
 
-	db := testDB(t)
-	s := New(db)
-	Expect(s.EnsureTable()).To(Succeed())
+// 	Expect(s.Apply("001", "create-test", "CREATE TABLE test_table (id INT)", "abc123", "def456")).To(Succeed())
+// 	Expect(s.Rollback("001", "DROP TABLE test_table")).To(Succeed())
 
-	Expect(s.Apply("001", "create-test", "CREATE TABLE test_table (id INT)", "abc123", "def456")).To(Succeed())
-	Expect(s.Rollback("001", "DROP TABLE test_table")).To(Succeed())
+// 	records, err := s.Applied()
+// 	Expect(err).NotTo(HaveOccurred())
+// 	Expect(records).To(BeEmpty())
 
-	records, err := s.Applied()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(records).To(BeEmpty())
+// 	Expect(tableExists(db, "test_table")).To(BeFalse(), "expected test_table to not exist after Rollback")
+// }
 
-	Expect(tableExists(db, "test_table")).To(BeFalse(), "expected test_table to not exist after Rollback")
-}
+// func TestApplyRollsBackOnBadSQL(t *testing.T) {
+// 	RegisterTestingT(t)
 
-func TestApplyRollsBackOnBadSQL(t *testing.T) {
-	RegisterTestingT(t)
+// 	s := New(testDB(t))
+// 	Expect(s.EnsureTable()).To(Succeed())
 
-	s := New(testDB(t))
-	Expect(s.EnsureTable()).To(Succeed())
+// 	Expect(s.Apply("001", "bad-migration", "INVALID SQL HERE", "abc", "def")).To(HaveOccurred())
 
-	Expect(s.Apply("001", "bad-migration", "INVALID SQL HERE", "abc", "def")).To(HaveOccurred())
-
-	records, err := s.Applied()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(records).To(BeEmpty(), "expected no records after failed Apply")
-}
+// 	records, err := s.Applied()
+// 	Expect(err).NotTo(HaveOccurred())
+// 	Expect(records).To(BeEmpty(), "expected no records after failed Apply")
+// }

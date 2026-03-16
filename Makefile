@@ -22,10 +22,6 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-# Setting SHELL to bash allows bash commands to be used in targets.
-SHELL = /usr/bin/env bash -o pipefail
-.SHELLFLAGS = -ec
-
 ##@ General
 
 .PHONY: help
@@ -56,7 +52,7 @@ test: fmt vet ## Run unit tests.
 
 .PHONY: integration-test
 integration-test: fmt vet ## Run integration tests (requires a running k3d cluster).
-	go test ./... -v -tags integration
+	go test ./... -v -tags integration -count=1
 
 ##@ Cluster
 

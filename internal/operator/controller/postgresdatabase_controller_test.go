@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	. "github.com/benjamin-wright/db-operator/internal/test_utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -29,7 +30,7 @@ func newTestResources(name string) (ns *corev1.Namespace, pgdb *v1alpha1.Postgre
 			GenerateName: "test-pgdb-",
 		},
 	}
-	Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+	Expect(K8sClient.Create(Ctx, ns)).To(Succeed())
 
 	pgdb = &v1alpha1.PostgresDatabase{
 		ObjectMeta: metav1.ObjectMeta{
@@ -63,11 +64,11 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		BeforeAll(func() {
 			ns, pgdb, lookup, _ = newTestResources("test-db")
-			Expect(k8sClient.Create(ctx, pgdb)).To(Succeed())
+			Expect(K8sClient.Create(Ctx, pgdb)).To(Succeed())
 		})
 
 		AfterAll(func() {
-			_ = k8sClient.Delete(ctx, ns)
+			_ = K8sClient.Delete(Ctx, ns)
 		})
 
 		It("should initially set status phase to Pending before the StatefulSet is ready", func() {
@@ -75,9 +76,9 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 			// StatefulSet, since the pod won't be ready yet.
 			Eventually(func(g Gomega) {
 				var fetched v1alpha1.PostgresDatabase
-				g.Expect(k8sClient.Get(ctx, lookup, &fetched)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.DatabasePhasePending))
-			}, timeout, interval).Should(Succeed())
+			}, Timeout, Interval).Should(Succeed())
 		})
 
 		It("should transition to Ready when the StatefulSet has ready replicas", func() {
@@ -85,9 +86,9 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 			// and it will become ready once Postgres starts.
 			Eventually(func(g Gomega) {
 				var fetched v1alpha1.PostgresDatabase
-				g.Expect(k8sClient.Get(ctx, lookup, &fetched)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.DatabasePhaseReady))
-			}, timeout, interval).Should(Succeed())
+			}, Timeout, Interval).Should(Succeed())
 		})
 	})
 
@@ -103,30 +104,30 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		BeforeAll(func() {
 			ns, pgdb, lookup, secretLookup = newTestResources("test-db")
-			Expect(k8sClient.Create(ctx, pgdb)).To(Succeed())
+			Expect(K8sClient.Create(Ctx, pgdb)).To(Succeed())
 
 			// Wait until all owned resources exist and the DB is ready before
 			// running any of the property assertions below.
 			Eventually(func(g Gomega) {
 				var sts appsv1.StatefulSet
-				g.Expect(k8sClient.Get(ctx, lookup, &sts)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &sts)).To(Succeed())
 				var svc corev1.Service
-				g.Expect(k8sClient.Get(ctx, lookup, &svc)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &svc)).To(Succeed())
 				var secret corev1.Secret
-				g.Expect(k8sClient.Get(ctx, secretLookup, &secret)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
 				var fetched v1alpha1.PostgresDatabase
-				g.Expect(k8sClient.Get(ctx, lookup, &fetched)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.DatabasePhaseReady))
-			}, timeout, interval).Should(Succeed())
+			}, Timeout, Interval).Should(Succeed())
 		})
 
 		AfterAll(func() {
-			_ = k8sClient.Delete(ctx, ns)
+			_ = K8sClient.Delete(Ctx, ns)
 		})
 
 		It("should create a headless Service on port 5432", func() {
 			var svc corev1.Service
-			Expect(k8sClient.Get(ctx, lookup, &svc)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, lookup, &svc)).To(Succeed())
 			Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
 			Expect(svc.Spec.Ports).To(HaveLen(1))
 			Expect(svc.Spec.Ports[0].Port).To(Equal(int32(5432)))
@@ -134,7 +135,7 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		It("should create a StatefulSet with the right image, replicas, and PVC", func() {
 			var sts appsv1.StatefulSet
-			Expect(k8sClient.Get(ctx, lookup, &sts)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, lookup, &sts)).To(Succeed())
 			Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(1))
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("postgres:16"))
 			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
@@ -143,25 +144,25 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		It("should set owner references on the StatefulSet and Service", func() {
 			var svc corev1.Service
-			Expect(k8sClient.Get(ctx, lookup, &svc)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, lookup, &svc)).To(Succeed())
 			Expect(svc.OwnerReferences).To(HaveLen(1))
 			Expect(svc.OwnerReferences[0].Name).To(Equal(pgdb.Name))
 
 			var sts appsv1.StatefulSet
-			Expect(k8sClient.Get(ctx, lookup, &sts)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, lookup, &sts)).To(Succeed())
 			Expect(sts.OwnerReferences).To(HaveLen(1))
 			Expect(sts.OwnerReferences[0].Name).To(Equal(pgdb.Name))
 		})
 
 		It("should add the finalizer to the CR", func() {
 			var fetched v1alpha1.PostgresDatabase
-			Expect(k8sClient.Get(ctx, lookup, &fetched)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
 			Expect(fetched.Finalizers).To(ContainElement("games-hub.io/postgres-database"))
 		})
 
 		It("should set the correct environment variables on the Postgres container", func() {
 			var sts appsv1.StatefulSet
-			Expect(k8sClient.Get(ctx, lookup, &sts)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, lookup, &sts)).To(Succeed())
 
 			container := sts.Spec.Template.Spec.Containers[0]
 
@@ -193,7 +194,7 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		It("should create an admin Secret with username and password keys", func() {
 			var secret corev1.Secret
-			Expect(k8sClient.Get(ctx, secretLookup, &secret)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
 			Expect(secret.Data).To(HaveKey("username"))
 			Expect(secret.Data).To(HaveKey("password"))
 			Expect(string(secret.Data["username"])).To(Equal("postgres"))
@@ -202,7 +203,7 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		It("should set a controller owner reference on the admin Secret", func() {
 			var secret corev1.Secret
-			Expect(k8sClient.Get(ctx, secretLookup, &secret)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
 			Expect(secret.OwnerReferences).To(HaveLen(1))
 			Expect(secret.OwnerReferences[0].Name).To(Equal(pgdb.Name))
 			Expect(*secret.OwnerReferences[0].Controller).To(BeTrue())
@@ -210,7 +211,7 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		It("should populate PostgresDatabaseStatus.SecretName", func() {
 			var fetched v1alpha1.PostgresDatabase
-			Expect(k8sClient.Get(ctx, lookup, &fetched)).To(Succeed())
+			Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
 			Expect(fetched.Status.SecretName).To(Equal(pgdb.Name + "-admin"))
 		})
 	})
@@ -230,7 +231,7 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 					GenerateName: "test-pgdb-nolabel-",
 				},
 			}
-			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			Expect(K8sClient.Create(Ctx, ns)).To(Succeed())
 
 			pgdb = &v1alpha1.PostgresDatabase{
 				ObjectMeta: metav1.ObjectMeta{
@@ -244,13 +245,13 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 					StorageSize:     resource.MustParse("256Mi"),
 				},
 			}
-			Expect(k8sClient.Create(ctx, pgdb)).To(Succeed())
+			Expect(K8sClient.Create(Ctx, pgdb)).To(Succeed())
 			lookup = types.NamespacedName{Name: pgdb.Name, Namespace: ns.Name}
 		})
 
 		AfterAll(func() {
-			_ = k8sClient.Delete(ctx, pgdb)
-			_ = k8sClient.Delete(ctx, ns)
+			_ = K8sClient.Delete(Ctx, pgdb)
+			_ = K8sClient.Delete(Ctx, ns)
 		})
 
 		It("should never set a status phase on the CR", func() {
@@ -258,18 +259,18 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 			// reconciler is never called. The status phase must remain empty.
 			Consistently(func(g Gomega) {
 				var fetched v1alpha1.PostgresDatabase
-				g.Expect(k8sClient.Get(ctx, lookup, &fetched)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(BeEmpty())
-			}, 10*time.Second, interval).Should(Succeed())
+			}, 10*time.Second, Interval).Should(Succeed())
 		})
 
 		It("should not create any owned sub-resources", func() {
 			var stsList appsv1.StatefulSetList
-			Expect(k8sClient.List(ctx, &stsList, client.InNamespace(ns.Name))).To(Succeed())
+			Expect(K8sClient.List(Ctx, &stsList, client.InNamespace(ns.Name))).To(Succeed())
 			Expect(stsList.Items).To(BeEmpty(), "expected no StatefulSets for unlabelled CR")
 
 			var svcList corev1.ServiceList
-			Expect(k8sClient.List(ctx, &svcList, client.InNamespace(ns.Name))).To(Succeed())
+			Expect(K8sClient.List(Ctx, &svcList, client.InNamespace(ns.Name))).To(Succeed())
 			Expect(svcList.Items).To(BeEmpty(), "expected no Services for unlabelled CR")
 		})
 	})
@@ -287,49 +288,49 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 		BeforeAll(func() {
 			ns, pgdb, lookup, secretLookup = newTestResources("test-db")
-			Expect(k8sClient.Create(ctx, pgdb)).To(Succeed())
+			Expect(K8sClient.Create(Ctx, pgdb)).To(Succeed())
 
 			// Wait for all owned resources to exist.
 			Eventually(func(g Gomega) {
 				var sts appsv1.StatefulSet
-				g.Expect(k8sClient.Get(ctx, lookup, &sts)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &sts)).To(Succeed())
 				var svc corev1.Service
-				g.Expect(k8sClient.Get(ctx, lookup, &svc)).To(Succeed())
+				g.Expect(K8sClient.Get(Ctx, lookup, &svc)).To(Succeed())
 				var secret corev1.Secret
-				g.Expect(k8sClient.Get(ctx, secretLookup, &secret)).To(Succeed())
-			}, timeout, interval).Should(Succeed())
+				g.Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
+			}, Timeout, Interval).Should(Succeed())
 
 			// Delete the CR and wait for it to be fully removed (finalizer handled).
-			Expect(k8sClient.Delete(ctx, pgdb)).To(Succeed())
+			Expect(K8sClient.Delete(Ctx, pgdb)).To(Succeed())
 			Eventually(func(g Gomega) {
 				var fetched v1alpha1.PostgresDatabase
-				err := k8sClient.Get(ctx, lookup, &fetched)
+				err := K8sClient.Get(Ctx, lookup, &fetched)
 				g.Expect(err).To(HaveOccurred())
 				g.Expect(client.IgnoreNotFound(err)).To(Succeed())
-			}, timeout, interval).Should(Succeed())
+			}, Timeout, Interval).Should(Succeed())
 		})
 
 		AfterAll(func() {
-			_ = k8sClient.Delete(ctx, ns)
+			_ = K8sClient.Delete(Ctx, ns)
 		})
 
 		It("should cascade-delete the StatefulSet", func() {
 			var sts appsv1.StatefulSet
-			err := k8sClient.Get(ctx, lookup, &sts)
+			err := K8sClient.Get(Ctx, lookup, &sts)
 			Expect(err).To(HaveOccurred())
 			Expect(client.IgnoreNotFound(err)).To(Succeed())
 		})
 
 		It("should cascade-delete the Service", func() {
 			var svc corev1.Service
-			err := k8sClient.Get(ctx, lookup, &svc)
+			err := K8sClient.Get(Ctx, lookup, &svc)
 			Expect(err).To(HaveOccurred())
 			Expect(client.IgnoreNotFound(err)).To(Succeed())
 		})
 
 		It("should cascade-delete the admin Secret", func() {
 			var secret corev1.Secret
-			err := k8sClient.Get(ctx, secretLookup, &secret)
+			err := K8sClient.Get(Ctx, secretLookup, &secret)
 			Expect(err).To(HaveOccurred())
 			Expect(client.IgnoreNotFound(err)).To(Succeed())
 		})
@@ -341,15 +342,15 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 			}
 
 			var stsList appsv1.StatefulSetList
-			Expect(k8sClient.List(ctx, &stsList, client.InNamespace(ns.Name), labels)).To(Succeed())
+			Expect(K8sClient.List(Ctx, &stsList, client.InNamespace(ns.Name), labels)).To(Succeed())
 			Expect(stsList.Items).To(BeEmpty(), fmt.Sprintf("orphaned StatefulSets: %v", stsList.Items))
 
 			var svcList corev1.ServiceList
-			Expect(k8sClient.List(ctx, &svcList, client.InNamespace(ns.Name), labels)).To(Succeed())
+			Expect(K8sClient.List(Ctx, &svcList, client.InNamespace(ns.Name), labels)).To(Succeed())
 			Expect(svcList.Items).To(BeEmpty(), fmt.Sprintf("orphaned Services: %v", svcList.Items))
 
 			var secretList corev1.SecretList
-			Expect(k8sClient.List(ctx, &secretList, client.InNamespace(ns.Name), labels)).To(Succeed())
+			Expect(K8sClient.List(Ctx, &secretList, client.InNamespace(ns.Name), labels)).To(Succeed())
 			Expect(secretList.Items).To(BeEmpty(), fmt.Sprintf("orphaned Secrets: %v", secretList.Items))
 		})
 	})
