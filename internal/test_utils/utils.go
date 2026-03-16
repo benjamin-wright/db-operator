@@ -7,10 +7,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -156,48 +154,54 @@ func ConnectToDatabase(dbLookup types.NamespacedName, secretLookup types.Namespa
 
 	password := string(passwordBytes)
 
-	// set up a port-forward to the database pod and connect through that, rather than relying on cluster DNS which may not be available in all test environments.
+	pfwdClose, port := portForward(dbLookup.Namespace, dbLookup.Name+"-0", 5432)
 
-	connStr := fmt.Sprintf("host=localhost port=15432 user=postgres password=%s dbname=%s sslmode=disable",
-		password, "testdb",
+	connStr := fmt.Sprintf("host=localhost port=%d user=postgres password=%s dbname=%s sslmode=disable",
+		port, password, "testdb",
 	)
-
-	pfwd, err := portForward(dbLookup.Namespace, dbLookup.Name+"-0", 15432, 5432)
-	Expect(err).NotTo(HaveOccurred(), "setting up port forward")
-
-	go func() {
-		Expect(pfwd.ForwardPorts()).To(Succeed(), "starting port forward")
-	}()
 
 	db, err := sql.Open("postgres", connStr)
 	Expect(err).NotTo(HaveOccurred(), "opening database connection")
 
 	return db, func() {
 		db.Close()
-		pfwd.Close()
+		pfwdClose()
 	}
 }
 
-func portForward(namespace, podName string, localPort, remotePort int) (*portforward.PortForwarder, error) {
-	restConfig, err := clientcmd.BuildConfigFromFlags("", "")
-	if err != nil {
-		return nil, fmt.Errorf("building rest config: %w", err)
+func portForward(namespace, podName string, remotePort int) (func(), uint16) {
+	url := Clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(namespace).
+		Name(podName).
+		SubResource("portforward").URL()
+
+	transport, upgrader, err := spdy.RoundTripperFor(RestConfig)
+	Expect(err).NotTo(HaveOccurred(), "creating round tripper")
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, url)
+
+	ready := make(chan struct{})
+
+	pfwd, err := portforward.New(dialer, []string{fmt.Sprintf("%d:%d", 0, remotePort)}, nil, ready, nil, nil)
+	Expect(err).NotTo(HaveOccurred(), "creating port forward")
+
+	go func() {
+		defer GinkgoRecover()
+		Expect(pfwd.ForwardPorts()).To(Succeed(), "starting port forward")
+	}()
+
+	select {
+	case <-pfwd.Ready:
+	case <-time.After(10 * time.Second):
+		Fail("timed out waiting for port forward to be ready")
 	}
 
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward",
-		namespace, podName)
-	hostIP := strings.TrimLeft(restConfig.Host, "htps:/")
+	ports, err := pfwd.GetPorts()
+	Expect(err).NotTo(HaveOccurred(), "getting forwarded ports")
+	Expect(ports).To(HaveLen(1), "expect exactly one forwarded port")
+	localPort := ports[0].Local
 
-	transport, upgrader, err := spdy.RoundTripperFor(restConfig)
-	if err != nil {
-		return nil, fmt.Errorf("creating round tripper: %w", err)
-	}
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", &url.URL{Scheme: "https", Path: path, Host: hostIP})
-
-	pfwd, err := portforward.New(dialer, []string{fmt.Sprintf("%d:%d", localPort, remotePort)}, nil, nil, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating port forward: %w", err)
-	}
-
-	return pfwd, nil
+	return func() {
+		pfwd.Close()
+	}, localPort
 }

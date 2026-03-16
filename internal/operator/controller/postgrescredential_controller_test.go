@@ -237,7 +237,7 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			defer close()
 
 			var exists bool
-			err := db.QueryRow(`SELECT 1 FROM pg_roles WHERE rolname = 'deleteuser'`).Scan(&exists)
+			err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'deleteuser')`).Scan(&exists)
 			Expect(err).To(Succeed(), "querying for existence of Postgres role should not error")
 			Expect(exists).To(BeFalse(), "Postgres role 'deleteuser' should have been dropped")
 		})

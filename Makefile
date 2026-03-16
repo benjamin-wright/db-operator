@@ -52,7 +52,7 @@ test: fmt vet ## Run unit tests.
 
 .PHONY: integration-test
 integration-test: fmt vet ## Run integration tests (requires a running k3d cluster).
-	go test ./... -v -tags integration -count=1
+	go test ./... -v -tags integration
 
 ##@ Cluster
 
