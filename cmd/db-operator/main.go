@@ -75,6 +75,7 @@ func main() {
 			ByObject: map[client.Object]cache.ByObject{
 				&v1alpha1.PostgresDatabase{}:   {Label: instanceSelector},
 				&v1alpha1.PostgresCredential{}: {Label: instanceSelector},
+				&v1alpha1.RedisDatabase{}:      {Label: instanceSelector},
 			},
 		},
 	})
