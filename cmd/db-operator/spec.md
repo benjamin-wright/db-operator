@@ -23,10 +23,10 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
   - `imports` — list of subjects (streams or services) this account brings in from another account (referenced by its `NatsAccount` CR name); an optional `localSubject` remaps the imported subject in the local account namespace
 - Status conditions and a phase field (`Pending`, `Ready`, `Failed`) are maintained on all six CRDs
 - Multiple operator instances can coexist in the same cluster; instance-scoped filtering prevents collisions in test environments
-  - When `--instance-name` is empty (the default), the operator processes CRs without the `games-hub.io/operator-instance` label and ignores labeled CRs
-  - When `--instance-name` is set, the operator processes only CRs carrying a matching `games-hub.io/operator-instance` label and ignores unlabeled CRs
+  - When `--instance-name` is empty (the default), the operator processes CRs without the `db-operator.benjamin-wright.github.com/operator-instance` label and ignores labeled CRs
+  - When `--instance-name` is set, the operator processes only CRs carrying a matching `db-operator.benjamin-wright.github.com/operator-instance` label and ignores unlabeled CRs
   - The value `"default"` is reserved and must not be used as an explicit instance name; the operator rejects this value at startup
-  - All owned sub-resources carry the `games-hub.io/operator-instance` label matching their parent CR (or no label if the parent CR has none)
+  - All owned sub-resources carry the `db-operator.benjamin-wright.github.com/operator-instance` label matching their parent CR (or no label if the parent CR has none)
   - Leader election lock ID incorporates the instance name (or `"default"` when empty) to prevent conflicts between instances
   - Instance name is configured via `--instance-name` flag (default: empty)
   - The standalone local deployment (for integration testing) runs as a separate instance from the platform-wide deployment, without replacing or disabling it

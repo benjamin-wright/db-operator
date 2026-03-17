@@ -179,10 +179,10 @@ func natsClusterHost(cluster *v1alpha1.NatsCluster) string {
 // labelsForNatsAccount returns the standard label set for resources owned by a NatsAccount.
 func labelsForNatsAccount(acct *v1alpha1.NatsAccount, instanceName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":         "nats-account",
-		"app.kubernetes.io/instance":     acct.Name,
-		"app.kubernetes.io/managed-by":   "db-operator",
-		"games-hub.io/operator-instance": instanceName,
+		"app.kubernetes.io/name":                                   "nats-account",
+		"app.kubernetes.io/instance":                               acct.Name,
+		"app.kubernetes.io/managed-by":                             "db-operator",
+		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
 	}
 }
 

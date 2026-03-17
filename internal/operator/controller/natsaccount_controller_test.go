@@ -39,7 +39,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 					Name:      "acct-pending",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.NatsAccountSpec{
@@ -83,7 +83,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 					Name:      "acct-lifecycle",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.NatsAccountSpec{
@@ -163,7 +163,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 					Name:      "multi-user-acct",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.NatsAccountSpec{
@@ -221,7 +221,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "no-label-acct",
 					Namespace: ns.Name,
-					// Deliberately omit the games-hub.io/operator-instance label.
+					// Deliberately omit the db-operator.benjamin-wright.github.com/operator-instance label.
 				},
 				Spec: v1alpha1.NatsAccountSpec{
 					ClusterRef: "some-cluster",
@@ -274,7 +274,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 					Name:      "acct-delete",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.NatsAccountSpec{
@@ -333,7 +333,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 					Name:      "conn-acct",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.NatsAccountSpec{
@@ -396,7 +396,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 					Name:      "perm-acct",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.NatsAccountSpec{

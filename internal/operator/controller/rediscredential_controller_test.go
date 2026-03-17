@@ -42,7 +42,7 @@ var _ = Describe("RedisCredentialReconciler", func() {
 					Name:      "rcred-lifecycle",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.RedisCredentialSpec{
@@ -139,7 +139,7 @@ var _ = Describe("RedisCredentialReconciler", func() {
 					Name:      "rcred-wait",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.RedisCredentialSpec{
@@ -197,7 +197,7 @@ var _ = Describe("RedisCredentialReconciler", func() {
 					Name:      "rcred-delete",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.RedisCredentialSpec{
@@ -277,7 +277,7 @@ var _ = Describe("RedisCredentialReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "no-label-rcred",
 					Namespace: ns.Name,
-					// Deliberately omit the games-hub.io/operator-instance label.
+					// Deliberately omit the db-operator.benjamin-wright.github.com/operator-instance label.
 				},
 				Spec: v1alpha1.RedisCredentialSpec{
 					DatabaseRef:   "nonexistent-db",

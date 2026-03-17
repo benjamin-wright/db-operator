@@ -100,7 +100,7 @@ func NewDatabase(name string) (ns *corev1.Namespace, pgdb *v1alpha1.PostgresData
 			Name:      name,
 			Namespace: ns.Name,
 			Labels: map[string]string{
-				"games-hub.io/operator-instance": "test",
+				"db-operator.benjamin-wright.github.com/operator-instance": "test",
 			},
 		},
 		Spec: v1alpha1.PostgresDatabaseSpec{
@@ -130,7 +130,7 @@ func CreateNewUser(namespace, database, username, secretname string, permissions
 			Name:      username,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"games-hub.io/operator-instance": "test",
+				"db-operator.benjamin-wright.github.com/operator-instance": "test",
 			},
 		},
 		Spec: v1alpha1.PostgresCredentialSpec{
@@ -231,7 +231,7 @@ func NewRedisDatabase(name string) (ns *corev1.Namespace, rdb *v1alpha1.RedisDat
 			Name:      name,
 			Namespace: ns.Name,
 			Labels: map[string]string{
-				"games-hub.io/operator-instance": "test",
+				"db-operator.benjamin-wright.github.com/operator-instance": "test",
 			},
 		},
 		Spec: v1alpha1.RedisDatabaseSpec{
@@ -268,7 +268,7 @@ func NewNatsCluster(name string) (ns *corev1.Namespace, nats *v1alpha1.NatsClust
 			Name:      name,
 			Namespace: ns.Name,
 			Labels: map[string]string{
-				"games-hub.io/operator-instance": "test",
+				"db-operator.benjamin-wright.github.com/operator-instance": "test",
 			},
 		},
 		Spec: v1alpha1.NatsClusterSpec{

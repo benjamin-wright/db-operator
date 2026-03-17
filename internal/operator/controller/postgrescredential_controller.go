@@ -397,10 +397,10 @@ func openPostgres(host, user, password, dbName string) (*sql.DB, error) {
 // PostgresCredential.
 func labelsForCredential(pgcred *v1alpha1.PostgresCredential, instanceName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":         "postgres-credential",
-		"app.kubernetes.io/instance":     pgcred.Name,
-		"app.kubernetes.io/managed-by":   "db-operator",
-		"games-hub.io/operator-instance": instanceName,
+		"app.kubernetes.io/name":                                   "postgres-credential",
+		"app.kubernetes.io/instance":                               pgcred.Name,
+		"app.kubernetes.io/managed-by":                             "db-operator",
+		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
 	}
 }
 

@@ -39,7 +39,7 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					Name:      "cred-lifecycle",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.PostgresCredentialSpec{
@@ -130,7 +130,7 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					Name:      "cred-wait",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.PostgresCredentialSpec{
@@ -190,7 +190,7 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					Name:      "cred-delete",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.PostgresCredentialSpec{
@@ -274,7 +274,7 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "no-label-cred",
 					Namespace: ns.Name,
-					// Deliberately omit the games-hub.io/operator-instance label.
+					// Deliberately omit the db-operator.benjamin-wright.github.com/operator-instance label.
 				},
 				Spec: v1alpha1.PostgresCredentialSpec{
 					DatabaseRef: "nonexistent-db",

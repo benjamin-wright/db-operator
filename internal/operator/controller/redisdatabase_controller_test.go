@@ -37,7 +37,7 @@ func newTestRedisResources(name string) (ns *corev1.Namespace, rdb *v1alpha1.Red
 			Name:      name,
 			Namespace: ns.Name,
 			Labels: map[string]string{
-				"games-hub.io/operator-instance": "test",
+				"db-operator.benjamin-wright.github.com/operator-instance": "test",
 			},
 		},
 		Spec: v1alpha1.RedisDatabaseSpec{
@@ -273,7 +273,7 @@ var _ = Describe("RedisDatabaseReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "no-label-rdb",
 					Namespace: ns.Name,
-					// Deliberately omit the games-hub.io/operator-instance label.
+					// Deliberately omit the db-operator.benjamin-wright.github.com/operator-instance label.
 				},
 				Spec: v1alpha1.RedisDatabaseSpec{
 					StorageSize: resource.MustParse("256Mi"),

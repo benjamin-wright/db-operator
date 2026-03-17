@@ -311,10 +311,10 @@ func openRedis(host, adminPass string) *goredis.Client {
 // labelsForRedisCredential returns the standard label set for resources owned by a RedisCredential.
 func labelsForRedisCredential(rcred *v1alpha1.RedisCredential, instanceName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":         "redis-credential",
-		"app.kubernetes.io/instance":     rcred.Name,
-		"app.kubernetes.io/managed-by":   "db-operator",
-		"games-hub.io/operator-instance": instanceName,
+		"app.kubernetes.io/name":                                   "redis-credential",
+		"app.kubernetes.io/instance":                               rcred.Name,
+		"app.kubernetes.io/managed-by":                             "db-operator",
+		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
 	}
 }
 

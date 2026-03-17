@@ -538,10 +538,10 @@ func natsJetStreamPVCName(nats *v1alpha1.NatsCluster) string {
 
 func labelsForNatsCluster(nats *v1alpha1.NatsCluster, instanceName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":         "nats",
-		"app.kubernetes.io/instance":     nats.Name,
-		"app.kubernetes.io/managed-by":   "db-operator",
-		"games-hub.io/operator-instance": instanceName,
+		"app.kubernetes.io/name":                                   "nats",
+		"app.kubernetes.io/instance":                               nats.Name,
+		"app.kubernetes.io/managed-by":                             "db-operator",
+		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
 	}
 }
 

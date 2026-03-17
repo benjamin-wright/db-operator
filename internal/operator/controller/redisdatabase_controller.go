@@ -498,10 +498,10 @@ func redisAdminSecretName(rdb *v1alpha1.RedisDatabase) string {
 
 func labelsForRedisDatabase(rdb *v1alpha1.RedisDatabase, instanceName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":         "redis",
-		"app.kubernetes.io/instance":     rdb.Name,
-		"app.kubernetes.io/managed-by":   "db-operator",
-		"games-hub.io/operator-instance": instanceName,
+		"app.kubernetes.io/name":                                   "redis",
+		"app.kubernetes.io/instance":                               rdb.Name,
+		"app.kubernetes.io/managed-by":                             "db-operator",
+		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
 	}
 }
 

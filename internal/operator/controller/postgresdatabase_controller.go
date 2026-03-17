@@ -555,10 +555,10 @@ func generatePassword(length int) (string, error) {
 
 func labelsForDatabase(pgdb *v1alpha1.PostgresDatabase, instanceName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":         "postgres",
-		"app.kubernetes.io/instance":     pgdb.Name,
-		"app.kubernetes.io/managed-by":   "db-operator",
-		"games-hub.io/operator-instance": instanceName,
+		"app.kubernetes.io/name":                                   "postgres",
+		"app.kubernetes.io/instance":                               pgdb.Name,
+		"app.kubernetes.io/managed-by":                             "db-operator",
+		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
 	}
 }
 

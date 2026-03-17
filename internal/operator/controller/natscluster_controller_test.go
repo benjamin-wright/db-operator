@@ -35,7 +35,7 @@ func newTestNatsClusterResources(name, version string) (ns *corev1.Namespace, na
 			Name:      name,
 			Namespace: ns.Name,
 			Labels: map[string]string{
-				"games-hub.io/operator-instance": "test",
+				"db-operator.benjamin-wright.github.com/operator-instance": "test",
 			},
 		},
 		Spec: v1alpha1.NatsClusterSpec{
@@ -202,7 +202,7 @@ var _ = Describe("NatsClusterReconciler", func() {
 					Name:      "test-nats-js",
 					Namespace: ns.Name,
 					Labels: map[string]string{
-						"games-hub.io/operator-instance": "test",
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
 					},
 				},
 				Spec: v1alpha1.NatsClusterSpec{
@@ -270,7 +270,7 @@ var _ = Describe("NatsClusterReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "no-label-nats",
 					Namespace: ns.Name,
-					// Deliberately omit the games-hub.io/operator-instance label.
+					// Deliberately omit the db-operator.benjamin-wright.github.com/operator-instance label.
 				},
 				Spec: v1alpha1.NatsClusterSpec{
 					NatsVersion: "2.10",

@@ -45,8 +45,8 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&instanceName, "instance-name", "default",
-		"The instance name used to scope this operator to CRs with a matching games-hub.io/operator-instance label.")
+	flag.StringVar(&instanceName, "instance-name", "",
+		"The instance name used to scope this operator to CRs with a matching db-operator.benjamin-wright.github.com/operator-instance label. When empty (the default), the operator processes only CRs that have no such label.")
 
 	opts := zap.Options{
 		Development: true,
@@ -57,9 +57,18 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	// Build a label selector to restrict the cache to CRs belonging to this instance.
-	instanceSelector, err := labels.Parse(fmt.Sprintf("games-hub.io/operator-instance=%s", instanceName))
-	if err != nil {
-		setupLog.Error(err, "unable to build instance label selector")
+	// When instanceName is empty, select CRs that have no operator-instance label.
+	// When instanceName is set, select CRs whose label value matches exactly.
+	var instanceSelector labels.Selector
+	var selectorErr error
+	const instanceLabelKey = "db-operator.benjamin-wright.github.com/operator-instance"
+	if instanceName == "" {
+		instanceSelector, selectorErr = labels.Parse("!" + instanceLabelKey)
+	} else {
+		instanceSelector, selectorErr = labels.Parse(fmt.Sprintf("%s=%s", instanceLabelKey, instanceName))
+	}
+	if selectorErr != nil {
+		setupLog.Error(selectorErr, "unable to build instance label selector")
 		os.Exit(1)
 	}
 
