@@ -5,12 +5,13 @@ metadata:
   labels:
     {{- include "db-operator.labels" . | nindent 4 }}
 rules:
-  # Custom resources: PostgresDatabase and PostgresCredential
   - apiGroups:
       - db-operator.benjamin-wright.github.com
     resources:
       - postgresdatabases
       - postgrescredentials
+      - redisdatabases
+      - rediscredentials
     verbs:
       - get
       - list
@@ -19,25 +20,27 @@ rules:
       - update
       - patch
       - delete
-  # Status subresources for both CRDs
   - apiGroups:
       - db-operator.benjamin-wright.github.com
     resources:
       - postgresdatabases/status
       - postgrescredentials/status
+      - redisdatabases/status
+      - rediscredentials/status
     verbs:
       - get
       - update
       - patch
-  # Finalizer subresources for both CRDs
   - apiGroups:
       - db-operator.benjamin-wright.github.com
     resources:
       - postgresdatabases/finalizers
       - postgrescredentials/finalizers
+      - redisdatabases/finalizers
+      - rediscredentials/finalizers
     verbs:
       - update
-  # StatefulSets and Services (owned by PostgresDatabase)
+  # StatefulSets and Services (owned by PostgresDatabase and RedisDatabase resources)
   - apiGroups:
       - apps
     resources:
@@ -62,7 +65,7 @@ rules:
       - update
       - patch
       - delete
-  # Secrets (for PostgresCredential management)
+  # Secrets (for PostgresCredential and RedisCredential management)
   - apiGroups:
       - ""
     resources:
