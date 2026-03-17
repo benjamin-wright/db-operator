@@ -202,6 +202,57 @@ var _ = Describe("RedisDatabaseReconciler", func() {
 		})
 	})
 
+	// ── Storage resize ───────────────────────────────────────────────────────
+	// Verify that increasing StorageSize destroys and recreates the database
+	// with the new storage size, and returns to Ready.
+	Context("when the StorageSize of a ready RedisDatabase is increased", Ordered, func() {
+		var (
+			ns     *corev1.Namespace
+			rdb    *v1alpha1.RedisDatabase
+			lookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, rdb, lookup, _ = newTestRedisResources("test-rdb")
+			Expect(K8sClient.Create(Ctx, rdb)).To(Succeed())
+
+			// Wait for the database to become Ready before attempting a resize.
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.RedisDatabase
+				g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.RedisDatabasePhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			// Increase the storage size.
+			var latest v1alpha1.RedisDatabase
+			Expect(K8sClient.Get(Ctx, lookup, &latest)).To(Succeed())
+			latest.Spec.StorageSize = resource.MustParse("512Mi")
+			Expect(K8sClient.Update(Ctx, &latest)).To(Succeed())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should update the StatefulSet VolumeClaimTemplate to the new size", func() {
+			Eventually(func(g Gomega) {
+				var sts appsv1.StatefulSet
+				g.Expect(K8sClient.Get(Ctx, lookup, &sts)).To(Succeed())
+				g.Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+				vcStorage := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+				g.Expect(vcStorage.Cmp(resource.MustParse("512Mi"))).To(Equal(0))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should return to Ready phase after the resize", func() {
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.RedisDatabase
+				g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.RedisDatabasePhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+		})
+	})
+
 	// ── Instance label filtering ─────────────────────────────────────────────
 	Context("when a RedisDatabase has no operator-instance label", Ordered, func() {
 		var (

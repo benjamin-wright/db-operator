@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -31,6 +32,12 @@ const (
 	// postgresPort is the default port used by PostgreSQL.
 	postgresPort = 5432
 )
+
+// errStatefulSetBeingRecreated is returned by reconcileStatefulSet when the
+// StatefulSet has been orphan-deleted to apply a VolumeClaimTemplate change
+// and has not yet been fully removed. The main reconciler treats this as a
+// transient Pending condition rather than a failure.
+var errStatefulSetBeingRecreated = errors.New("StatefulSet is being recreated for VolumeClaimTemplate update")
 
 // PostgresDatabaseReconciler reconciles a PostgresDatabase object.
 // It creates and owns a StatefulSet and headless Service that back the database instance.
@@ -89,9 +96,14 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	} else {
 		sts, err := r.reconcileStatefulSet(ctx, &pgdb)
 		if err != nil {
-			reconcileErr = err
-			result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
-				"StatefulSetReconcileFailed", err.Error())
+			if errors.Is(err, errStatefulSetBeingRecreated) {
+				result = r.setPhase(&pgdb, v1alpha1.DatabasePhasePending,
+					"StatefulSetBeingRecreated", "StatefulSet is being recreated to apply volume claim template changes")
+			} else {
+				reconcileErr = err
+				result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
+					"StatefulSetReconcileFailed", err.Error())
+			}
 		} else {
 			result = r.updatePhaseFromStatefulSet(&pgdb, sts)
 		}
@@ -104,6 +116,7 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{Requeue: true}, nil
 	}
 	if apierrors.IsForbidden(reconcileErr) {
+		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
 		return ctrl.Result{}, nil
 	}
 
@@ -254,7 +267,14 @@ func (r *PostgresDatabaseReconciler) reconcileService(ctx context.Context, pgdb 
 // reconcileStatefulSet ensures the StatefulSet exists and is up-to-date.
 // It returns the StatefulSet as returned by the API server (from create or
 // update) so callers can inspect the latest state without a redundant cache read.
+//
+// Because StatefulSet.spec.volumeClaimTemplates is immutable, a storage size
+// change requires deleting the StatefulSet and its PVC, then recreating both.
+// WARNING: this destroys all data in the database. During the deletion window
+// the method returns errStatefulSetBeingRecreated so the caller sets
+// phase=Pending rather than phase=Failed.
 func (r *PostgresDatabaseReconciler) reconcileStatefulSet(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) (*appsv1.StatefulSet, error) {
+	logger := log.FromContext(ctx)
 	desired := r.desiredStatefulSet(pgdb)
 
 	var existing appsv1.StatefulSet
@@ -269,6 +289,38 @@ func (r *PostgresDatabaseReconciler) reconcileStatefulSet(ctx context.Context, p
 		return nil, fmt.Errorf("fetching StatefulSet: %w", err)
 	}
 
+	// If the StatefulSet is already being deleted, wait for it to disappear
+	// before recreating.
+	if !existing.DeletionTimestamp.IsZero() {
+		return nil, errStatefulSetBeingRecreated
+	}
+
+	// volumeClaimTemplates is immutable. When storage has changed, delete both
+	// the StatefulSet and its PVC — this destroys all data — then requeue so
+	// the next reconcile recreates everything fresh with the new storage size.
+	if volumeClaimStorageChanged(&existing, desired) {
+		currentSize := existing.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+		desiredSize := desired.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+		logger.Info("WARNING: storageSize change requires destroying and recreating the database; all data will be lost",
+			"name", pgdb.Name, "namespace", pgdb.Namespace,
+			"currentSize", currentSize.String(),
+			"desiredSize", desiredSize.String())
+
+		// PVC naming convention: {template.name}-{statefulset.name}-{ordinal}
+		pvcName := fmt.Sprintf("data-%s-0", pgdb.Name)
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: pgdb.Namespace},
+		}
+		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("deleting PVC %s for storage resize: %w", pvcName, err)
+		}
+
+		if err := r.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("deleting StatefulSet for storage resize: %w", err)
+		}
+		return nil, errStatefulSetBeingRecreated
+	}
+
 	// Update mutable fields only if the spec template has drifted.
 	if !equality.Semantic.DeepEqual(existing.Spec.Template, desired.Spec.Template) {
 		existing.Spec.Template = desired.Spec.Template
@@ -278,6 +330,17 @@ func (r *PostgresDatabaseReconciler) reconcileStatefulSet(ctx context.Context, p
 	}
 
 	return &existing, nil
+}
+
+// volumeClaimStorageChanged returns true when the storage request in the first
+// VolumeClaimTemplate of the existing StatefulSet differs from the desired one.
+func volumeClaimStorageChanged(existing, desired *appsv1.StatefulSet) bool {
+	if len(existing.Spec.VolumeClaimTemplates) == 0 || len(desired.Spec.VolumeClaimTemplates) == 0 {
+		return false
+	}
+	existingStorage := existing.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+	desiredStorage := desired.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+	return existingStorage.Cmp(desiredStorage) != 0
 }
 
 // updatePhaseFromStatefulSet checks the StatefulSet readiness and sets the

@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	nats "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -182,13 +183,21 @@ func portForward(namespace, podName string, remotePort int) (func(), uint16) {
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, url)
 
 	ready := make(chan struct{})
+	stopChan := make(chan struct{})
 
-	pfwd, err := portforward.New(dialer, []string{fmt.Sprintf("%d:%d", 0, remotePort)}, nil, ready, nil, nil)
+	pfwd, err := portforward.New(dialer, []string{fmt.Sprintf("%d:%d", 0, remotePort)}, stopChan, ready, nil, nil)
 	Expect(err).NotTo(HaveOccurred(), "creating port forward")
 
 	go func() {
 		defer GinkgoRecover()
-		Expect(pfwd.ForwardPorts()).To(Succeed(), "starting port forward")
+		if fwdErr := pfwd.ForwardPorts(); fwdErr != nil {
+			select {
+			case <-stopChan:
+				// Graceful shutdown via close — not a failure.
+			default:
+				Expect(fwdErr).NotTo(HaveOccurred(), "starting port forward")
+			}
+		}
 	}()
 
 	select {
@@ -203,7 +212,7 @@ func portForward(namespace, podName string, remotePort int) (func(), uint16) {
 	localPort := ports[0].Local
 
 	return func() {
-		pfwd.Close()
+		close(stopChan)
 	}, localPort
 }
 
@@ -242,6 +251,75 @@ func WaitForRedisDatabase(lookup types.NamespacedName) {
 		g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
 		g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.RedisDatabasePhaseReady))
 	}, Timeout, Interval).Should(Succeed())
+}
+
+// NewNatsCluster creates a namespace and a NatsCluster CR inside it, tagged with the
+// test operator-instance label. Returns the namespace, cluster, and lookup key.
+func NewNatsCluster(name string) (ns *corev1.Namespace, nats *v1alpha1.NatsCluster, lookup types.NamespacedName) {
+	ns = &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "test-nats-",
+		},
+	}
+	Expect(K8sClient.Create(Ctx, ns)).To(Succeed())
+
+	nats = &v1alpha1.NatsCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns.Name,
+			Labels: map[string]string{
+				"games-hub.io/operator-instance": "test",
+			},
+		},
+		Spec: v1alpha1.NatsClusterSpec{
+			NatsVersion: "2.10",
+		},
+	}
+	Expect(K8sClient.Create(Ctx, nats)).To(Succeed())
+	lookup = types.NamespacedName{Name: nats.Name, Namespace: ns.Name}
+	return
+}
+
+// WaitForNatsCluster polls until the NatsCluster reaches Ready phase.
+func WaitForNatsCluster(lookup types.NamespacedName) {
+	Eventually(func(g Gomega) {
+		var fetched v1alpha1.NatsCluster
+		g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
+		g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.NatsClusterPhaseReady))
+	}, Timeout, Interval).Should(Succeed())
+}
+
+// ConnectToNats port-forwards to a running NATS pod for the given cluster and returns
+// a connected client authenticated with the credentials from secretLookup. The optional
+// opts are appended after the default UserInfo and Timeout options, allowing callers to
+// override them (e.g. to set a custom ErrorHandler).
+func ConnectToNats(clusterLookup types.NamespacedName, secretLookup types.NamespacedName, opts ...nats.Option) (*nats.Conn, func()) {
+	var secret corev1.Secret
+	Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed(), "fetching NATS credential secret")
+
+	username := string(secret.Data["username"])
+	password := string(secret.Data["password"])
+
+	podList, err := Clientset.CoreV1().Pods(clusterLookup.Namespace).List(Ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/name=nats,app.kubernetes.io/instance=%s", clusterLookup.Name),
+	})
+	Expect(err).NotTo(HaveOccurred(), "listing NATS pods for cluster %s", clusterLookup.Name)
+	Expect(podList.Items).NotTo(BeEmpty(), "no NATS pods found for cluster %s", clusterLookup.Name)
+
+	pfwdClose, port := portForward(clusterLookup.Namespace, podList.Items[0].Name, int(nats.DefaultPort))
+
+	allOpts := append([]nats.Option{
+		nats.UserInfo(username, password),
+		nats.Timeout(10 * time.Second),
+	}, opts...)
+
+	nc, err := nats.Connect(fmt.Sprintf("nats://localhost:%d", port), allOpts...)
+	Expect(err).NotTo(HaveOccurred(), "connecting to NATS server")
+
+	return nc, func() {
+		nc.Close()
+		pfwdClose()
+	}
 }
 
 // ConnectToRedisDatabase opens an authenticated Redis client by port-forwarding

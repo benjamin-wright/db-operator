@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,6 +33,12 @@ const (
 	// redisImage is the hardcoded Redis 8 image.
 	redisImage = "redis:8"
 )
+
+// errRedisStatefulSetBeingRecreated is returned by reconcileRedisStatefulSet when
+// the StatefulSet has been deleted to apply a VolumeClaimTemplate change and has
+// not yet been fully removed. The main reconciler treats this as a transient
+// Pending condition rather than a failure.
+var errRedisStatefulSetBeingRecreated = errors.New("Redis StatefulSet is being recreated for storage resize")
 
 // RedisDatabaseReconciler reconciles a RedisDatabase object.
 // It creates and owns a StatefulSet and headless Service that back the Redis instance.
@@ -82,9 +89,14 @@ func (r *RedisDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	} else {
 		sts, err := r.reconcileRedisStatefulSet(ctx, &rdb)
 		if err != nil {
-			reconcileErr = err
-			result = r.setRedisPhase(&rdb, v1alpha1.RedisDatabasePhaseFailed,
-				"StatefulSetReconcileFailed", err.Error())
+			if errors.Is(err, errRedisStatefulSetBeingRecreated) {
+				result = r.setRedisPhase(&rdb, v1alpha1.RedisDatabasePhasePending,
+					"StatefulSetBeingRecreated", "StatefulSet is being recreated to apply storage size changes")
+			} else {
+				reconcileErr = err
+				result = r.setRedisPhase(&rdb, v1alpha1.RedisDatabasePhaseFailed,
+					"StatefulSetReconcileFailed", err.Error())
+			}
 		} else {
 			result = r.updateRedisPhaseFromStatefulSet(&rdb, sts)
 		}
@@ -97,6 +109,7 @@ func (r *RedisDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{Requeue: true}, nil
 	}
 	if apierrors.IsForbidden(reconcileErr) {
+		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
 		return ctrl.Result{}, nil
 	}
 
@@ -236,7 +249,14 @@ func (r *RedisDatabaseReconciler) reconcileRedisService(ctx context.Context, rdb
 // reconcileRedisStatefulSet ensures the StatefulSet exists and is up-to-date.
 // It returns the StatefulSet as returned by the API server so callers can inspect
 // the latest state without a redundant cache read.
+//
+// Because StatefulSet.spec.volumeClaimTemplates is immutable, a storage size
+// change requires deleting the StatefulSet and its PVC, then recreating both.
+// WARNING: this destroys all data in the Redis instance. During the deletion
+// window the method returns errRedisStatefulSetBeingRecreated so the caller
+// sets phase=Pending rather than phase=Failed.
 func (r *RedisDatabaseReconciler) reconcileRedisStatefulSet(ctx context.Context, rdb *v1alpha1.RedisDatabase) (*appsv1.StatefulSet, error) {
+	logger := log.FromContext(ctx)
 	desired := r.desiredRedisStatefulSet(rdb)
 
 	var existing appsv1.StatefulSet
@@ -249,6 +269,38 @@ func (r *RedisDatabaseReconciler) reconcileRedisStatefulSet(ctx context.Context,
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fetching StatefulSet: %w", err)
+	}
+
+	// If the StatefulSet is already being deleted, wait for it to disappear
+	// before recreating.
+	if !existing.DeletionTimestamp.IsZero() {
+		return nil, errRedisStatefulSetBeingRecreated
+	}
+
+	// volumeClaimTemplates is immutable. When storage has changed, delete both
+	// the StatefulSet and its PVC — this destroys all data — then requeue so
+	// the next reconcile recreates everything fresh with the new storage size.
+	if volumeClaimStorageChanged(&existing, desired) {
+		currentSize := existing.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+		desiredSize := desired.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+		logger.Info("WARNING: storageSize change requires destroying and recreating the database; all data will be lost",
+			"name", rdb.Name, "namespace", rdb.Namespace,
+			"currentSize", currentSize.String(),
+			"desiredSize", desiredSize.String())
+
+		// PVC naming convention: {template.name}-{statefulset.name}-{ordinal}
+		pvcName := fmt.Sprintf("data-%s-0", rdb.Name)
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: rdb.Namespace},
+		}
+		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("deleting PVC %s for storage resize: %w", pvcName, err)
+		}
+
+		if err := r.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("deleting StatefulSet for storage resize: %w", err)
+		}
+		return nil, errRedisStatefulSetBeingRecreated
 	}
 
 	if !equality.Semantic.DeepEqual(existing.Spec.Template, desired.Spec.Template) {
