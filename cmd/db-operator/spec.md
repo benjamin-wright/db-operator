@@ -1,13 +1,19 @@
 # DB Operator Specification
 
 ## Purpose
-A Kubernetes operator that provisions and manages self-contained database instances via CRDs.
+A Kubernetes operator that provisions and manages self-contained PostgreSQL and Redis instances via CRDs.
 
 ## Scope
 - `PostgresDatabase` CRD — declares a PostgreSQL instance (version 14–17) with a database name and storage size; the operator provisions a StatefulSet, headless Service, and admin Secret for each instance
 - `PostgresCredential` CRD — declares a PostgreSQL user against a referenced `PostgresDatabase`; the operator generates a random password, creates the user with the specified permissions, and writes credentials to a named Kubernetes Secret in the same namespace
   - Supported permissions: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `ALL`
-- Status conditions and a phase field (`Pending`, `Ready`, `Failed`) are maintained on both CRDs
+- `RedisDatabase` CRD — declares a Redis 8 instance with a storage size; the operator provisions a StatefulSet, headless Service, and admin Secret for each instance
+  - Admin Secret keys: `username` (always `"default"`), `password`
+- `RedisCredential` CRD — declares a Redis ACL user against a referenced `RedisDatabase`; the operator generates a random password, creates the ACL user, and writes credentials to a named Kubernetes Secret in the same namespace
+  - Configurable: key patterns (`keyPatterns`), ACL categories (`aclCategories`), individual commands (`commands`)
+  - Supported ACL categories: `read`, `write`, `set`, `sortedset`, `list`, `hash`, `string`, `bitmap`, `hyperloglog`, `geo`, `stream`, `pubsub`, `admin`, `fast`, `slow`, `blocking`, `dangerous`, `connection`, `transaction`, `scripting`, `keyspace`, `all`
+  - Credential Secret keys: `username`, `password`, `host`, `port`
+- Status conditions and a phase field (`Pending`, `Ready`, `Failed`) are maintained on all four CRDs
 - Multiple operator instances can coexist in the same cluster; instance-scoped filtering prevents collisions in test environments
   - When `--instance-name` is empty (the default), the operator processes CRs without the `games-hub.io/operator-instance` label and ignores labeled CRs
   - When `--instance-name` is set, the operator processes only CRs carrying a matching `games-hub.io/operator-instance` label and ignores unlabeled CRs
@@ -20,5 +26,7 @@ A Kubernetes operator that provisions and manages self-contained database instan
 ## Interfaces
 - `games-hub.io/v1alpha1/PostgresDatabase` — namespaced CRD; consumed by application deployments to request a PostgreSQL instance
 - `games-hub.io/v1alpha1/PostgresCredential` — namespaced CRD; consumed by application deployments to request a database user and credentials Secret
+- `games-hub.io/v1alpha1/RedisDatabase` — namespaced CRD; consumed by application deployments to request a Redis instance
+- `games-hub.io/v1alpha1/RedisCredential` — namespaced CRD; consumed by application deployments to request a Redis ACL user and credentials Secret
 - Kubernetes API server — the operator reads and writes StatefulSets, Services, and Secrets as owned sub-resources of each CRD
 

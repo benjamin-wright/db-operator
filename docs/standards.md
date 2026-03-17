@@ -29,7 +29,7 @@ Every line in a spec must pass these checks:
 ### Technologies
 
 - **Language:** Go 1.25+
-- **Database:** PostgreSQL — the only supported database engine; use `lib/pq` as the driver.
+- **Databases:** PostgreSQL (`lib/pq`) and Redis 8 (`go-redis/v9`).
 - **Kubernetes operator framework:** `controller-runtime` — all controllers, reconcilers, and CRD scaffolding use this library.
 - **Packaging:** Helm charts under `charts/`.
 - **Local development:** Tilt (`Tiltfile` in the repo root).
