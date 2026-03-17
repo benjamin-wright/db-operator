@@ -77,6 +77,8 @@ func main() {
 				&v1alpha1.PostgresCredential{}: {Label: instanceSelector},
 				&v1alpha1.RedisDatabase{}:      {Label: instanceSelector},
 				&v1alpha1.RedisCredential{}:    {Label: instanceSelector},
+				&v1alpha1.NatsCluster{}:        {Label: instanceSelector},
+				&v1alpha1.NatsAccount{}:        {Label: instanceSelector},
 			},
 		},
 	})
@@ -127,6 +129,24 @@ func main() {
 		InstanceName: instanceName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RedisCredential")
+		os.Exit(1)
+	}
+
+	if err := (&controller.NatsClusterReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		InstanceName: instanceName,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NatsCluster")
+		os.Exit(1)
+	}
+
+	if err := (&controller.NatsAccountReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		InstanceName: instanceName,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NatsAccount")
 		os.Exit(1)
 	}
 

@@ -12,6 +12,8 @@ rules:
       - postgrescredentials
       - redisdatabases
       - rediscredentials
+      - natsclusters
+      - natsaccounts
     verbs:
       - get
       - list
@@ -27,6 +29,8 @@ rules:
       - postgrescredentials/status
       - redisdatabases/status
       - rediscredentials/status
+      - natsclusters/status
+      - natsaccounts/status
     verbs:
       - get
       - update
@@ -38,13 +42,16 @@ rules:
       - postgrescredentials/finalizers
       - redisdatabases/finalizers
       - rediscredentials/finalizers
+      - natsclusters/finalizers
+      - natsaccounts/finalizers
     verbs:
       - update
-  # StatefulSets and Services (owned by PostgresDatabase and RedisDatabase resources)
+  # StatefulSets (owned by PostgresDatabase and RedisDatabase) and Deployments (owned by NatsCluster)
   - apiGroups:
       - apps
     resources:
       - statefulsets
+      - deployments
     verbs:
       - get
       - list
@@ -65,7 +72,33 @@ rules:
       - update
       - patch
       - delete
-  # Secrets (for PostgresCredential and RedisCredential management)
+  # ConfigMaps (owned by NatsCluster for server configuration)
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # PersistentVolumeClaims (owned by NatsCluster for JetStream storage)
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Secrets (for PostgresCredential, RedisCredential, and NatsAccount user management)
   - apiGroups:
       - ""
     resources:
