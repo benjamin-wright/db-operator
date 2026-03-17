@@ -6,7 +6,7 @@ A Kubernetes operator that provisions and manages PostgreSQL and Redis instances
 
 | Command | Description | Spec |
 |---------|-------------|------|
-| `cmd/db-operator` | Kubernetes operator — watches `PostgresDatabase`, `PostgresCredential`, `RedisDatabase`, and `RedisCredential` CRDs | [spec](cmd/db-operator/spec.md) |
+| `cmd/db-operator` | Kubernetes operator — watches `PostgresDatabase`, `PostgresCredential`, `RedisDatabase`, `RedisCredential`, `NatsCluster`, and `NatsAccount` CRDs | [spec](cmd/db-operator/spec.md) |
 | `cmd/db-migrations` | Reusable migration runner — applies versioned SQL schema changes to PostgreSQL | [spec](cmd/db-migrations/spec.md) |
 
 ## Project Structure
