@@ -77,15 +77,19 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Run sub-reconcilers, collecting the desired status in memory.
 	// On the first failure, set the Failed phase and skip subsequent reconcilers.
 	var result ctrl.Result
+	var reconcileErr error
 	if err := r.reconcileAdminSecret(ctx, &pgdb); err != nil {
+		reconcileErr = err
 		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
 			"AdminSecretReconcileFailed", err.Error())
 	} else if err := r.reconcileService(ctx, &pgdb); err != nil {
+		reconcileErr = err
 		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
 			"ServiceReconcileFailed", err.Error())
 	} else {
 		sts, err := r.reconcileStatefulSet(ctx, &pgdb)
 		if err != nil {
+			reconcileErr = err
 			result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
 				"StatefulSetReconcileFailed", err.Error())
 		} else {
@@ -93,12 +97,25 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
+	// Conflict means the cached object is stale; requeue without logging an error
+	// and let the informer provide the latest version.
+	// Forbidden typically means the namespace is terminating; stop without marking Failed.
+	if apierrors.IsConflict(reconcileErr) {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if apierrors.IsForbidden(reconcileErr) {
+		return ctrl.Result{}, nil
+	}
+
 	// Persist all accumulated status mutations in a single write.
 	if err := r.Status().Update(ctx, &pgdb); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 	}
 
-	return result, nil
+	return result, reconcileErr
 }
 
 // reconcileDelete handles deletion of owned resources and removes the finalizer.
@@ -147,6 +164,9 @@ func (r *PostgresDatabaseReconciler) reconcileDelete(ctx context.Context, pgdb *
 	// Remove finalizer so the CR can be garbage-collected.
 	controllerutil.RemoveFinalizer(pgdb, databaseFinalizerName)
 	if err := r.Update(ctx, pgdb); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 

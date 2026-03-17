@@ -76,6 +76,7 @@ func main() {
 				&v1alpha1.PostgresDatabase{}:   {Label: instanceSelector},
 				&v1alpha1.PostgresCredential{}: {Label: instanceSelector},
 				&v1alpha1.RedisDatabase{}:      {Label: instanceSelector},
+				&v1alpha1.RedisCredential{}:    {Label: instanceSelector},
 			},
 		},
 	})
@@ -117,6 +118,15 @@ func main() {
 		InstanceName: instanceName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RedisDatabase")
+		os.Exit(1)
+	}
+
+	if err := (&controller.RedisCredentialReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		InstanceName: instanceName,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "RedisCredential")
 		os.Exit(1)
 	}
 

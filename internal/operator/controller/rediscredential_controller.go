@@ -1,0 +1,327 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	goredis "github.com/redis/go-redis/v9"
+
+	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
+)
+
+const (
+	// redisCredentialFinalizerName is added to RedisCredential resources to ensure
+	// the Redis ACL user and credential Secret are cleaned up before deletion.
+	redisCredentialFinalizerName = "games-hub.io/redis-credential"
+)
+
+// RedisCredentialReconciler reconciles a RedisCredential object.
+// It creates a Redis ACL user inside the target RedisDatabase instance and writes
+// the generated credentials into a Kubernetes Secret.
+type RedisCredentialReconciler struct {
+	client.Client
+	Scheme       *runtime.Scheme
+	InstanceName string
+}
+
+// +kubebuilder:rbac:groups=games-hub.io,resources=rediscredentials,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=games-hub.io,resources=rediscredentials/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=games-hub.io,resources=rediscredentials/finalizers,verbs=update
+// +kubebuilder:rbac:groups=games-hub.io,resources=redisdatabases,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+
+// Reconcile handles create/update/delete events for RedisCredential resources.
+func (r *RedisCredentialReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	var rcred v1alpha1.RedisCredential
+	if err := r.Get(ctx, req.NamespacedName, &rcred); err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Info("RedisCredential resource not found; ignoring")
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("fetching RedisCredential: %w", err)
+	}
+
+	if !rcred.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, &rcred)
+	}
+
+	if !controllerutil.ContainsFinalizer(&rcred, redisCredentialFinalizerName) {
+		controllerutil.AddFinalizer(&rcred, redisCredentialFinalizerName)
+		if err := r.Update(ctx, &rcred); err != nil {
+			return ctrl.Result{}, fmt.Errorf("adding finalizer: %w", err)
+		}
+	}
+
+	result, reconcileErr := r.reconcileRedisCredential(ctx, &rcred)
+
+	// Conflict means the cached object is stale; requeue without logging an error
+	// and let the informer provide the latest version.
+	// Forbidden typically means the namespace is terminating; stop without marking Failed.
+	if apierrors.IsConflict(reconcileErr) {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if apierrors.IsForbidden(reconcileErr) {
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.Status().Update(ctx, &rcred); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
+	}
+
+	return result, reconcileErr
+}
+
+// reconcileRedisCredential resolves the target database reference, provisions the
+// Redis ACL user, and mutates rcred status in memory. The caller is responsible
+// for persisting status via a single r.Status().Update() call.
+func (r *RedisCredentialReconciler) reconcileRedisCredential(ctx context.Context, rcred *v1alpha1.RedisCredential) (ctrl.Result, error) {
+	var rdb v1alpha1.RedisDatabase
+	dbKey := types.NamespacedName{Name: rcred.Spec.DatabaseRef, Namespace: rcred.Namespace}
+	if err := r.Get(ctx, dbKey, &rdb); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.setPhase(rcred, v1alpha1.RedisCredentialPhasePending,
+				"DatabaseNotFound", fmt.Sprintf("target RedisDatabase %q not found", rcred.Spec.DatabaseRef)), nil
+		}
+		return ctrl.Result{}, fmt.Errorf("fetching target RedisDatabase: %w", err)
+	}
+
+	if rdb.Status.Phase != v1alpha1.RedisDatabasePhaseReady {
+		return r.setPhase(rcred, v1alpha1.RedisCredentialPhasePending,
+			"DatabaseNotReady", fmt.Sprintf("waiting for RedisDatabase %q to become Ready", rcred.Spec.DatabaseRef)), nil
+	}
+
+	if rdb.Status.SecretName == "" {
+		return r.setPhase(rcred, v1alpha1.RedisCredentialPhasePending,
+			"AdminSecretNotReady", "RedisDatabase admin Secret name is not yet populated"), nil
+	}
+
+	var adminSecret corev1.Secret
+	adminSecretKey := types.NamespacedName{Name: rdb.Status.SecretName, Namespace: rdb.Namespace}
+	if err := r.Get(ctx, adminSecretKey, &adminSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.setPhase(rcred, v1alpha1.RedisCredentialPhasePending,
+				"AdminSecretNotFound", fmt.Sprintf("admin Secret %q not yet visible in cache", rdb.Status.SecretName)), nil
+		}
+		return ctrl.Result{}, fmt.Errorf("fetching admin Secret %q: %w", rdb.Status.SecretName, err)
+	}
+
+	adminPass := string(adminSecret.Data["password"])
+	host := redisHost(&rdb)
+
+	var existingSecret corev1.Secret
+	credSecretKey := types.NamespacedName{Name: rcred.Spec.SecretName, Namespace: rcred.Namespace}
+	if err := r.Get(ctx, credSecretKey, &existingSecret); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
+		}
+
+		password, err := generatePassword(24)
+		if err != nil {
+			return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseFailed,
+				"PasswordGenerationFailed", err.Error()), err
+		}
+
+		if err := ensureRedisACLUser(ctx, host, adminPass, rcred.Spec.Username, password,
+			rcred.Spec.KeyPatterns, rcred.Spec.ACLCategories, rcred.Spec.Commands); err != nil {
+			return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseFailed,
+				"UserCreationFailed", err.Error()), err
+		}
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      rcred.Spec.SecretName,
+				Namespace: rcred.Namespace,
+				Labels:    labelsForRedisCredential(rcred, r.InstanceName),
+			},
+			StringData: map[string]string{
+				"username": rcred.Spec.Username,
+				"password": password,
+				"host":     host,
+				"port":     fmt.Sprintf("%d", redisPort),
+			},
+		}
+		if err := controllerutil.SetControllerReference(rcred, secret, r.Scheme); err != nil {
+			return ctrl.Result{}, fmt.Errorf("setting owner reference on credential Secret: %w", err)
+		}
+		if err := r.Create(ctx, secret); err != nil {
+			return ctrl.Result{}, fmt.Errorf("creating credential Secret: %w", err)
+		}
+	}
+
+	rcred.Status.SecretName = rcred.Spec.SecretName
+	return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseReady,
+		"CredentialReady", "Redis ACL user and credential Secret are ready"), nil
+}
+
+// reconcileDelete cleans up the Redis ACL user and credential Secret, then removes the finalizer.
+func (r *RedisCredentialReconciler) reconcileDelete(ctx context.Context, rcred *v1alpha1.RedisCredential) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(rcred, redisCredentialFinalizerName) {
+		return ctrl.Result{}, nil
+	}
+
+	logger.Info("running Redis credential finalizer cleanup")
+
+	// Attempt to drop the ACL user. If the database is already gone, skip gracefully.
+	var rdb v1alpha1.RedisDatabase
+	dbKey := types.NamespacedName{Name: rcred.Spec.DatabaseRef, Namespace: rcred.Namespace}
+	if err := r.Get(ctx, dbKey, &rdb); err == nil &&
+		rdb.Status.Phase == v1alpha1.RedisDatabasePhaseReady &&
+		rdb.Status.SecretName != "" {
+		var adminSecret corev1.Secret
+		adminSecretKey := types.NamespacedName{Name: rdb.Status.SecretName, Namespace: rdb.Namespace}
+		if err := r.Get(ctx, adminSecretKey, &adminSecret); err == nil {
+			adminPass := string(adminSecret.Data["password"])
+			host := redisHost(&rdb)
+			if err := dropRedisACLUser(ctx, host, adminPass, rcred.Spec.Username); err != nil {
+				logger.Error(err, "failed to drop Redis ACL user during cleanup", "username", rcred.Spec.Username)
+				// Continue — the database may be going away too.
+			}
+		}
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rcred.Spec.SecretName,
+			Namespace: rcred.Namespace,
+		},
+	}
+	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("deleting credential Secret: %w", err)
+	}
+
+	controllerutil.RemoveFinalizer(rcred, redisCredentialFinalizerName)
+	if err := r.Update(ctx, rcred); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
+	}
+
+	logger.Info("Redis credential finalizer cleanup complete")
+	return ctrl.Result{}, nil
+}
+
+// ensureRedisACLUser connects to Redis and creates (or updates) an ACL user with the
+// given password, key patterns, ACL categories, and individual commands.
+func ensureRedisACLUser(ctx context.Context, host, adminPass, username, password string, keyPatterns []string, aclCategories []v1alpha1.RedisACLCategory, commands []string) error {
+	rdb := openRedis(host, adminPass)
+	defer rdb.Close()
+
+	// Build the ACL SETUSER rule as individual argument tokens.
+	args := []interface{}{"ACL", "SETUSER", username, "on", ">" + password}
+
+	for _, p := range keyPatterns {
+		args = append(args, "~"+p)
+	}
+
+	for _, cat := range aclCategories {
+		args = append(args, "+@"+string(cat))
+	}
+
+	for _, cmd := range commands {
+		args = append(args, "+"+cmd)
+	}
+
+	if err := rdb.Do(ctx, args...).Err(); err != nil {
+		return fmt.Errorf("creating Redis ACL user %q: %w", username, err)
+	}
+
+	return nil
+}
+
+// dropRedisACLUser connects to Redis and removes the ACL user.
+func dropRedisACLUser(ctx context.Context, host, adminPass, username string) error {
+	rdb := openRedis(host, adminPass)
+	defer rdb.Close()
+
+	if err := rdb.Do(ctx, "ACL", "DELUSER", username).Err(); err != nil {
+		return fmt.Errorf("dropping Redis ACL user %q: %w", username, err)
+	}
+
+	return nil
+}
+
+// setPhase mutates the RedisCredential status phase and condition in memory.
+// The caller is responsible for persisting via r.Status().Update().
+func (r *RedisCredentialReconciler) setPhase(
+	rcred *v1alpha1.RedisCredential,
+	phase v1alpha1.RedisCredentialPhase,
+	reason, message string,
+) ctrl.Result {
+	rcred.Status.Phase = phase
+
+	conditionStatus := metav1.ConditionFalse
+	if phase == v1alpha1.RedisCredentialPhaseReady {
+		conditionStatus = metav1.ConditionTrue
+	}
+
+	meta.SetStatusCondition(&rcred.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             conditionStatus,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: rcred.Generation,
+	})
+
+	if phase == v1alpha1.RedisCredentialPhasePending {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}
+	}
+
+	return ctrl.Result{}
+}
+
+// ---------- Helpers ----------
+
+// redisHost returns the in-cluster DNS name for the Redis pod backing the given RedisDatabase.
+func redisHost(rdb *v1alpha1.RedisDatabase) string {
+	return fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", rdb.Name, rdb.Name, rdb.Namespace)
+}
+
+// openRedis opens a Redis client authenticated as the default admin user.
+func openRedis(host, adminPass string) *goredis.Client {
+	return goredis.NewClient(&goredis.Options{
+		Addr:         fmt.Sprintf("%s:%d", host, redisPort),
+		Username:     "default",
+		Password:     adminPass,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+	})
+}
+
+// labelsForRedisCredential returns the standard label set for resources owned by a RedisCredential.
+func labelsForRedisCredential(rcred *v1alpha1.RedisCredential, instanceName string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":         "redis-credential",
+		"app.kubernetes.io/instance":     rcred.Name,
+		"app.kubernetes.io/managed-by":   "db-operator",
+		"games-hub.io/operator-instance": instanceName,
+	}
+}
+
+// SetupWithManager registers the RedisCredentialReconciler with the controller manager.
+func (r *RedisCredentialReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.RedisCredential{}).
+		Owns(&corev1.Secret{}).
+		Complete(r)
+}

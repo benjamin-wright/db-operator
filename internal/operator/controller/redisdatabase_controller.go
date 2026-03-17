@@ -70,15 +70,19 @@ func (r *RedisDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	var result ctrl.Result
+	var reconcileErr error
 	if err := r.reconcileRedisAdminSecret(ctx, &rdb); err != nil {
+		reconcileErr = err
 		result = r.setRedisPhase(&rdb, v1alpha1.RedisDatabasePhaseFailed,
 			"AdminSecretReconcileFailed", err.Error())
 	} else if err := r.reconcileRedisService(ctx, &rdb); err != nil {
+		reconcileErr = err
 		result = r.setRedisPhase(&rdb, v1alpha1.RedisDatabasePhaseFailed,
 			"ServiceReconcileFailed", err.Error())
 	} else {
 		sts, err := r.reconcileRedisStatefulSet(ctx, &rdb)
 		if err != nil {
+			reconcileErr = err
 			result = r.setRedisPhase(&rdb, v1alpha1.RedisDatabasePhaseFailed,
 				"StatefulSetReconcileFailed", err.Error())
 		} else {
@@ -86,11 +90,24 @@ func (r *RedisDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
+	// Conflict means the cached object is stale; requeue without logging an error
+	// and let the informer provide the latest version.
+	// Forbidden typically means the namespace is terminating; stop without marking Failed.
+	if apierrors.IsConflict(reconcileErr) {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if apierrors.IsForbidden(reconcileErr) {
+		return ctrl.Result{}, nil
+	}
+
 	if err := r.Status().Update(ctx, &rdb); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 	}
 
-	return result, nil
+	return result, reconcileErr
 }
 
 // reconcileDelete handles deletion of owned resources and removes the finalizer.
@@ -135,6 +152,9 @@ func (r *RedisDatabaseReconciler) reconcileDelete(ctx context.Context, rdb *v1al
 
 	controllerutil.RemoveFinalizer(rdb, redisDatabaseFinalizerName)
 	if err := r.Update(ctx, rdb); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 

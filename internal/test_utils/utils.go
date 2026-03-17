@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	goredis "github.com/redis/go-redis/v9"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -204,4 +205,64 @@ func portForward(namespace, podName string, remotePort int) (func(), uint16) {
 	return func() {
 		pfwd.Close()
 	}, localPort
+}
+
+// NewRedisDatabase creates a namespace and a RedisDatabase CR inside it.
+// Returns the namespace, the CR, and lookup keys for the CR and its admin Secret.
+func NewRedisDatabase(name string) (ns *corev1.Namespace, rdb *v1alpha1.RedisDatabase, dbLookup, adminSecretLookup types.NamespacedName) {
+	ns = &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "test-rdb-",
+		},
+	}
+	Expect(K8sClient.Create(Ctx, ns)).To(Succeed())
+
+	rdb = &v1alpha1.RedisDatabase{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns.Name,
+			Labels: map[string]string{
+				"games-hub.io/operator-instance": "test",
+			},
+		},
+		Spec: v1alpha1.RedisDatabaseSpec{
+			StorageSize: resource.MustParse("256Mi"),
+		},
+	}
+	Expect(K8sClient.Create(Ctx, rdb)).To(Succeed())
+	dbLookup = types.NamespacedName{Name: rdb.Name, Namespace: ns.Name}
+	adminSecretLookup = types.NamespacedName{Name: rdb.Name + "-admin", Namespace: ns.Name}
+	return
+}
+
+// WaitForRedisDatabase polls until the RedisDatabase reaches Ready phase.
+func WaitForRedisDatabase(lookup types.NamespacedName) {
+	Eventually(func(g Gomega) {
+		var fetched v1alpha1.RedisDatabase
+		g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
+		g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.RedisDatabasePhaseReady))
+	}, Timeout, Interval).Should(Succeed())
+}
+
+// ConnectToRedisDatabase opens an authenticated Redis client by port-forwarding
+// to the Redis pod and reading credentials from the given Secret.
+func ConnectToRedisDatabase(dbLookup types.NamespacedName, secretLookup types.NamespacedName) (*goredis.Client, func()) {
+	var secret corev1.Secret
+	Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed(), "fetching admin secret")
+
+	username := string(secret.Data["username"])
+	password := string(secret.Data["password"])
+
+	pfwdClose, port := portForward(dbLookup.Namespace, dbLookup.Name+"-0", 6379)
+
+	rdb := goredis.NewClient(&goredis.Options{
+		Addr:     fmt.Sprintf("localhost:%d", port),
+		Username: username,
+		Password: password,
+	})
+
+	return rdb, func() {
+		_ = rdb.Close()
+		pfwdClose()
+	}
 }

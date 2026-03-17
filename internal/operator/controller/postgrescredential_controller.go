@@ -72,44 +72,59 @@ func (r *PostgresCredentialReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 	}
 
-	// Look up the target PostgresDatabase.
+	result, reconcileErr := r.reconcileCredential(ctx, &pgcred)
+
+	// Conflict means the cached object is stale; requeue without logging an error
+	// and let the informer provide the latest version.
+	// Forbidden typically means the namespace is terminating; stop without marking Failed.
+	if apierrors.IsConflict(reconcileErr) {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if apierrors.IsForbidden(reconcileErr) {
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.Status().Update(ctx, &pgcred); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
+	}
+
+	return result, reconcileErr
+}
+
+// reconcileCredential resolves the target database reference, provisions the
+// Postgres user, and mutates pgcred status in memory. The caller is responsible
+// for persisting status via a single r.Status().Update() call.
+func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, pgcred *v1alpha1.PostgresCredential) (ctrl.Result, error) {
 	var pgdb v1alpha1.PostgresDatabase
 	dbKey := types.NamespacedName{Name: pgcred.Spec.DatabaseRef, Namespace: pgcred.Namespace}
 	if err := r.Get(ctx, dbKey, &pgdb); err != nil {
 		if apierrors.IsNotFound(err) {
-			result := r.setCredentialPhase(&pgcred, v1alpha1.CredentialPhasePending,
-				"DatabaseNotFound", fmt.Sprintf("target PostgresDatabase %q not found", pgcred.Spec.DatabaseRef))
-			if err := r.Status().Update(ctx, &pgcred); err != nil {
-				return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
-			}
-			return result, nil
+			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
+				"DatabaseNotFound", fmt.Sprintf("target PostgresDatabase %q not found", pgcred.Spec.DatabaseRef)), nil
 		}
 		return ctrl.Result{}, fmt.Errorf("fetching target PostgresDatabase: %w", err)
 	}
 
-	// Wait for the target database to be Ready.
 	if pgdb.Status.Phase != v1alpha1.DatabasePhaseReady {
-		result := r.setCredentialPhase(&pgcred, v1alpha1.CredentialPhasePending,
-			"DatabaseNotReady", fmt.Sprintf("waiting for PostgresDatabase %q to become Ready", pgcred.Spec.DatabaseRef))
-		if err := r.Status().Update(ctx, &pgcred); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
-		}
-		return result, nil
+		return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
+			"DatabaseNotReady", fmt.Sprintf("waiting for PostgresDatabase %q to become Ready", pgcred.Spec.DatabaseRef)), nil
 	}
 
-	// Read admin credentials from the Secret referenced by the database status.
 	if pgdb.Status.SecretName == "" {
-		result := r.setCredentialPhase(&pgcred, v1alpha1.CredentialPhasePending,
-			"AdminSecretNotReady", "PostgresDatabase admin Secret name is not yet populated")
-		if err := r.Status().Update(ctx, &pgcred); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
-		}
-		return result, nil
+		return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
+			"AdminSecretNotReady", "PostgresDatabase admin Secret name is not yet populated"), nil
 	}
 
 	var adminSecret corev1.Secret
 	adminSecretKey := types.NamespacedName{Name: pgdb.Status.SecretName, Namespace: pgdb.Namespace}
 	if err := r.Get(ctx, adminSecretKey, &adminSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
+				"AdminSecretNotFound", fmt.Sprintf("admin Secret %q not yet visible in cache", pgdb.Status.SecretName)), nil
+		}
 		return ctrl.Result{}, fmt.Errorf("fetching admin Secret %q: %w", pgdb.Status.SecretName, err)
 	}
 
@@ -118,43 +133,29 @@ func (r *PostgresCredentialReconciler) Reconcile(ctx context.Context, req ctrl.R
 	dbName := pgdb.Spec.DatabaseName
 	host := postgresHost(&pgdb)
 
-	// Check if the credential Secret already exists. If it does and the user
-	// is already provisioned, we can skip the Postgres interaction.
 	var existingSecret corev1.Secret
 	credSecretKey := types.NamespacedName{Name: pgcred.Spec.SecretName, Namespace: pgcred.Namespace}
-	secretExists := false
-	if err := r.Get(ctx, credSecretKey, &existingSecret); err == nil {
-		secretExists = true
-	}
+	if err := r.Get(ctx, credSecretKey, &existingSecret); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
+		}
 
-	if !secretExists {
-		// Generate a random password for the new user.
 		password, err := generatePassword(24)
 		if err != nil {
-			r.setCredentialPhase(&pgcred, v1alpha1.CredentialPhaseFailed,
-				"PasswordGenerationFailed", err.Error())
-			if statusErr := r.Status().Update(ctx, &pgcred); statusErr != nil {
-				return ctrl.Result{}, fmt.Errorf("updating status: %w", statusErr)
-			}
-			return ctrl.Result{}, err
+			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+				"PasswordGenerationFailed", err.Error()), err
 		}
 
-		// Connect to Postgres and create the user.
 		if err := r.ensurePostgresUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, pgcred.Spec.Permissions); err != nil {
-			r.setCredentialPhase(&pgcred, v1alpha1.CredentialPhaseFailed,
-				"UserCreationFailed", err.Error())
-			if statusErr := r.Status().Update(ctx, &pgcred); statusErr != nil {
-				return ctrl.Result{}, fmt.Errorf("updating status: %w", statusErr)
-			}
-			return ctrl.Result{}, err
+			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+				"UserCreationFailed", err.Error()), err
 		}
 
-		// Create the credential Secret.
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      pgcred.Spec.SecretName,
 				Namespace: pgcred.Namespace,
-				Labels:    labelsForCredential(&pgcred, r.InstanceName),
+				Labels:    labelsForCredential(pgcred, r.InstanceName),
 			},
 			StringData: map[string]string{
 				"username": pgcred.Spec.Username,
@@ -164,7 +165,7 @@ func (r *PostgresCredentialReconciler) Reconcile(ctx context.Context, req ctrl.R
 				"database": dbName,
 			},
 		}
-		if err := controllerutil.SetControllerReference(&pgcred, secret, r.Scheme); err != nil {
+		if err := controllerutil.SetControllerReference(pgcred, secret, r.Scheme); err != nil {
 			return ctrl.Result{}, fmt.Errorf("setting owner reference on credential Secret: %w", err)
 		}
 		if err := r.Create(ctx, secret); err != nil {
@@ -172,18 +173,9 @@ func (r *PostgresCredentialReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 	}
 
-	// Update status to Ready only if not already in that phase.
-	if pgcred.Status.Phase != v1alpha1.CredentialPhaseReady {
-		pgcred.Status.SecretName = pgcred.Spec.SecretName
-		result := r.setCredentialPhase(&pgcred, v1alpha1.CredentialPhaseReady,
-			"CredentialReady", "Postgres user and credential Secret are ready")
-		if err := r.Status().Update(ctx, &pgcred); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
-		}
-		return result, nil
-	}
-
-	return ctrl.Result{}, nil
+	pgcred.Status.SecretName = pgcred.Spec.SecretName
+	return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseReady,
+		"CredentialReady", "Postgres user and credential Secret are ready"), nil
 }
 
 // reconcileDelete handles cleanup when a PostgresCredential is being deleted.
@@ -232,6 +224,9 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 	// Remove the finalizer so the CR can be garbage-collected.
 	controllerutil.RemoveFinalizer(pgcred, credentialFinalizerName)
 	if err := r.Update(ctx, pgcred); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
