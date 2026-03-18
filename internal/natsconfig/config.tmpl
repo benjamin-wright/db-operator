@@ -1,0 +1,73 @@
+port: {{ .ClientPort }}
+http_port: {{ .MonitorPort }}
+{{- if .Accounts }}
+accounts {
+{{- range .Accounts }}
+  "{{ .Name }}" {
+{{- if .Users }}
+    users = [
+{{- range .Users }}
+{{- if .Permissions }}
+      {
+        user: "{{ .Username }}"
+        password: "{{ .Password }}"
+        permissions: {
+{{- if .Permissions.Publish }}
+          publish: {
+{{- if .Permissions.Publish.Allow }}
+            allow: ["{{ join `", "` .Permissions.Publish.Allow }}"]
+{{- end }}
+{{- if .Permissions.Publish.Deny }}
+            deny: ["{{ join `", "` .Permissions.Publish.Deny }}"]
+{{- end }}
+          }
+{{- end }}
+{{- if .Permissions.Subscribe }}
+          subscribe: {
+{{- if .Permissions.Subscribe.Allow }}
+            allow: ["{{ join `", "` .Permissions.Subscribe.Allow }}"]
+{{- end }}
+{{- if .Permissions.Subscribe.Deny }}
+            deny: ["{{ join `", "` .Permissions.Subscribe.Deny }}"]
+{{- end }}
+          }
+{{- end }}
+        }
+      }
+{{- else }}
+      {user: "{{ .Username }}", password: "{{ .Password }}"}
+{{- end }}
+{{- end }}
+    ]
+{{- end }}
+{{- if .Exports }}
+    exports = [
+{{- range .Exports }}
+{{- if eq .Type "stream" }}
+      {stream: "{{ .Subject }}"{{ if .TokenRequired }}, token_req: true{{ end }}}
+{{- else }}
+      {service: "{{ .Subject }}"{{ if .TokenRequired }}, token_req: true{{ end }}}
+{{- end }}
+{{- end }}
+    ]
+{{- end }}
+{{- if .Imports }}
+    imports = [
+{{- range .Imports }}
+{{- if eq .Type "stream" }}
+      {stream: {account: "{{ .Account }}", subject: "{{ .Subject }}"}{{ if .LocalSubject }}, to: "{{ .LocalSubject }}"{{ end }}}
+{{- else }}
+      {service: {account: "{{ .Account }}", subject: "{{ .Subject }}"}{{ if .LocalSubject }}, to: "{{ .LocalSubject }}"{{ end }}}
+{{- end }}
+{{- end }}
+    ]
+{{- end }}
+  }
+{{- end }}
+}
+{{- end }}
+{{- if .JetStream }}
+jetstream {
+  store_dir: "{{ .DataMountPath }}"
+}
+{{- end }}
