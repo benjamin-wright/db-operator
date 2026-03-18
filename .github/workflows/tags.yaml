@@ -26,7 +26,5 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USER_NAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
       - uses: actions/checkout@v3
-      - name: Build
-        run: docker buildx build --platform linux/amd64,linux/arm64 --progress plain -t docker.io/benwright/${{ matrix.app }}:${{ github.ref_name }} -f ${{ matrix.dockerfile }} .
-      - name: Push
-        run: docker push docker.io/benwright/${{ matrix.app }}:${{ github.ref_name }}
+      - name: Build & Push
+        run: docker buildx build --push --platform linux/amd64,linux/arm64 --progress plain -t docker.io/benwright/${{ matrix.app }}:${{ github.ref_name }} -f ${{ matrix.dockerfile }} .
