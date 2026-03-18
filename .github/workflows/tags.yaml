@@ -12,7 +12,7 @@ jobs:
         - app: db-migrations
           dockerfile: migrations.Dockerfile
         - app: db-operator
-          dockerfile: db-operator.Dockerfile
+          dockerfile: operator.Dockerfile
     runs-on: ubuntu-latest
     environment: production
     steps:
