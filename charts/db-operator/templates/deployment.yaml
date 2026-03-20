@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "db-operator.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: 1
   selector:
     matchLabels:
       {{- include "db-operator.selectorLabels" . | nindent 6 }}
@@ -14,31 +14,26 @@ spec:
     metadata:
       labels:
         {{- include "db-operator.selectorLabels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
     spec:
-      serviceAccountName: {{ include "db-operator.serviceAccountName" . }}
-      {{- with .Values.podSecurityContext }}
+      serviceAccountName: {{ include "db-operator.fullname" . }}
       securityContext:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+        runAsNonRoot: true
       containers:
         - name: manager
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --metrics-bind-address={{ .Values.args.metricsBindAddress }}
-            - --health-probe-bind-address={{ .Values.args.healthProbeBindAddress }}
-            - --instance-name={{ .Values.args.instanceName }}
-            {{- if .Values.args.leaderElect }}
-            - --leader-elect
-            {{- end }}
-          {{- with .Values.securityContext }}
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+            - --instance-name=default
           securityContext:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
           livenessProbe:
             httpGet:
               path: /healthz
@@ -62,15 +57,3 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}

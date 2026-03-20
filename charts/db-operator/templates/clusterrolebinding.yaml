@@ -10,5 +10,5 @@ roleRef:
   name: {{ include "db-operator.fullname" . }}-manager
 subjects:
   - kind: ServiceAccount
-    name: {{ include "db-operator.serviceAccountName" . }}
+    name: {{ include "db-operator.fullname" . }}
     namespace: {{ .Release.Namespace }}
