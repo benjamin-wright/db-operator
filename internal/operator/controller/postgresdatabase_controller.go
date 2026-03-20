@@ -112,7 +112,7 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{Requeue: true}, nil
 	}
 	if isForbidden(reconcileErr) {
-		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
+		logger.V(1).Info("reconcile blocked by Forbidden error; namespace may be terminating", "error", reconcileErr)
 		return ctrl.Result{}, nil
 	}
 
@@ -279,7 +279,7 @@ func (r *PostgresDatabaseReconciler) reconcileStatefulSet(ctx context.Context, p
 	if volumeClaimStorageChanged(&existing, desired) {
 		currentSize := existing.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
 		desiredSize := desired.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
-		logger.Info("WARNING: storageSize change requires destroying and recreating the database; all data will be lost",
+		logger.V(1).Info("WARNING: storageSize change requires destroying and recreating the database; all data will be lost",
 			"name", pgdb.Name, "namespace", pgdb.Namespace,
 			"currentSize", currentSize.String(),
 			"desiredSize", desiredSize.String())

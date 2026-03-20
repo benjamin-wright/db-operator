@@ -50,9 +50,13 @@ vet: ## Run go vet against code.
 test: fmt vet ## Run unit tests.
 	go test ./... -v
 
+# GINKGO invokes the Ginkgo CLI via go run, pinned to the version in go.mod.
+GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
+
 .PHONY: integration-test
 integration-test: fmt vet ## Run integration tests (requires a running k3d cluster).
-	go test ./... -v -tags integration
+	go test -v -tags integration ./internal/migrations/...
+	$(GINKGO) --procs=3 -v --tags=integration ./internal/operator/controller/
 
 ##@ Cluster
 

@@ -68,7 +68,7 @@ func (r *RedisCredentialReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{Requeue: true}, nil
 	}
 	if isForbidden(reconcileErr) {
-		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
+		logger.V(1).Info("reconcile blocked by Forbidden error; namespace may be terminating", "error", reconcileErr)
 		return ctrl.Result{}, nil
 	}
 
