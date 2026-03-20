@@ -2,20 +2,14 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,11 +34,12 @@ const (
 var errStatefulSetBeingRecreated = errors.New("StatefulSet is being recreated for VolumeClaimTemplate update")
 
 // PostgresDatabaseReconciler reconciles a PostgresDatabase object.
-// It creates and owns a StatefulSet and headless Service that back the database instance.
+// It orchestrates when resources are created, updated, or deleted, delegating
+// resource construction to the builder and cluster interactions to the client.
 type PostgresDatabaseReconciler struct {
-	client.Client
-	Scheme       *runtime.Scheme
 	InstanceName string
+	client       postgresDatabaseClient
+	builder      postgresDatabaseBuilder
 }
 
 // +kubebuilder:rbac:groups=games-hub.io,resources=postgresdatabases,verbs=get;list;watch;create;update;patch;delete
@@ -60,12 +55,13 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Fetch the PostgresDatabase instance.
 	var pgdb v1alpha1.PostgresDatabase
-	if err := r.Get(ctx, req.NamespacedName, &pgdb); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("PostgresDatabase resource not found; ignoring")
-			return ctrl.Result{}, nil
-		}
+	found, err := r.client.get(ctx, req.NamespacedName, &pgdb)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching PostgresDatabase: %w", err)
+	}
+	if !found {
+		logger.Info("PostgresDatabase resource not found; ignoring")
+		return ctrl.Result{}, nil
 	}
 
 	// Handle deletion via finalizer.
@@ -76,7 +72,7 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Ensure the finalizer is present.
 	if !controllerutil.ContainsFinalizer(&pgdb, databaseFinalizerName) {
 		controllerutil.AddFinalizer(&pgdb, databaseFinalizerName)
-		if err := r.Update(ctx, &pgdb); err != nil {
+		if err := r.client.update(ctx, &pgdb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 	}
@@ -112,17 +108,17 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Conflict means the cached object is stale; requeue without logging an error
 	// and let the informer provide the latest version.
 	// Forbidden typically means the namespace is terminating; stop without marking Failed.
-	if apierrors.IsConflict(reconcileErr) {
+	if isConflict(reconcileErr) {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	if apierrors.IsForbidden(reconcileErr) {
+	if isForbidden(reconcileErr) {
 		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
 		return ctrl.Result{}, nil
 	}
 
 	// Persist all accumulated status mutations in a single write.
-	if err := r.Status().Update(ctx, &pgdb); err != nil {
-		if apierrors.IsConflict(err) {
+	if err := r.client.updateStatus(ctx, &pgdb); err != nil {
+		if isConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
@@ -148,7 +144,7 @@ func (r *PostgresDatabaseReconciler) reconcileDelete(ctx context.Context, pgdb *
 			Namespace: pgdb.Namespace,
 		},
 	}
-	if err := r.Delete(ctx, sts); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, sts); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting StatefulSet: %w", err)
 	}
 
@@ -159,7 +155,7 @@ func (r *PostgresDatabaseReconciler) reconcileDelete(ctx context.Context, pgdb *
 			Namespace: pgdb.Namespace,
 		},
 	}
-	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, svc); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting Service: %w", err)
 	}
 
@@ -170,14 +166,14 @@ func (r *PostgresDatabaseReconciler) reconcileDelete(ctx context.Context, pgdb *
 			Namespace: pgdb.Namespace,
 		},
 	}
-	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, secret); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting admin Secret: %w", err)
 	}
 
 	// Remove finalizer so the CR can be garbage-collected.
 	controllerutil.RemoveFinalizer(pgdb, databaseFinalizerName)
-	if err := r.Update(ctx, pgdb); err != nil {
-		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+	if err := r.client.update(ctx, pgdb); err != nil {
+		if isConflict(err) || isNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
@@ -195,60 +191,42 @@ func (r *PostgresDatabaseReconciler) reconcileAdminSecret(ctx context.Context, p
 	name := adminSecretName(pgdb)
 
 	var existing corev1.Secret
-	err := r.Get(ctx, client.ObjectKey{Namespace: pgdb.Namespace, Name: name}, &existing)
-	if err == nil {
-		// Secret already exists — ensure status is populated in memory.
+	found, err := r.client.get(ctx, client.ObjectKey{Namespace: pgdb.Namespace, Name: name}, &existing)
+	if err != nil {
+		return fmt.Errorf("fetching admin Secret: %w", err)
+	}
+	if found {
 		pgdb.Status.SecretName = name
 		return nil
 	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("fetching admin Secret: %w", err)
-	}
 
-	// Secret not found — generate a new password and create it.
-	password, err := generatePassword(24)
+	// Secret not found — build and create one with a freshly generated password.
+	secret, err := r.builder.desiredAdminSecret(pgdb)
 	if err != nil {
-		return fmt.Errorf("generating admin password: %w", err)
+		return fmt.Errorf("building admin Secret: %w", err)
 	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: pgdb.Namespace,
-			Labels:    labelsForDatabase(pgdb, r.InstanceName),
-		},
-		StringData: map[string]string{
-			"username": "postgres",
-			"password": password,
-		},
-	}
-	if err := controllerutil.SetControllerReference(pgdb, secret, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on admin Secret: %w", err)
-	}
-	if err := r.Create(ctx, secret); err != nil {
+	if err := r.client.create(ctx, secret); err != nil {
 		return fmt.Errorf("creating admin Secret: %w", err)
 	}
 
-	// Populate the status field in memory (persisted by the caller's single status write).
 	pgdb.Status.SecretName = name
-
 	return nil
 }
 
 // reconcileService ensures the headless Service exists and is up-to-date.
 func (r *PostgresDatabaseReconciler) reconcileService(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) error {
-	desired := r.desiredService(pgdb)
+	desired := r.builder.desiredService(pgdb)
 
 	var existing corev1.Service
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
+		return fmt.Errorf("fetching Service: %w", err)
+	}
+	if !found {
+		if err := r.client.create(ctx, desired); err != nil {
 			return fmt.Errorf("creating Service: %w", err)
 		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("fetching Service: %w", err)
 	}
 
 	// Update if spec has drifted.
@@ -256,7 +234,7 @@ func (r *PostgresDatabaseReconciler) reconcileService(ctx context.Context, pgdb 
 		!equality.Semantic.DeepEqual(existing.Spec.Selector, desired.Spec.Selector) {
 		existing.Spec.Ports = desired.Spec.Ports
 		existing.Spec.Selector = desired.Spec.Selector
-		if err := r.Update(ctx, &existing); err != nil {
+		if err := r.client.update(ctx, &existing); err != nil {
 			return fmt.Errorf("updating Service: %w", err)
 		}
 	}
@@ -275,18 +253,18 @@ func (r *PostgresDatabaseReconciler) reconcileService(ctx context.Context, pgdb 
 // phase=Pending rather than phase=Failed.
 func (r *PostgresDatabaseReconciler) reconcileStatefulSet(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) (*appsv1.StatefulSet, error) {
 	logger := log.FromContext(ctx)
-	desired := r.desiredStatefulSet(pgdb)
+	desired := r.builder.desiredStatefulSet(pgdb)
 
 	var existing appsv1.StatefulSet
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
+		return nil, fmt.Errorf("fetching StatefulSet: %w", err)
+	}
+	if !found {
+		if err := r.client.create(ctx, desired); err != nil {
 			return nil, fmt.Errorf("creating StatefulSet: %w", err)
 		}
 		return desired, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("fetching StatefulSet: %w", err)
 	}
 
 	// If the StatefulSet is already being deleted, wait for it to disappear
@@ -306,16 +284,15 @@ func (r *PostgresDatabaseReconciler) reconcileStatefulSet(ctx context.Context, p
 			"currentSize", currentSize.String(),
 			"desiredSize", desiredSize.String())
 
-		// PVC naming convention: {template.name}-{statefulset.name}-{ordinal}
-		pvcName := fmt.Sprintf("data-%s-0", pgdb.Name)
+		name := pvcName(pgdb.Name, 0)
 		pvc := &corev1.PersistentVolumeClaim{
-			ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: pgdb.Namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pgdb.Namespace},
 		}
-		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("deleting PVC %s for storage resize: %w", pvcName, err)
+		if err := r.client.delete(ctx, pvc); err != nil {
+			return nil, fmt.Errorf("deleting PVC %s for storage resize: %w", name, err)
 		}
 
-		if err := r.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.client.delete(ctx, &existing); err != nil {
 			return nil, fmt.Errorf("deleting StatefulSet for storage resize: %w", err)
 		}
 		return nil, errStatefulSetBeingRecreated
@@ -324,7 +301,7 @@ func (r *PostgresDatabaseReconciler) reconcileStatefulSet(ctx context.Context, p
 	// Update mutable fields only if the spec template has drifted.
 	if !equality.Semantic.DeepEqual(existing.Spec.Template, desired.Spec.Template) {
 		existing.Spec.Template = desired.Spec.Template
-		if err := r.Update(ctx, &existing); err != nil {
+		if err := r.client.update(ctx, &existing); err != nil {
 			return nil, fmt.Errorf("updating StatefulSet: %w", err)
 		}
 	}
@@ -386,184 +363,10 @@ func (r *PostgresDatabaseReconciler) setPhase(
 	return ctrl.Result{}
 }
 
-// ---------- Owned resource builders ----------
-
-func (r *PostgresDatabaseReconciler) desiredService(pgdb *v1alpha1.PostgresDatabase) *corev1.Service {
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName(pgdb),
-			Namespace: pgdb.Namespace,
-			Labels:    labelsForDatabase(pgdb, r.InstanceName),
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP: corev1.ClusterIPNone,
-			Selector:  labelsForDatabase(pgdb, r.InstanceName),
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "postgres",
-					Port:       postgresPort,
-					TargetPort: intstr.FromInt32(postgresPort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
-		},
-	}
-	_ = controllerutil.SetControllerReference(pgdb, svc, r.Scheme)
-	return svc
-}
-
-func (r *PostgresDatabaseReconciler) desiredStatefulSet(pgdb *v1alpha1.PostgresDatabase) *appsv1.StatefulSet {
-	replicas := int32(1)
-
-	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      statefulSetName(pgdb),
-			Namespace: pgdb.Namespace,
-			Labels:    labelsForDatabase(pgdb, r.InstanceName),
-		},
-		Spec: appsv1.StatefulSetSpec{
-			Replicas:    &replicas,
-			ServiceName: serviceName(pgdb),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labelsForDatabase(pgdb, r.InstanceName),
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labelsForDatabase(pgdb, r.InstanceName),
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "postgres",
-							Image: fmt.Sprintf("postgres:%s", pgdb.Spec.PostgresVersion),
-							Ports: []corev1.ContainerPort{
-								{
-									Name:          "postgres",
-									ContainerPort: postgresPort,
-									Protocol:      corev1.ProtocolTCP,
-								},
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name:  "POSTGRES_DB",
-									Value: pgdb.Spec.DatabaseName,
-								},
-								{
-									Name:  "POSTGRES_USER",
-									Value: "postgres",
-								},
-								{
-									Name: "POSTGRES_PASSWORD",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{
-												Name: adminSecretName(pgdb),
-											},
-											Key: "password",
-										},
-									},
-								},
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "data",
-									MountPath: "/var/lib/postgresql/data",
-									SubPath:   "pgdata",
-								},
-							},
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{
-										Command: []string{
-											"pg_isready",
-											"-U", "postgres",
-											"-d", pgdb.Spec.DatabaseName,
-										},
-									},
-								},
-								InitialDelaySeconds: 5,
-								PeriodSeconds:       5,
-							},
-							LivenessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{
-										Command: []string{
-											"pg_isready",
-											"-U", "postgres",
-											"-d", pgdb.Spec.DatabaseName,
-										},
-									},
-								},
-								InitialDelaySeconds: 15,
-								PeriodSeconds:       10,
-							},
-						},
-					},
-				},
-			},
-			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "data",
-					},
-					Spec: corev1.PersistentVolumeClaimSpec{
-						AccessModes: []corev1.PersistentVolumeAccessMode{
-							corev1.ReadWriteOnce,
-						},
-						Resources: corev1.VolumeResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceStorage: resource.MustParse(pgdb.Spec.StorageSize.String()),
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	_ = controllerutil.SetControllerReference(pgdb, sts, r.Scheme)
-	return sts
-}
-
-// ---------- Naming helpers ----------
-
-func statefulSetName(pgdb *v1alpha1.PostgresDatabase) string {
-	return pgdb.Name
-}
-
-func serviceName(pgdb *v1alpha1.PostgresDatabase) string {
-	return pgdb.Name
-}
-
-func adminSecretName(pgdb *v1alpha1.PostgresDatabase) string {
-	return pgdb.Name + "-admin"
-}
-
-// generatePassword returns a cryptographically random alphanumeric string of
-// the specified length.
-func generatePassword(length int) (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	result := make([]byte, length)
-	for i := range result {
-		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
-		if err != nil {
-			return "", fmt.Errorf("generating random byte: %w", err)
-		}
-		result[i] = charset[num.Int64()]
-	}
-	return string(result), nil
-}
-
-func labelsForDatabase(pgdb *v1alpha1.PostgresDatabase, instanceName string) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/name":                                   "postgres",
-		"app.kubernetes.io/instance":                               pgdb.Name,
-		"app.kubernetes.io/managed-by":                             "db-operator",
-		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
-	}
-}
-
 // SetupWithManager registers the PostgresDatabaseReconciler with the controller manager.
 func (r *PostgresDatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.client = postgresDatabaseClient{inner: mgr.GetClient()}
+	r.builder = postgresDatabaseBuilder{instanceName: r.InstanceName, scheme: mgr.GetScheme()}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PostgresDatabase{}).
 		Owns(&appsv1.StatefulSet{}).

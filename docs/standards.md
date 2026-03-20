@@ -47,6 +47,10 @@ Before writing anything new — utility, pattern, convention, or routine — che
 - Comments must add information the code cannot express — explain *why*, not *what*. Never write a comment that just restates the line it sits next to.
 - Prefer fewer, meaningful comments over many redundant ones.
 
+### Single Responsibility Principle
+- Code must be well composed, with clear responsibilities for each component. This applies both in terms of subject matter (separate controllers for separate CRD resource types) and in terms of clients (How something is done) and orchestrators (When something is done).
+- Responsibility boundaries must be structural — enforced by distinct types or packages — not cosmetic. Reorganising code into separate files without changing ownership does not reduce a component's scope.
+
 ### External Dependency Ownership
 All interaction with an external system (database, message broker, HTTP service) must be encapsulated in a single package behind an exported interface. Other packages depend on the interface, never on the external system directly. This ensures that consumers can be unit-tested with fakes and that external-system concerns (connection handling, transactions, retries) live in one place.
 
