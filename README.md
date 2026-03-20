@@ -64,3 +64,6 @@ See [docs/standards.md](docs/standards.md) for coding conventions, testing strat
 ## TODOs
 
 - Update the gitlab build to run arm builds on arm machines, cross-platform is way too slow
+- Storage size warning is logged as INFO
+- Might be worth squishing errors when dealing with terminating namespaces
+- Speed up integration tests, should be able to run more in parallel

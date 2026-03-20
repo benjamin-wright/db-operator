@@ -8,12 +8,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -43,9 +39,9 @@ var errRedisStatefulSetBeingRecreated = errors.New("Redis StatefulSet is being r
 // RedisDatabaseReconciler reconciles a RedisDatabase object.
 // It creates and owns a StatefulSet and headless Service that back the Redis instance.
 type RedisDatabaseReconciler struct {
-	client.Client
-	Scheme       *runtime.Scheme
 	InstanceName string
+	client       redisDatabaseClient
+	builder      redisDatabaseBuilder
 }
 
 // +kubebuilder:rbac:groups=games-hub.io,resources=redisdatabases,verbs=get;list;watch;create;update;patch;delete
@@ -57,12 +53,13 @@ func (r *RedisDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	logger := log.FromContext(ctx)
 
 	var rdb v1alpha1.RedisDatabase
-	if err := r.Get(ctx, req.NamespacedName, &rdb); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("RedisDatabase resource not found; ignoring")
-			return ctrl.Result{}, nil
-		}
+	found, err := r.client.get(ctx, req.NamespacedName, &rdb)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching RedisDatabase: %w", err)
+	}
+	if !found {
+		logger.Info("RedisDatabase resource not found; ignoring")
+		return ctrl.Result{}, nil
 	}
 
 	if !rdb.DeletionTimestamp.IsZero() {
@@ -71,7 +68,7 @@ func (r *RedisDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	if !controllerutil.ContainsFinalizer(&rdb, redisDatabaseFinalizerName) {
 		controllerutil.AddFinalizer(&rdb, redisDatabaseFinalizerName)
-		if err := r.Update(ctx, &rdb); err != nil {
+		if err := r.client.update(ctx, &rdb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 	}
@@ -105,16 +102,16 @@ func (r *RedisDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Conflict means the cached object is stale; requeue without logging an error
 	// and let the informer provide the latest version.
 	// Forbidden typically means the namespace is terminating; stop without marking Failed.
-	if apierrors.IsConflict(reconcileErr) {
+	if isConflict(reconcileErr) {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	if apierrors.IsForbidden(reconcileErr) {
+	if isForbidden(reconcileErr) {
 		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.Status().Update(ctx, &rdb); err != nil {
-		if apierrors.IsConflict(err) {
+	if err := r.client.updateStatus(ctx, &rdb); err != nil {
+		if isConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
@@ -139,7 +136,7 @@ func (r *RedisDatabaseReconciler) reconcileDelete(ctx context.Context, rdb *v1al
 			Namespace: rdb.Namespace,
 		},
 	}
-	if err := r.Delete(ctx, sts); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, sts); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting StatefulSet: %w", err)
 	}
 
@@ -149,7 +146,7 @@ func (r *RedisDatabaseReconciler) reconcileDelete(ctx context.Context, rdb *v1al
 			Namespace: rdb.Namespace,
 		},
 	}
-	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, svc); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting Service: %w", err)
 	}
 
@@ -159,13 +156,13 @@ func (r *RedisDatabaseReconciler) reconcileDelete(ctx context.Context, rdb *v1al
 			Namespace: rdb.Namespace,
 		},
 	}
-	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, secret); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting admin Secret: %w", err)
 	}
 
 	controllerutil.RemoveFinalizer(rdb, redisDatabaseFinalizerName)
-	if err := r.Update(ctx, rdb); err != nil {
-		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+	if err := r.client.update(ctx, rdb); err != nil {
+		if isConflict(err) || isNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
@@ -182,35 +179,20 @@ func (r *RedisDatabaseReconciler) reconcileRedisAdminSecret(ctx context.Context,
 	name := redisAdminSecretName(rdb)
 
 	var existing corev1.Secret
-	err := r.Get(ctx, client.ObjectKey{Namespace: rdb.Namespace, Name: name}, &existing)
-	if err == nil {
+	found, err := r.client.get(ctx, client.ObjectKey{Namespace: rdb.Namespace, Name: name}, &existing)
+	if err != nil {
+		return fmt.Errorf("fetching admin Secret: %w", err)
+	}
+	if found {
 		rdb.Status.SecretName = name
 		return nil
 	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("fetching admin Secret: %w", err)
-	}
 
-	password, err := generatePassword(24)
+	secret, err := r.builder.desiredAdminSecret(rdb)
 	if err != nil {
-		return fmt.Errorf("generating admin password: %w", err)
+		return fmt.Errorf("building admin Secret: %w", err)
 	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: rdb.Namespace,
-			Labels:    labelsForRedisDatabase(rdb, r.InstanceName),
-		},
-		StringData: map[string]string{
-			"username": "default",
-			"password": password,
-		},
-	}
-	if err := controllerutil.SetControllerReference(rdb, secret, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on admin Secret: %w", err)
-	}
-	if err := r.Create(ctx, secret); err != nil {
+	if err := r.client.create(ctx, secret); err != nil {
 		return fmt.Errorf("creating admin Secret: %w", err)
 	}
 
@@ -220,25 +202,25 @@ func (r *RedisDatabaseReconciler) reconcileRedisAdminSecret(ctx context.Context,
 
 // reconcileRedisService ensures the headless Service exists and is up-to-date.
 func (r *RedisDatabaseReconciler) reconcileRedisService(ctx context.Context, rdb *v1alpha1.RedisDatabase) error {
-	desired := r.desiredRedisService(rdb)
+	desired := r.builder.desiredService(rdb)
 
 	var existing corev1.Service
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
+		return fmt.Errorf("fetching Service: %w", err)
+	}
+	if !found {
+		if err := r.client.create(ctx, desired); err != nil {
 			return fmt.Errorf("creating Service: %w", err)
 		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("fetching Service: %w", err)
 	}
 
 	if !equality.Semantic.DeepEqual(existing.Spec.Ports, desired.Spec.Ports) ||
 		!equality.Semantic.DeepEqual(existing.Spec.Selector, desired.Spec.Selector) {
 		existing.Spec.Ports = desired.Spec.Ports
 		existing.Spec.Selector = desired.Spec.Selector
-		if err := r.Update(ctx, &existing); err != nil {
+		if err := r.client.update(ctx, &existing); err != nil {
 			return fmt.Errorf("updating Service: %w", err)
 		}
 	}
@@ -257,18 +239,18 @@ func (r *RedisDatabaseReconciler) reconcileRedisService(ctx context.Context, rdb
 // sets phase=Pending rather than phase=Failed.
 func (r *RedisDatabaseReconciler) reconcileRedisStatefulSet(ctx context.Context, rdb *v1alpha1.RedisDatabase) (*appsv1.StatefulSet, error) {
 	logger := log.FromContext(ctx)
-	desired := r.desiredRedisStatefulSet(rdb)
+	desired := r.builder.desiredStatefulSet(rdb)
 
 	var existing appsv1.StatefulSet
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
+		return nil, fmt.Errorf("fetching StatefulSet: %w", err)
+	}
+	if !found {
+		if err := r.client.create(ctx, desired); err != nil {
 			return nil, fmt.Errorf("creating StatefulSet: %w", err)
 		}
 		return desired, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("fetching StatefulSet: %w", err)
 	}
 
 	// If the StatefulSet is already being deleted, wait for it to disappear
@@ -288,16 +270,15 @@ func (r *RedisDatabaseReconciler) reconcileRedisStatefulSet(ctx context.Context,
 			"currentSize", currentSize.String(),
 			"desiredSize", desiredSize.String())
 
-		// PVC naming convention: {template.name}-{statefulset.name}-{ordinal}
-		pvcName := fmt.Sprintf("data-%s-0", rdb.Name)
+		name := pvcName(rdb.Name, 0)
 		pvc := &corev1.PersistentVolumeClaim{
-			ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: rdb.Namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: rdb.Namespace},
 		}
-		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("deleting PVC %s for storage resize: %w", pvcName, err)
+		if err := r.client.delete(ctx, pvc); err != nil {
+			return nil, fmt.Errorf("deleting PVC %s for storage resize: %w", name, err)
 		}
 
-		if err := r.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.client.delete(ctx, &existing); err != nil {
 			return nil, fmt.Errorf("deleting StatefulSet for storage resize: %w", err)
 		}
 		return nil, errRedisStatefulSetBeingRecreated
@@ -305,7 +286,7 @@ func (r *RedisDatabaseReconciler) reconcileRedisStatefulSet(ctx context.Context,
 
 	if !equality.Semantic.DeepEqual(existing.Spec.Template, desired.Spec.Template) {
 		existing.Spec.Template = desired.Spec.Template
-		if err := r.Update(ctx, &existing); err != nil {
+		if err := r.client.update(ctx, &existing); err != nil {
 			return nil, fmt.Errorf("updating StatefulSet: %w", err)
 		}
 	}
@@ -354,159 +335,10 @@ func (r *RedisDatabaseReconciler) setRedisPhase(
 	return ctrl.Result{}
 }
 
-// ---------- Owned resource builders ----------
-
-func (r *RedisDatabaseReconciler) desiredRedisService(rdb *v1alpha1.RedisDatabase) *corev1.Service {
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      redisServiceName(rdb),
-			Namespace: rdb.Namespace,
-			Labels:    labelsForRedisDatabase(rdb, r.InstanceName),
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP: corev1.ClusterIPNone,
-			Selector:  labelsForRedisDatabase(rdb, r.InstanceName),
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "redis",
-					Port:       redisPort,
-					TargetPort: intstr.FromInt32(redisPort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
-		},
-	}
-	_ = controllerutil.SetControllerReference(rdb, svc, r.Scheme)
-	return svc
-}
-
-func (r *RedisDatabaseReconciler) desiredRedisStatefulSet(rdb *v1alpha1.RedisDatabase) *appsv1.StatefulSet {
-	replicas := int32(1)
-
-	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      redisStatefulSetName(rdb),
-			Namespace: rdb.Namespace,
-			Labels:    labelsForRedisDatabase(rdb, r.InstanceName),
-		},
-		Spec: appsv1.StatefulSetSpec{
-			Replicas:    &replicas,
-			ServiceName: redisServiceName(rdb),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labelsForRedisDatabase(rdb, r.InstanceName),
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labelsForRedisDatabase(rdb, r.InstanceName),
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:    "redis",
-							Image:   redisImage,
-							Command: []string{"redis-server", "--requirepass", "$(REDIS_PASSWORD)"},
-							Ports: []corev1.ContainerPort{
-								{
-									Name:          "redis",
-									ContainerPort: redisPort,
-									Protocol:      corev1.ProtocolTCP,
-								},
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name: "REDIS_PASSWORD",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{
-												Name: redisAdminSecretName(rdb),
-											},
-											Key: "password",
-										},
-									},
-								},
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "data",
-									MountPath: "/data",
-								},
-							},
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{
-										Command: []string{
-											"sh", "-c",
-											"redis-cli -a $REDIS_PASSWORD ping",
-										},
-									},
-								},
-								InitialDelaySeconds: 5,
-								PeriodSeconds:       5,
-							},
-							LivenessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{
-										Command: []string{
-											"sh", "-c",
-											"redis-cli -a $REDIS_PASSWORD ping",
-										},
-									},
-								},
-								InitialDelaySeconds: 15,
-								PeriodSeconds:       10,
-							},
-						},
-					},
-				},
-			},
-			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "data",
-					},
-					Spec: corev1.PersistentVolumeClaimSpec{
-						AccessModes: []corev1.PersistentVolumeAccessMode{
-							corev1.ReadWriteOnce,
-						},
-						Resources: corev1.VolumeResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceStorage: resource.MustParse(rdb.Spec.StorageSize.String()),
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	_ = controllerutil.SetControllerReference(rdb, sts, r.Scheme)
-	return sts
-}
-
-// ---------- Naming helpers ----------
-
-func redisStatefulSetName(rdb *v1alpha1.RedisDatabase) string {
-	return rdb.Name
-}
-
-func redisServiceName(rdb *v1alpha1.RedisDatabase) string {
-	return rdb.Name
-}
-
-func redisAdminSecretName(rdb *v1alpha1.RedisDatabase) string {
-	return rdb.Name + "-admin"
-}
-
-func labelsForRedisDatabase(rdb *v1alpha1.RedisDatabase, instanceName string) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/name":                                   "redis",
-		"app.kubernetes.io/instance":                               rdb.Name,
-		"app.kubernetes.io/managed-by":                             "db-operator",
-		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
-	}
-}
-
 // SetupWithManager registers the RedisDatabaseReconciler with the controller manager.
 func (r *RedisDatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.client = redisDatabaseClient{inner: mgr.GetClient()}
+	r.builder = redisDatabaseBuilder{instanceName: r.InstanceName, scheme: mgr.GetScheme()}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.RedisDatabase{}).
 		Owns(&appsv1.StatefulSet{}).
