@@ -2,24 +2,16 @@ package controller
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	// Pure Go Postgres driver.
-	"github.com/lib/pq"
 
 	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
 )
@@ -34,9 +26,9 @@ const (
 // It creates a Postgres user inside the target database and writes the
 // generated credentials into a Kubernetes Secret.
 type PostgresCredentialReconciler struct {
-	client.Client
-	Scheme       *runtime.Scheme
 	InstanceName string
+	client       postgresCredentialClient
+	pgDB         PostgresManager
 }
 
 // +kubebuilder:rbac:groups=games-hub.io,resources=postgrescredentials,verbs=get;list;watch;create;update;patch;delete
@@ -49,14 +41,14 @@ type PostgresCredentialReconciler struct {
 func (r *PostgresCredentialReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Fetch the PostgresCredential instance.
 	var pgcred v1alpha1.PostgresCredential
-	if err := r.Get(ctx, req.NamespacedName, &pgcred); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("PostgresCredential resource not found; ignoring")
-			return ctrl.Result{}, nil
-		}
+	found, err := r.client.get(ctx, req.NamespacedName, &pgcred)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching PostgresCredential: %w", err)
+	}
+	if !found {
+		logger.Info("PostgresCredential resource not found; ignoring")
+		return ctrl.Result{}, nil
 	}
 
 	// Handle deletion via finalizer.
@@ -67,25 +59,23 @@ func (r *PostgresCredentialReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// Ensure the finalizer is present.
 	if !controllerutil.ContainsFinalizer(&pgcred, credentialFinalizerName) {
 		controllerutil.AddFinalizer(&pgcred, credentialFinalizerName)
-		if err := r.Update(ctx, &pgcred); err != nil {
+		if err := r.client.update(ctx, &pgcred); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 	}
 
 	result, reconcileErr := r.reconcileCredential(ctx, &pgcred)
 
-	// Conflict means the cached object is stale; requeue without logging an error
-	// and let the informer provide the latest version.
-	// Forbidden typically means the namespace is terminating; stop without marking Failed.
-	if apierrors.IsConflict(reconcileErr) {
+	if isConflict(reconcileErr) {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	if apierrors.IsForbidden(reconcileErr) {
+	if isForbidden(reconcileErr) {
+		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.Status().Update(ctx, &pgcred); err != nil {
-		if apierrors.IsConflict(err) {
+	if err := r.client.updateStatus(ctx, &pgcred); err != nil {
+		if isConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
@@ -100,12 +90,13 @@ func (r *PostgresCredentialReconciler) Reconcile(ctx context.Context, req ctrl.R
 func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, pgcred *v1alpha1.PostgresCredential) (ctrl.Result, error) {
 	var pgdb v1alpha1.PostgresDatabase
 	dbKey := types.NamespacedName{Name: pgcred.Spec.DatabaseRef, Namespace: pgcred.Namespace}
-	if err := r.Get(ctx, dbKey, &pgdb); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
-				"DatabaseNotFound", fmt.Sprintf("target PostgresDatabase %q not found", pgcred.Spec.DatabaseRef)), nil
-		}
+	pgdbFound, err := r.client.get(ctx, dbKey, &pgdb)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching target PostgresDatabase: %w", err)
+	}
+	if !pgdbFound {
+		return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
+			"DatabaseNotFound", fmt.Sprintf("target PostgresDatabase %q not found", pgcred.Spec.DatabaseRef)), nil
 	}
 
 	if pgdb.Status.Phase != v1alpha1.DatabasePhaseReady {
@@ -120,12 +111,13 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 
 	var adminSecret corev1.Secret
 	adminSecretKey := types.NamespacedName{Name: pgdb.Status.SecretName, Namespace: pgdb.Namespace}
-	if err := r.Get(ctx, adminSecretKey, &adminSecret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
-				"AdminSecretNotFound", fmt.Sprintf("admin Secret %q not yet visible in cache", pgdb.Status.SecretName)), nil
-		}
+	adminFound, err := r.client.get(ctx, adminSecretKey, &adminSecret)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching admin Secret %q: %w", pgdb.Status.SecretName, err)
+	}
+	if !adminFound {
+		return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
+			"AdminSecretNotFound", fmt.Sprintf("admin Secret %q not yet visible in cache", pgdb.Status.SecretName)), nil
 	}
 
 	adminUser := string(adminSecret.Data["username"])
@@ -135,18 +127,18 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 
 	var existingSecret corev1.Secret
 	credSecretKey := types.NamespacedName{Name: pgcred.Spec.SecretName, Namespace: pgcred.Namespace}
-	if err := r.Get(ctx, credSecretKey, &existingSecret); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
-		}
-
+	secretFound, err := r.client.get(ctx, credSecretKey, &existingSecret)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
+	}
+	if !secretFound {
 		password, err := generatePassword(24)
 		if err != nil {
 			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 				"PasswordGenerationFailed", err.Error()), err
 		}
 
-		if err := r.ensurePostgresUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, pgcred.Spec.Permissions); err != nil {
+		if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, pgcred.Spec.Permissions); err != nil {
 			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 				"UserCreationFailed", err.Error()), err
 		}
@@ -165,10 +157,7 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 				"database": dbName,
 			},
 		}
-		if err := controllerutil.SetControllerReference(pgcred, secret, r.Scheme); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting owner reference on credential Secret: %w", err)
-		}
-		if err := r.Create(ctx, secret); err != nil {
+		if err := r.client.createOwned(ctx, pgcred, secret); err != nil {
 			return ctrl.Result{}, fmt.Errorf("creating credential Secret: %w", err)
 		}
 	}
@@ -194,16 +183,16 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 	// drop gracefully — the user will have been removed with the database.
 	var pgdb v1alpha1.PostgresDatabase
 	dbKey := types.NamespacedName{Name: pgcred.Spec.DatabaseRef, Namespace: pgcred.Namespace}
-	if err := r.Get(ctx, dbKey, &pgdb); err == nil && pgdb.Status.Phase == v1alpha1.DatabasePhaseReady && pgdb.Status.SecretName != "" {
+	if pgdbFound, _ := r.client.get(ctx, dbKey, &pgdb); pgdbFound && pgdb.Status.Phase == v1alpha1.DatabasePhaseReady && pgdb.Status.SecretName != "" {
 		var adminSecret corev1.Secret
 		adminSecretKey := types.NamespacedName{Name: pgdb.Status.SecretName, Namespace: pgdb.Namespace}
-		if err := r.Get(ctx, adminSecretKey, &adminSecret); err == nil {
+		if adminFound, _ := r.client.get(ctx, adminSecretKey, &adminSecret); adminFound {
 			adminUser := string(adminSecret.Data["username"])
 			adminPass := string(adminSecret.Data["password"])
 			dbName := pgdb.Spec.DatabaseName
 			host := postgresHost(&pgdb)
 
-			if err := r.dropPostgresUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
+			if err := r.pgDB.DropUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
 				logger.Error(err, "failed to drop Postgres user during cleanup", "username", pgcred.Spec.Username)
 				// Continue with finalizer removal — the database may be going away too.
 			}
@@ -217,14 +206,14 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 			Namespace: pgcred.Namespace,
 		},
 	}
-	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, secret); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting credential Secret: %w", err)
 	}
 
 	// Remove the finalizer so the CR can be garbage-collected.
 	controllerutil.RemoveFinalizer(pgcred, credentialFinalizerName)
-	if err := r.Update(ctx, pgcred); err != nil {
-		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+	if err := r.client.update(ctx, pgcred); err != nil {
+		if isConflict(err) || isNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
@@ -232,109 +221,6 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 
 	logger.Info("credential finalizer cleanup complete")
 	return ctrl.Result{}, nil
-}
-
-// validPermissions is the exhaustive set of SQL privilege keywords the
-// controller may embed in DDL statements. Every permission value is checked
-// against this set before being interpolated into a query, so even if the CRD
-// validation were bypassed, only known-safe keywords reach SQL.
-var validPermissions = map[v1alpha1.DatabasePermission]struct{}{
-	v1alpha1.PermissionSelect:     {},
-	v1alpha1.PermissionInsert:     {},
-	v1alpha1.PermissionUpdate:     {},
-	v1alpha1.PermissionDelete:     {},
-	v1alpha1.PermissionTruncate:   {},
-	v1alpha1.PermissionReferences: {},
-	v1alpha1.PermissionTrigger:    {},
-	v1alpha1.PermissionAll:        {},
-}
-
-// ensurePostgresUser connects to the target Postgres instance and creates the
-// specified role with the given password and permissions if it does not already exist.
-func (r *PostgresCredentialReconciler) ensurePostgresUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission) error {
-	db, err := openPostgres(host, adminUser, adminPass, dbName)
-	if err != nil {
-		return fmt.Errorf("connecting to Postgres: %w", err)
-	}
-	defer db.Close()
-
-	// Check if the role already exists.
-	var exists bool
-	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", username).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("checking if role exists: %w", err)
-	}
-
-	if !exists {
-		createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s",
-			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
-		if _, err := db.Exec(createSQL); err != nil {
-			return fmt.Errorf("creating role %q: %w", username, err)
-		}
-	}
-
-	// GRANT permissions on all tables in the database.
-	if len(permissions) > 0 {
-		// Validate every permission against the whitelist before building SQL.
-		privs := make([]string, len(permissions))
-		for i, p := range permissions {
-			if _, ok := validPermissions[p]; !ok {
-				return fmt.Errorf("unknown permission %q", p)
-			}
-			privs[i] = string(p)
-		}
-		privClause := strings.Join(privs, ", ")
-		quotedUser := pq.QuoteIdentifier(username)
-
-		grantSQL := fmt.Sprintf("GRANT %s ON ALL TABLES IN SCHEMA public TO %s",
-			privClause, quotedUser)
-		if _, err := db.Exec(grantSQL); err != nil {
-			return fmt.Errorf("granting permissions to %q: %w", username, err)
-		}
-
-		// Also set default privileges so future tables get the same grants.
-		defaultSQL := fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT %s ON TABLES TO %s",
-			privClause, quotedUser)
-		if _, err := db.Exec(defaultSQL); err != nil {
-			return fmt.Errorf("setting default privileges for %q: %w", username, err)
-		}
-	}
-
-	return nil
-}
-
-// dropPostgresUser connects to the target Postgres instance and drops the specified role.
-func (r *PostgresCredentialReconciler) dropPostgresUser(host, adminUser, adminPass, dbName, username string) error {
-	db, err := openPostgres(host, adminUser, adminPass, dbName)
-	if err != nil {
-		return fmt.Errorf("connecting to Postgres: %w", err)
-	}
-	defer db.Close()
-
-	// Revoke all privileges and default privileges before dropping to avoid
-	// dependency errors from ALTER DEFAULT PRIVILEGES grants.
-	quotedUser := pq.QuoteIdentifier(username)
-
-	revokeSQL := fmt.Sprintf("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM %s",
-		quotedUser)
-	if _, err := db.Exec(revokeSQL); err != nil {
-		// Ignore errors — the role may never have been granted anything.
-		_ = err
-	}
-
-	revokeDefaultSQL := fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM %s",
-		quotedUser)
-	if _, err := db.Exec(revokeDefaultSQL); err != nil {
-		// Ignore errors — default privileges may not have been set.
-		_ = err
-	}
-
-	dropSQL := fmt.Sprintf("DROP ROLE IF EXISTS %s", quotedUser)
-	if _, err := db.Exec(dropSQL); err != nil {
-		return fmt.Errorf("dropping role %q: %w", username, err)
-	}
-
-	return nil
 }
 
 // setCredentialPhase mutates the PostgresCredential status phase and condition
@@ -374,25 +260,6 @@ func postgresHost(pgdb *v1alpha1.PostgresDatabase) string {
 	return fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", pgdb.Name, pgdb.Name, pgdb.Namespace)
 }
 
-// openPostgres opens a connection to a Postgres instance.
-func openPostgres(host, user, password, dbName string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
-		host, postgresPort, user, password, dbName)
-
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	// Verify the connection is live.
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	return db, nil
-}
-
 // labelsForCredential returns the standard label set for resources owned by a
 // PostgresCredential.
 func labelsForCredential(pgcred *v1alpha1.PostgresCredential, instanceName string) map[string]string {
@@ -406,6 +273,8 @@ func labelsForCredential(pgcred *v1alpha1.PostgresCredential, instanceName strin
 
 // SetupWithManager registers the PostgresCredentialReconciler with the controller manager.
 func (r *PostgresCredentialReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.client = postgresCredentialClient{inner: mgr.GetClient(), scheme: mgr.GetScheme()}
+	r.pgDB = postgresManager{}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PostgresCredential{}).
 		Owns(&corev1.Secret{}).

@@ -8,12 +8,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -29,15 +26,6 @@ const (
 	// natsClusterFinalizerName is the finalizer added to NatsCluster resources to ensure
 	// owned Deployment, Service, ConfigMap, and optional PVC are cleaned up before deletion.
 	natsClusterFinalizerName = "games-hub.io/nats-cluster"
-
-	// natsImage is the base NATS server image name (version is appended from the CR spec).
-	natsImage = "nats"
-
-	// natsConfigKey is the filename for the NATS server config inside the ConfigMap.
-	natsConfigKey = "nats.conf"
-
-	// natsConfigMountPath is the directory inside the container where the config is mounted.
-	natsConfigMountPath = "/etc/nats"
 )
 
 // NatsClusterReconciler reconciles a NatsCluster object.
@@ -45,9 +33,9 @@ const (
 // optional PersistentVolumeClaim when JetStream is enabled. The NATS server configuration
 // is regenerated from all NatsAccount CRs that reference this cluster on every reconcile.
 type NatsClusterReconciler struct {
-	client.Client
-	Scheme       *runtime.Scheme
 	InstanceName string
+	client       natsClusterClient
+	builder      natsClusterBuilder
 }
 
 // +kubebuilder:rbac:groups=db-operator.benjamin-wright.github.com,resources=natsclusters,verbs=get;list;watch;create;update;patch;delete
@@ -63,12 +51,13 @@ func (r *NatsClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	logger := log.FromContext(ctx)
 
 	var nats v1alpha1.NatsCluster
-	if err := r.Get(ctx, req.NamespacedName, &nats); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("NatsCluster resource not found; ignoring")
-			return ctrl.Result{}, nil
-		}
+	found, err := r.client.get(ctx, req.NamespacedName, &nats)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching NatsCluster: %w", err)
+	}
+	if !found {
+		logger.Info("NatsCluster resource not found; ignoring")
+		return ctrl.Result{}, nil
 	}
 
 	if !nats.DeletionTimestamp.IsZero() {
@@ -77,7 +66,7 @@ func (r *NatsClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if !controllerutil.ContainsFinalizer(&nats, natsClusterFinalizerName) {
 		controllerutil.AddFinalizer(&nats, natsClusterFinalizerName)
-		if err := r.Update(ctx, &nats); err != nil {
+		if err := r.client.update(ctx, &nats); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 	}
@@ -124,15 +113,16 @@ func (r *NatsClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	if apierrors.IsConflict(reconcileErr) {
+	if isConflict(reconcileErr) {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	if apierrors.IsForbidden(reconcileErr) {
+	if isForbidden(reconcileErr) {
+		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.Status().Update(ctx, &nats); err != nil {
-		if apierrors.IsConflict(err) {
+	if err := r.client.updateStatus(ctx, &nats); err != nil {
+		if isConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
@@ -154,21 +144,21 @@ func (r *NatsClusterReconciler) reconcileDelete(ctx context.Context, nats *v1alp
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: natsDeploymentName(nats), Namespace: nats.Namespace},
 	}
-	if err := r.Delete(ctx, deploy); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, deploy); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting Deployment: %w", err)
 	}
 
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: natsServiceName(nats), Namespace: nats.Namespace},
 	}
-	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, svc); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting Service: %w", err)
 	}
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: natsConfigMapName(nats), Namespace: nats.Namespace},
 	}
-	if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.delete(ctx, cm); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting ConfigMap: %w", err)
 	}
 
@@ -176,14 +166,14 @@ func (r *NatsClusterReconciler) reconcileDelete(ctx context.Context, nats *v1alp
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{Name: natsJetStreamPVCName(nats), Namespace: nats.Namespace},
 		}
-		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.client.delete(ctx, pvc); err != nil {
 			return ctrl.Result{}, fmt.Errorf("deleting JetStream PVC: %w", err)
 		}
 	}
 
 	controllerutil.RemoveFinalizer(nats, natsClusterFinalizerName)
-	if err := r.Update(ctx, nats); err != nil {
-		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+	if err := r.client.update(ctx, nats); err != nil {
+		if isConflict(err) || isNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
@@ -196,7 +186,7 @@ func (r *NatsClusterReconciler) reconcileDelete(ctx context.Context, nats *v1alp
 // listAccountsForCluster returns all NatsAccount CRs in the same namespace that reference this cluster.
 func (r *NatsClusterReconciler) listAccountsForCluster(ctx context.Context, nats *v1alpha1.NatsCluster) ([]v1alpha1.NatsAccount, error) {
 	var list v1alpha1.NatsAccountList
-	if err := r.List(ctx, &list, client.InNamespace(nats.Namespace)); err != nil {
+	if err := r.client.list(ctx, &list, client.InNamespace(nats.Namespace)); err != nil {
 		return nil, fmt.Errorf("listing NatsAccounts: %w", err)
 	}
 	var matched []v1alpha1.NatsAccount
@@ -216,46 +206,36 @@ func (r *NatsClusterReconciler) readUserPasswords(ctx context.Context, acct *v1a
 	for _, user := range acct.Spec.Users {
 		var secret corev1.Secret
 		key := types.NamespacedName{Name: user.SecretName, Namespace: acct.Namespace}
-		if err := r.Get(ctx, key, &secret); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
+		found, err := r.client.get(ctx, key, &secret)
+		if err != nil {
 			return nil, fmt.Errorf("reading user Secret %q: %w", user.SecretName, err)
 		}
-		passwords[user.Username] = string(secret.Data["password"])
+		if found {
+			passwords[user.Username] = string(secret.Data["password"])
+		}
 	}
 	return passwords, nil
 }
 
 // reconcileConfigMap ensures the NATS config ConfigMap exists and contains the current config.
 func (r *NatsClusterReconciler) reconcileConfigMap(ctx context.Context, nats *v1alpha1.NatsCluster, config string) error {
-	desired := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      natsConfigMapName(nats),
-			Namespace: nats.Namespace,
-			Labels:    labelsForNatsCluster(nats, r.InstanceName),
-		},
-		Data: map[string]string{natsConfigKey: config},
-	}
-	if err := controllerutil.SetControllerReference(nats, desired, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on ConfigMap: %w", err)
-	}
+	desired := r.builder.desiredConfigMap(nats, config)
 
 	var existing corev1.ConfigMap
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
+		return fmt.Errorf("fetching ConfigMap: %w", err)
+	}
+	if !found {
+		if err := r.client.create(ctx, desired); err != nil {
 			return fmt.Errorf("creating ConfigMap: %w", err)
 		}
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("fetching ConfigMap: %w", err)
-	}
 
 	if !equality.Semantic.DeepEqual(existing.Data, desired.Data) {
 		existing.Data = desired.Data
-		if err := r.Update(ctx, &existing); err != nil {
+		if err := r.client.update(ctx, &existing); err != nil {
 			return fmt.Errorf("updating ConfigMap: %w", err)
 		}
 	}
@@ -264,25 +244,25 @@ func (r *NatsClusterReconciler) reconcileConfigMap(ctx context.Context, nats *v1
 
 // reconcileNatsService ensures the NATS client Service exists and is up to date.
 func (r *NatsClusterReconciler) reconcileNatsService(ctx context.Context, nats *v1alpha1.NatsCluster) error {
-	desired := r.desiredNatsService(nats)
+	desired := r.builder.desiredService(nats)
 
 	var existing corev1.Service
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
+		return fmt.Errorf("fetching Service: %w", err)
+	}
+	if !found {
+		if err := r.client.create(ctx, desired); err != nil {
 			return fmt.Errorf("creating Service: %w", err)
 		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("fetching Service: %w", err)
 	}
 
 	if !equality.Semantic.DeepEqual(existing.Spec.Ports, desired.Spec.Ports) ||
 		!equality.Semantic.DeepEqual(existing.Spec.Selector, desired.Spec.Selector) {
 		existing.Spec.Ports = desired.Spec.Ports
 		existing.Spec.Selector = desired.Spec.Selector
-		if err := r.Update(ctx, &existing); err != nil {
+		if err := r.client.update(ctx, &existing); err != nil {
 			return fmt.Errorf("updating Service: %w", err)
 		}
 	}
@@ -296,35 +276,17 @@ func (r *NatsClusterReconciler) reconcileJetStreamPVC(ctx context.Context, nats 
 		return nil
 	}
 
-	name := natsJetStreamPVCName(nats)
+	desired := r.builder.desiredJetStreamPVC(nats)
 	var existing corev1.PersistentVolumeClaim
-	err := r.Get(ctx, client.ObjectKey{Namespace: nats.Namespace, Name: name}, &existing)
-	if err == nil {
-		return nil // already exists; PVC size changes require manual intervention
-	}
-	if !apierrors.IsNotFound(err) {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
 		return fmt.Errorf("fetching JetStream PVC: %w", err)
 	}
+	if found {
+		return nil // already exists; PVC size changes require manual intervention
+	}
 
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: nats.Namespace,
-			Labels:    labelsForNatsCluster(nats, r.InstanceName),
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: nats.Spec.JetStream.StorageSize.DeepCopy(),
-				},
-			},
-		},
-	}
-	if err := controllerutil.SetControllerReference(nats, pvc, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on JetStream PVC: %w", err)
-	}
-	if err := r.Create(ctx, pvc); err != nil {
+	if err := r.client.create(ctx, desired); err != nil {
 		return fmt.Errorf("creating JetStream PVC: %w", err)
 	}
 	return nil
@@ -333,23 +295,23 @@ func (r *NatsClusterReconciler) reconcileJetStreamPVC(ctx context.Context, nats 
 // reconcileNatsDeployment ensures the NATS Deployment exists and is up to date.
 // Returns the Deployment as seen by the API server so callers can inspect the latest status.
 func (r *NatsClusterReconciler) reconcileNatsDeployment(ctx context.Context, nats *v1alpha1.NatsCluster, config string) (*appsv1.Deployment, error) {
-	desired := r.desiredNatsDeployment(nats, natsconfig.Checksum(config))
+	desired := r.builder.desiredDeployment(nats, natsconfig.Checksum(config))
 
 	var existing appsv1.Deployment
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+	found, err := r.client.get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if err != nil {
+		return nil, fmt.Errorf("fetching Deployment: %w", err)
+	}
+	if !found {
+		if err := r.client.create(ctx, desired); err != nil {
 			return nil, fmt.Errorf("creating Deployment: %w", err)
 		}
 		return desired, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("fetching Deployment: %w", err)
-	}
 
 	if !equality.Semantic.DeepEqual(existing.Spec.Template, desired.Spec.Template) {
 		existing.Spec.Template = desired.Spec.Template
-		if err := r.Update(ctx, &existing); err != nil {
+		if err := r.client.update(ctx, &existing); err != nil {
 			return nil, fmt.Errorf("updating Deployment: %w", err)
 		}
 	}
@@ -394,162 +356,13 @@ func (r *NatsClusterReconciler) setNatsClusterPhase(
 	return ctrl.Result{}
 }
 
-// ---------- Owned resource builders ----------
-
-func (r *NatsClusterReconciler) desiredNatsService(nats *v1alpha1.NatsCluster) *corev1.Service {
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      natsServiceName(nats),
-			Namespace: nats.Namespace,
-			Labels:    labelsForNatsCluster(nats, r.InstanceName),
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: labelsForNatsCluster(nats, r.InstanceName),
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "client",
-					Port:       natsconfig.ClientPort,
-					TargetPort: intstr.FromInt32(natsconfig.ClientPort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
-		},
-	}
-	_ = controllerutil.SetControllerReference(nats, svc, r.Scheme)
-	return svc
-}
-
-func (r *NatsClusterReconciler) desiredNatsDeployment(nats *v1alpha1.NatsCluster, cfgChecksum string) *appsv1.Deployment {
-	replicas := int32(1)
-
-	volumes := []corev1.Volume{
-		{
-			Name: "config",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: natsConfigMapName(nats),
-					},
-				},
-			},
-		},
-	}
-
-	volumeMounts := []corev1.VolumeMount{
-		{Name: "config", MountPath: natsConfigMountPath},
-	}
-
-	if nats.Spec.JetStream != nil {
-		volumes = append(volumes, corev1.Volume{
-			Name: "data",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: natsJetStreamPVCName(nats),
-				},
-			},
-		})
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "data",
-			MountPath: natsconfig.DataMountPath,
-		})
-	}
-
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      natsDeploymentName(nats),
-			Namespace: nats.Namespace,
-			Labels:    labelsForNatsCluster(nats, r.InstanceName),
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labelsForNatsCluster(nats, r.InstanceName),
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labelsForNatsCluster(nats, r.InstanceName),
-					// Changing the config checksum annotation triggers a rolling restart
-					// when the ConfigMap contents change.
-					Annotations: map[string]string{
-						"checksum/config": cfgChecksum,
-					},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "nats",
-							Image: fmt.Sprintf("%s:%s", natsImage, nats.Spec.NatsVersion),
-							Args: []string{
-								"--config", fmt.Sprintf("%s/%s", natsConfigMountPath, natsConfigKey),
-							},
-							Ports: []corev1.ContainerPort{
-								{Name: "client", ContainerPort: natsconfig.ClientPort, Protocol: corev1.ProtocolTCP},
-								{Name: "monitor", ContainerPort: natsconfig.MonitorPort, Protocol: corev1.ProtocolTCP},
-							},
-							VolumeMounts: volumeMounts,
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/healthz",
-										Port: intstr.FromInt32(natsconfig.MonitorPort),
-									},
-								},
-								InitialDelaySeconds: 5,
-								PeriodSeconds:       5,
-							},
-							LivenessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/healthz",
-										Port: intstr.FromInt32(natsconfig.MonitorPort),
-									},
-								},
-								InitialDelaySeconds: 15,
-								PeriodSeconds:       10,
-							},
-						},
-					},
-					Volumes: volumes,
-				},
-			},
-		},
-	}
-	_ = controllerutil.SetControllerReference(nats, deploy, r.Scheme)
-	return deploy
-}
-
-// ---------- Naming helpers ----------
-
-func natsConfigMapName(nats *v1alpha1.NatsCluster) string {
-	return nats.Name + "-config"
-}
-
-func natsServiceName(nats *v1alpha1.NatsCluster) string {
-	return nats.Name
-}
-
-func natsDeploymentName(nats *v1alpha1.NatsCluster) string {
-	return nats.Name
-}
-
-func natsJetStreamPVCName(nats *v1alpha1.NatsCluster) string {
-	return nats.Name + "-jetstream"
-}
-
-func labelsForNatsCluster(nats *v1alpha1.NatsCluster, instanceName string) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/name":                                   "nats",
-		"app.kubernetes.io/instance":                               nats.Name,
-		"app.kubernetes.io/managed-by":                             "db-operator",
-		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
-	}
-}
-
 // SetupWithManager registers the NatsClusterReconciler with the controller manager.
 // It watches NatsAccount CRs and enqueues the referenced NatsCluster for reconciliation
 // whenever an account is created, updated, or deleted — ensuring the server config
 // is regenerated promptly.
 func (r *NatsClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.client = natsClusterClient{inner: mgr.GetClient()}
+	r.builder = natsClusterBuilder{instanceName: r.InstanceName, scheme: mgr.GetScheme()}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.NatsCluster{}).
 		Owns(&appsv1.Deployment{}).

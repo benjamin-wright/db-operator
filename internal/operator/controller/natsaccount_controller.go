@@ -6,17 +6,12 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/benjamin-wright/db-operator/internal/natsconfig"
 	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
 )
 
@@ -26,9 +21,9 @@ import (
 // the NatsAccount CR is deleted. Changes to NatsAccount CRs trigger the NatsCluster
 // reconciler to regenerate the NATS server configuration.
 type NatsAccountReconciler struct {
-	client.Client
-	Scheme       *runtime.Scheme
 	InstanceName string
+	client       natsAccountClient
+	builder      natsAccountBuilder
 }
 
 // +kubebuilder:rbac:groups=db-operator.benjamin-wright.github.com,resources=natsaccounts,verbs=get;list;watch;create;update;patch;delete
@@ -42,25 +37,27 @@ func (r *NatsAccountReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	logger := log.FromContext(ctx)
 
 	var acct v1alpha1.NatsAccount
-	if err := r.Get(ctx, req.NamespacedName, &acct); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("NatsAccount resource not found; ignoring")
-			return ctrl.Result{}, nil
-		}
+	found, err := r.client.get(ctx, req.NamespacedName, &acct)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching NatsAccount: %w", err)
+	}
+	if !found {
+		logger.Info("NatsAccount resource not found; ignoring")
+		return ctrl.Result{}, nil
 	}
 
 	result, reconcileErr := r.reconcileAccount(ctx, &acct)
 
-	if apierrors.IsConflict(reconcileErr) {
+	if isConflict(reconcileErr) {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	if apierrors.IsForbidden(reconcileErr) {
+	if isForbidden(reconcileErr) {
+		logger.Error(reconcileErr, "reconcile blocked by Forbidden error; namespace may be terminating")
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.Status().Update(ctx, &acct); err != nil {
-		if apierrors.IsConflict(err) {
+	if err := r.client.updateStatus(ctx, &acct); err != nil {
+		if isConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
@@ -74,12 +71,13 @@ func (r *NatsAccountReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *NatsAccountReconciler) reconcileAccount(ctx context.Context, acct *v1alpha1.NatsAccount) (ctrl.Result, error) {
 	var cluster v1alpha1.NatsCluster
 	clusterKey := types.NamespacedName{Name: acct.Spec.ClusterRef, Namespace: acct.Namespace}
-	if err := r.Get(ctx, clusterKey, &cluster); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.setNatsAccountPhase(acct, v1alpha1.NatsAccountPhasePending,
-				"ClusterNotFound", fmt.Sprintf("target NatsCluster %q not found", acct.Spec.ClusterRef)), nil
-		}
+	found, err := r.client.get(ctx, clusterKey, &cluster)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching target NatsCluster: %w", err)
+	}
+	if !found {
+		return r.setNatsAccountPhase(acct, v1alpha1.NatsAccountPhasePending,
+			"ClusterNotFound", fmt.Sprintf("target NatsCluster %q not found", acct.Spec.ClusterRef)), nil
 	}
 
 	for _, user := range acct.Spec.Users {
@@ -104,12 +102,12 @@ func (r *NatsAccountReconciler) reconcileUserSecret(
 ) error {
 	var existing corev1.Secret
 	key := types.NamespacedName{Name: user.SecretName, Namespace: acct.Namespace}
-	err := r.Get(ctx, key, &existing)
-	if err == nil {
-		return nil // already exists
-	}
-	if !apierrors.IsNotFound(err) {
+	found, err := r.client.get(ctx, key, &existing)
+	if err != nil {
 		return fmt.Errorf("fetching user Secret %q: %w", user.SecretName, err)
+	}
+	if found {
+		return nil // already exists
 	}
 
 	password, err := generatePassword(24)
@@ -117,25 +115,8 @@ func (r *NatsAccountReconciler) reconcileUserSecret(
 		return fmt.Errorf("generating password for user %q: %w", user.Username, err)
 	}
 
-	host := natsClusterHost(cluster)
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      user.SecretName,
-			Namespace: acct.Namespace,
-			Labels:    labelsForNatsAccount(acct, r.InstanceName),
-		},
-		StringData: map[string]string{
-			"username": user.Username,
-			"password": password,
-			"account":  acct.Name,
-			"host":     host,
-			"port":     fmt.Sprintf("%d", natsconfig.ClientPort),
-		},
-	}
-	if err := controllerutil.SetControllerReference(acct, secret, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on user Secret: %w", err)
-	}
-	if err := r.Create(ctx, secret); err != nil {
+	secret := r.builder.desiredUserSecret(acct, cluster, user, password)
+	if err := r.client.create(ctx, secret); err != nil {
 		return fmt.Errorf("creating user Secret %q: %w", user.SecretName, err)
 	}
 	return nil
@@ -169,25 +150,10 @@ func (r *NatsAccountReconciler) setNatsAccountPhase(
 	return ctrl.Result{}
 }
 
-// ---------- Helpers ----------
-
-// natsClusterHost returns the in-cluster DNS name for the NATS service of the given cluster.
-func natsClusterHost(cluster *v1alpha1.NatsCluster) string {
-	return fmt.Sprintf("%s.%s.svc.cluster.local", cluster.Name, cluster.Namespace)
-}
-
-// labelsForNatsAccount returns the standard label set for resources owned by a NatsAccount.
-func labelsForNatsAccount(acct *v1alpha1.NatsAccount, instanceName string) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/name":                                   "nats-account",
-		"app.kubernetes.io/instance":                               acct.Name,
-		"app.kubernetes.io/managed-by":                             "db-operator",
-		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
-	}
-}
-
 // SetupWithManager registers the NatsAccountReconciler with the controller manager.
 func (r *NatsAccountReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.client = natsAccountClient{inner: mgr.GetClient()}
+	r.builder = natsAccountBuilder{instanceName: r.InstanceName, scheme: mgr.GetScheme()}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.NatsAccount{}).
 		Owns(&corev1.Secret{}).

@@ -113,8 +113,6 @@ func main() {
 	}
 
 	if err := (&controller.PostgresCredentialReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
 		InstanceName: instanceName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PostgresCredential")
@@ -129,8 +127,6 @@ func main() {
 	}
 
 	if err := (&controller.RedisCredentialReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
 		InstanceName: instanceName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RedisCredential")
@@ -138,8 +134,6 @@ func main() {
 	}
 
 	if err := (&controller.NatsClusterReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
 		InstanceName: instanceName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NatsCluster")
@@ -147,8 +141,6 @@ func main() {
 	}
 
 	if err := (&controller.NatsAccountReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
 		InstanceName: instanceName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NatsAccount")
