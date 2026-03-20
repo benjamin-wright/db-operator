@@ -60,3 +60,7 @@ Builds the operator image, deploys the Helm chart into a `db-operator` namespace
 ## Standards
 
 See [docs/standards.md](docs/standards.md) for coding conventions, testing strategy, and Kubernetes controller guidelines.
+
+## TODOs
+
+- Update the gitlab build to run arm builds on arm machines, cross-platform is way too slow
