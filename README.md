@@ -48,6 +48,7 @@ helm upgrade db-operator oci://ghcr.io/benjamin-wright/db-operator/db-operator \
 | `image.repository` | `localhost:5001/db-operator` | Operator image repository |
 | `image.tag` | `latest` | Operator image tag |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
+| `instanceName` | `""` | Operator instance name; when set, only CRs carrying a matching `db-operator.benjamin-wright.github.com/operator-instance` label are reconciled |
 | `resources.requests.cpu` | `50m` | CPU request |
 | `resources.requests.memory` | `64Mi` | Memory request |
 | `resources.limits.cpu` | `200m` | CPU limit |
