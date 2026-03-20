@@ -20,13 +20,6 @@ const (
 
 // PostgresDatabaseSpec defines the desired state of PostgresDatabase.
 type PostgresDatabaseSpec struct {
-	// DatabaseName is the name of the PostgreSQL database to create inside the instance.
-	// Must be 1–63 characters, matching PostgreSQL identifier rules.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	DatabaseName string `json:"databaseName"`
-
 	// PostgresVersion is the major version of PostgreSQL to deploy (e.g. "16").
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum="14";"15";"16";"17"
@@ -59,7 +52,6 @@ type PostgresDatabaseStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=pgdb,categories=games-hub
-// +kubebuilder:printcolumn:name="Database",type=string,JSONPath=`.spec.databaseName`
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.postgresVersion`
 // +kubebuilder:printcolumn:name="Storage",type=string,JSONPath=`.spec.storageSize`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

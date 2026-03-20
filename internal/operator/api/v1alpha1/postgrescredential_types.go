@@ -32,6 +32,19 @@ const (
 	PermissionAll        DatabasePermission = "ALL"
 )
 
+// DatabasePermissionEntry maps a set of table-level privileges to one or more
+// logical databases within the target PostgreSQL instance.
+type DatabasePermissionEntry struct {
+	// Databases is the list of PostgreSQL database names this entry applies to.
+	// Each database will be created inside the target instance if it does not already exist.
+	// +kubebuilder:validation:MinItems=1
+	Databases []string `json:"databases"`
+
+	// Permissions is the set of table-level privileges to grant in those databases.
+	// +kubebuilder:validation:MinItems=1
+	Permissions []DatabasePermission `json:"permissions"`
+}
+
 // PostgresCredentialSpec defines the desired state of PostgresCredential.
 type PostgresCredentialSpec struct {
 	// DatabaseRef is the name of the PostgresDatabase resource in the same namespace
@@ -54,11 +67,10 @@ type PostgresCredentialSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	SecretName string `json:"secretName"`
 
-	// Permissions is the list of database-level privileges granted to the user.
-	// At least one permission must be specified.
-	// +kubebuilder:validation:MinItems=1
+	// Permissions is the list of per-database privilege entries for this credential.
+	// Each entry specifies one or more databases and the privileges to grant in them.
 	// +optional
-	Permissions []DatabasePermission `json:"permissions,omitempty"`
+	Permissions []DatabasePermissionEntry `json:"permissions,omitempty"`
 }
 
 // PostgresCredentialStatus defines the observed state of PostgresCredential.

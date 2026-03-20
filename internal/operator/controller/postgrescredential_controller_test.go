@@ -45,9 +45,14 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					DatabaseRef: pgdb.Name,
 					Username:    "appuser",
 					SecretName:  "cred-lifecycle-secret",
-					Permissions: []v1alpha1.DatabasePermission{
-						v1alpha1.PermissionSelect,
-						v1alpha1.PermissionInsert,
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases: []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{
+								v1alpha1.PermissionSelect,
+								v1alpha1.PermissionInsert,
+							},
+						},
 					},
 				},
 			}
@@ -135,7 +140,12 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					DatabaseRef: "cred-wait-db",
 					Username:    "waituser",
 					SecretName:  "cred-wait-secret",
-					Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
 				},
 			}
 			Expect(K8sClient.Create(Ctx, pgcred)).To(Succeed())
@@ -195,7 +205,12 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					DatabaseRef: pgdb.Name,
 					Username:    "deleteuser",
 					SecretName:  "cred-delete-secret",
-					Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
 				},
 			}
 			Expect(K8sClient.Create(Ctx, pgcred)).To(Succeed())
@@ -278,7 +293,12 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					DatabaseRef: "nonexistent-db",
 					Username:    "nolabeluser",
 					SecretName:  "no-label-cred-secret",
-					Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
 				},
 			}
 			Expect(K8sClient.Create(Ctx, pgcred)).To(Succeed())
@@ -304,6 +324,128 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			for _, s := range secretList.Items {
 				Expect(s.Name).NotTo(Equal("no-label-cred-secret"), "credential Secret should not exist for unlabelled CR")
 			}
+		})
+	})
+
+	// ── Multi-database credential ────────────────────────────────────────────
+	// One credential covers two databases; a second credential creates a third
+	// database.  Verify the multi-db user can query tables in its two databases
+	// but is denied in the one it was never granted access to.
+	Context("when a credential covers multiple databases", Ordered, func() {
+		var (
+			ns                *corev1.Namespace
+			pgdb              *v1alpha1.PostgresDatabase
+			dbLookup          types.NamespacedName
+			adminSecretLookup types.NamespacedName
+			multiSecretLookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("multi-db-instance")
+			WaitForDatabase(dbLookup)
+
+			// Credential with access to two databases in one entry.
+			multiCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "multi-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "multiuser",
+					SecretName:  "multi-cred-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"db_alpha", "db_beta"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, multiCred)).To(Succeed())
+
+			// A separate credential that creates a third database; multiuser is
+			// never granted access to it.
+			otherCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "otheruser",
+					SecretName:  "other-cred-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"db_gamma"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, otherCred)).To(Succeed())
+
+			multiSecretLookup = types.NamespacedName{Name: "multi-cred-secret", Namespace: ns.Name}
+
+			// Wait for both credentials to be Ready before touching databases.
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: "multi-cred", Namespace: ns.Name}, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: "other-cred", Namespace: ns.Name}, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			// Create a test table in each database as admin.  Because the
+			// credentials were already provisioned (ALTER DEFAULT PRIVILEGES was
+			// run by EnsureUser), tables created now by the postgres role inherit
+			// those default privileges automatically.
+			for _, dbName := range []string{"db_alpha", "db_beta", "db_gamma"} {
+				db, closeConn := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, dbName)
+				_, err := db.Exec("CREATE TABLE IF NOT EXISTS items (id INT)")
+				Expect(err).NotTo(HaveOccurred(), "creating items table in "+dbName)
+				closeConn()
+			}
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should set PGDATABASE in the credential Secret for a single-database credential", func() {
+			var secret corev1.Secret
+			Expect(K8sClient.Get(Ctx, multiSecretLookup, &secret)).To(Succeed())
+			Expect(secret.Data).NotTo(HaveKey("PGDATABASE"), "multi-database credential should not set PGDATABASE")
+		})
+
+		It("should allow multiuser to query tables in db_alpha", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, multiSecretLookup, "db_alpha")
+			defer closeConn()
+			_, err := db.Exec("SELECT * FROM items")
+			Expect(err).NotTo(HaveOccurred(), "multiuser should have SELECT on db_alpha")
+		})
+
+		It("should allow multiuser to query tables in db_beta", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, multiSecretLookup, "db_beta")
+			defer closeConn()
+			_, err := db.Exec("SELECT * FROM items")
+			Expect(err).NotTo(HaveOccurred(), "multiuser should have SELECT on db_beta")
+		})
+
+		It("should deny multiuser SELECT on tables in db_gamma", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, multiSecretLookup, "db_gamma")
+			defer closeConn()
+			_, err := db.Exec("SELECT * FROM items")
+			Expect(err).To(HaveOccurred(), "multiuser should not have SELECT on db_gamma")
 		})
 	})
 })

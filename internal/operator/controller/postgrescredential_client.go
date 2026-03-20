@@ -64,6 +64,7 @@ func (c *postgresCredentialClient) updateStatus(ctx context.Context, obj client.
 // PostgresManager abstracts direct Postgres interactions so the reconciler can
 // be tested without a live database.
 type PostgresManager interface {
+	EnsureDatabase(host, adminUser, adminPass, dbName string) error
 	EnsureUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission) error
 	DropUser(host, adminUser, adminPass, dbName, username string) error
 }
@@ -83,6 +84,30 @@ var validPermissions = map[v1alpha1.DatabasePermission]struct{}{
 	v1alpha1.PermissionReferences: {},
 	v1alpha1.PermissionTrigger:    {},
 	v1alpha1.PermissionAll:        {},
+}
+
+// EnsureDatabase connects to the maintenance database and creates the specified
+// logical database if it does not already exist.
+func (p postgresManager) EnsureDatabase(host, adminUser, adminPass, dbName string) error {
+	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	if err != nil {
+		return fmt.Errorf("connecting to Postgres: %w", err)
+	}
+	defer db.Close()
+
+	var exists bool
+	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", dbName).Scan(&exists); err != nil {
+		return fmt.Errorf("checking if database exists: %w", err)
+	}
+
+	if !exists {
+		createSQL := fmt.Sprintf("CREATE DATABASE %s", pq.QuoteIdentifier(dbName))
+		if _, err := db.Exec(createSQL); err != nil {
+			return fmt.Errorf("creating database %q: %w", dbName, err)
+		}
+	}
+
+	return nil
 }
 
 // EnsureUser connects to the target Postgres instance and creates the specified role

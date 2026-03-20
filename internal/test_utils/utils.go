@@ -104,7 +104,6 @@ func NewDatabase(name string) (ns *corev1.Namespace, pgdb *v1alpha1.PostgresData
 			},
 		},
 		Spec: v1alpha1.PostgresDatabaseSpec{
-			DatabaseName:    "testdb",
 			PostgresVersion: "16",
 			StorageSize:     resource.MustParse("256Mi"),
 		},
@@ -124,7 +123,7 @@ func WaitForDatabase(lookup types.NamespacedName) {
 	}, Timeout, Interval).Should(Succeed())
 }
 
-func CreateNewUser(namespace, database, username, secretname string, permissions []v1alpha1.DatabasePermission) {
+func CreateNewUser(namespace, database, username, secretname string, permissions []v1alpha1.DatabasePermissionEntry) {
 	pgcred := &v1alpha1.PostgresCredential{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      username,
@@ -154,12 +153,42 @@ func ConnectToDatabase(dbLookup types.NamespacedName, secretLookup types.Namespa
 	Expect(password).NotTo(BeEmpty(), "PGPASSWORD in secret should not be empty")
 
 	database := string(secret.Data["PGDATABASE"])
-	Expect(database).NotTo(BeEmpty(), "PGDATABASE in secret should not be empty")
+	if database == "" {
+		database = "postgres"
+	}
 
 	pfwdClose, port := portForward(dbLookup.Namespace, dbLookup.Name+"-0", 5432)
 
 	connStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=%s sslmode=disable",
 		port, username, password, database,
+	)
+
+	db, err := sql.Open("postgres", connStr)
+	Expect(err).NotTo(HaveOccurred(), "opening database connection")
+
+	return db, func() {
+		db.Close()
+		pfwdClose()
+	}
+}
+
+// ConnectToDatabaseNamed opens a connection using credentials from secretLookup
+// but overrides the target database name. Useful for testing access to specific
+// databases when a credential covers multiple.
+func ConnectToDatabaseNamed(dbLookup types.NamespacedName, secretLookup types.NamespacedName, dbName string) (*sql.DB, func()) {
+	var secret corev1.Secret
+	Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed(), "fetching credential secret")
+
+	username := string(secret.Data["PGUSER"])
+	Expect(username).NotTo(BeEmpty(), "PGUSER in secret should not be empty")
+
+	password := string(secret.Data["PGPASSWORD"])
+	Expect(password).NotTo(BeEmpty(), "PGPASSWORD in secret should not be empty")
+
+	pfwdClose, port := portForward(dbLookup.Namespace, dbLookup.Name+"-0", 5432)
+
+	connStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=%s sslmode=disable",
+		port, username, password, dbName,
 	)
 
 	db, err := sql.Open("postgres", connStr)

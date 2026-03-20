@@ -122,7 +122,6 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 
 	adminUser := string(adminSecret.Data["PGUSER"])
 	adminPass := string(adminSecret.Data["PGPASSWORD"])
-	dbName := pgdb.Spec.DatabaseName
 	host := postgresHost(&pgdb)
 
 	var existingSecret corev1.Secret
@@ -138,9 +137,32 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 				"PasswordGenerationFailed", err.Error()), err
 		}
 
-		if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, pgcred.Spec.Permissions); err != nil {
-			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
-				"UserCreationFailed", err.Error()), err
+		for _, entry := range pgcred.Spec.Permissions {
+			for _, dbName := range entry.Databases {
+				if err := r.pgDB.EnsureDatabase(host, adminUser, adminPass, dbName); err != nil {
+					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+						"DatabaseCreationFailed", err.Error()), err
+				}
+				if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions); err != nil {
+					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+						"UserCreationFailed", err.Error()), err
+				}
+			}
+		}
+
+		// Only set PGDATABASE when the credential targets exactly one database.
+		// With multiple databases the key is omitted so that applications must
+		// explicitly name the target database; a missing target will produce a
+		// permissions error rather than silently operating on an operator-chosen
+		// default.
+		secretData := map[string]string{
+			"PGUSER":     pgcred.Spec.Username,
+			"PGPASSWORD": password,
+			"PGHOST":     host,
+			"PGPORT":     fmt.Sprintf("%d", postgresPort),
+		}
+		if db := singleDatabase(pgcred.Spec.Permissions); db != "" {
+			secretData["PGDATABASE"] = db
 		}
 
 		secret := &corev1.Secret{
@@ -149,13 +171,7 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 				Namespace: pgcred.Namespace,
 				Labels:    labelsForCredential(pgcred, r.InstanceName),
 			},
-			StringData: map[string]string{
-				"PGUSER":     pgcred.Spec.Username,
-				"PGPASSWORD": password,
-				"PGHOST":     host,
-				"PGPORT":     fmt.Sprintf("%d", postgresPort),
-				"PGDATABASE": dbName,
-			},
+			StringData: secretData,
 		}
 		if err := r.client.createOwned(ctx, pgcred, secret); err != nil {
 			return ctrl.Result{}, fmt.Errorf("creating credential Secret: %w", err)
@@ -189,12 +205,15 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 		if adminFound, _ := r.client.get(ctx, adminSecretKey, &adminSecret); adminFound {
 			adminUser := string(adminSecret.Data["PGUSER"])
 			adminPass := string(adminSecret.Data["PGPASSWORD"])
-			dbName := pgdb.Spec.DatabaseName
 			host := postgresHost(&pgdb)
 
-			if err := r.pgDB.DropUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
-				logger.Error(err, "failed to drop Postgres user during cleanup", "username", pgcred.Spec.Username)
-				// Continue with finalizer removal — the database may be going away too.
+			for _, entry := range pgcred.Spec.Permissions {
+				for _, dbName := range entry.Databases {
+					if err := r.pgDB.DropUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
+						logger.Error(err, "failed to drop Postgres user during cleanup", "username", pgcred.Spec.Username, "database", dbName)
+						// Continue with finalizer removal — the database may be going away too.
+					}
+				}
 			}
 		}
 	}
@@ -253,6 +272,22 @@ func (r *PostgresCredentialReconciler) setCredentialPhase(
 }
 
 // ---------- Helpers ----------
+
+// singleDatabase returns the database name when the permissions entries
+// collectively reference exactly one database, and "" otherwise.
+func singleDatabase(entries []v1alpha1.DatabasePermissionEntry) string {
+	var found string
+	for _, entry := range entries {
+		for _, db := range entry.Databases {
+			if found == "" {
+				found = db
+			} else if db != found {
+				return ""
+			}
+		}
+	}
+	return found
+}
 
 // postgresHost returns the in-cluster DNS name for the Postgres instance
 // backed by a headless Service. The StatefulSet pod is <name>-0.<name>.<ns>.svc.cluster.local.

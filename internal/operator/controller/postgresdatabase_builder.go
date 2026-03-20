@@ -38,7 +38,6 @@ func (b postgresDatabaseBuilder) desiredAdminSecret(pgdb *v1alpha1.PostgresDatab
 		StringData: map[string]string{
 			"PGUSER":     "postgres",
 			"PGPASSWORD": password,
-			"PGDATABASE": pgdb.Spec.DatabaseName,
 		},
 	}
 	_ = controllerutil.SetControllerReference(pgdb, secret, b.scheme)
@@ -102,10 +101,6 @@ func (b postgresDatabaseBuilder) desiredStatefulSet(pgdb *v1alpha1.PostgresDatab
 							},
 							Env: []corev1.EnvVar{
 								{
-									Name:  "POSTGRES_DB",
-									Value: pgdb.Spec.DatabaseName,
-								},
-								{
 									Name:  "POSTGRES_USER",
 									Value: "postgres",
 								},
@@ -134,7 +129,7 @@ func (b postgresDatabaseBuilder) desiredStatefulSet(pgdb *v1alpha1.PostgresDatab
 										Command: []string{
 											"pg_isready",
 											"-U", "postgres",
-											"-d", pgdb.Spec.DatabaseName,
+											"-d", "postgres",
 										},
 									},
 								},
@@ -147,7 +142,7 @@ func (b postgresDatabaseBuilder) desiredStatefulSet(pgdb *v1alpha1.PostgresDatab
 										Command: []string{
 											"pg_isready",
 											"-U", "postgres",
-											"-d", pgdb.Spec.DatabaseName,
+											"-d", "postgres",
 										},
 									},
 								},

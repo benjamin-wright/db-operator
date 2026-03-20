@@ -4,9 +4,11 @@
 A Kubernetes operator that provisions and manages self-contained PostgreSQL, Redis, and NATS instances via CRDs.
 
 ## Scope
-- `PostgresDatabase` CRD — declares a PostgreSQL instance (version 14–17) with a database name and storage size; the operator provisions a StatefulSet, headless Service, and admin Secret for each instance
-- `PostgresCredential` CRD — declares a PostgreSQL user against a referenced `PostgresDatabase`; the operator generates a random password, creates the user with the specified permissions, and writes credentials to a named Kubernetes Secret in the same namespace
+- `PostgresDatabase` CRD — declares a PostgreSQL instance (version 14–17) with a storage size; the operator provisions a StatefulSet, headless Service, and admin Secret for each instance
+- `PostgresCredential` CRD — declares a PostgreSQL user against a referenced `PostgresDatabase`; the operator generates a random password, creates the user with the specified per-database permissions, and writes credentials to a named Kubernetes Secret in the same namespace
+  - Each permissions entry specifies one or more logical database names and the table-level privileges to grant in those databases; each database is created on demand if it does not already exist
   - Supported permissions: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `ALL`
+  - `PGDATABASE` in the credential Secret reflects the first database from the first permissions entry
 - `RedisDatabase` CRD — declares a Redis 8 instance with a storage size; the operator provisions a StatefulSet, headless Service, and admin Secret for each instance
   - Admin Secret keys: `username` (always `"default"`), `password`
 - `RedisCredential` CRD — declares a Redis ACL user against a referenced `RedisDatabase`; the operator generates a random password, creates the ACL user, and writes credentials to a named Kubernetes Secret in the same namespace

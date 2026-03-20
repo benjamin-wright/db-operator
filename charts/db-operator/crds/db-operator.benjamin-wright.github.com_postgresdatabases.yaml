@@ -19,9 +19,6 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.databaseName
-      name: Database
-      type: string
     - jsonPath: .spec.postgresVersion
       name: Version
       type: string
@@ -61,13 +58,6 @@ spec:
           spec:
             description: PostgresDatabaseSpec defines the desired state of PostgresDatabase.
             properties:
-              databaseName:
-                description: |-
-                  DatabaseName is the name of the PostgreSQL database to create inside the instance.
-                  Must be 1–63 characters, matching PostgreSQL identifier rules.
-                maxLength: 63
-                minLength: 1
-                type: string
               postgresVersion:
                 description: PostgresVersion is the major version of PostgreSQL to
                   deploy (e.g. "16").
@@ -87,7 +77,6 @@ spec:
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
             required:
-            - databaseName
             - postgresVersion
             - storageSize
             type: object

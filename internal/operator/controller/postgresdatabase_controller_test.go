@@ -41,7 +41,6 @@ func newTestResources(name string) (ns *corev1.Namespace, pgdb *v1alpha1.Postgre
 			},
 		},
 		Spec: v1alpha1.PostgresDatabaseSpec{
-			DatabaseName:    "mydb",
 			PostgresVersion: "16",
 			StorageSize:     resource.MustParse("256Mi"),
 		},
@@ -166,14 +165,13 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 
 			container := sts.Spec.Template.Spec.Containers[0]
 
-			// POSTGRES_DB and POSTGRES_USER should be plain values.
+			// POSTGRES_USER should be a plain value.
 			envMap := make(map[string]string)
 			for _, e := range container.Env {
 				if e.Value != "" {
 					envMap[e.Name] = e.Value
 				}
 			}
-			Expect(envMap["POSTGRES_DB"]).To(Equal("mydb"))
 			Expect(envMap["POSTGRES_USER"]).To(Equal("postgres"))
 
 			// POSTGRES_PASSWORD must be sourced from the admin Secret via secretKeyRef.
@@ -197,7 +195,6 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 			Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
 			Expect(secret.Data).To(HaveKey("PGUSER"))
 			Expect(secret.Data).To(HaveKey("PGPASSWORD"))
-			Expect(secret.Data).To(HaveKey("PGDATABASE"))
 			Expect(string(secret.Data["PGUSER"])).To(Equal("postgres"))
 			Expect(string(secret.Data["PGPASSWORD"])).To(HaveLen(24))
 		})
@@ -292,7 +289,6 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 					// Deliberately omit the db-operator.benjamin-wright.github.com/operator-instance label.
 				},
 				Spec: v1alpha1.PostgresDatabaseSpec{
-					DatabaseName:    "mydb",
 					PostgresVersion: "16",
 					StorageSize:     resource.MustParse("256Mi"),
 				},

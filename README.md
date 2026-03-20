@@ -74,7 +74,6 @@ metadata:
   name: my-postgres
   namespace: default
 spec:
-  databaseName: myapp
   postgresVersion: "16"
   storageSize: 2Gi
 ```
@@ -90,10 +89,13 @@ spec:
   username: myapp
   secretName: myapp-postgres-secret
   permissions:
-    - SELECT
-    - INSERT
-    - UPDATE
-    - DELETE
+    - databases:
+        - myapp
+      permissions:
+        - SELECT
+        - INSERT
+        - UPDATE
+        - DELETE
 ```
 
 The operator populates `myapp-postgres-secret` with the following keys:
@@ -108,7 +110,7 @@ data:
   PGPASSWORD: <base64>   # auto-generated 24-character random password
   PGHOST:     <base64>   # in-cluster DNS name, e.g. my-postgres.default.svc.cluster.local
   PGPORT:     <base64>   # always 5432
-  PGDATABASE: <base64>   # databaseName from the PostgresDatabase spec
+  PGDATABASE: <base64>   # only present when the credential targets exactly one database
 ```
 
 Example usage in a Pod:
