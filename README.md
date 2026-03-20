@@ -104,42 +104,19 @@ kind: Secret
 metadata:
   name: myapp-postgres-secret
 data:
-  username: <base64>   # the username specified in the CR
-  password: <base64>   # auto-generated 24-character random password
-  host:     <base64>   # in-cluster DNS name, e.g. my-postgres.default.svc.cluster.local
-  port:     <base64>   # always 5432
-  database: <base64>   # databaseName from the PostgresDatabase spec
+  PGUSER:     <base64>   # the username specified in the CR
+  PGPASSWORD: <base64>   # auto-generated 24-character random password
+  PGHOST:     <base64>   # in-cluster DNS name, e.g. my-postgres.default.svc.cluster.local
+  PGPORT:     <base64>   # always 5432
+  PGDATABASE: <base64>   # databaseName from the PostgresDatabase spec
 ```
 
 Example usage in a Pod:
 
 ```yaml
-env:
-  - name: PGUSER
-    valueFrom:
-      secretKeyRef:
-        name: myapp-postgres-secret
-        key: username
-  - name: PGPASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: myapp-postgres-secret
-        key: password
-  - name: PGHOST
-    valueFrom:
-      secretKeyRef:
-        name: myapp-postgres-secret
-        key: host
-  - name: PGPORT
-    valueFrom:
-      secretKeyRef:
-        name: myapp-postgres-secret
-        key: port
-  - name: PGDATABASE
-    valueFrom:
-      secretKeyRef:
-        name: myapp-postgres-secret
-        key: database
+envFrom:
+  - secretRef:
+      name: myapp-postgres-secret
 ```
 
 Available permissions: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `ALL`.
@@ -184,36 +161,18 @@ kind: Secret
 metadata:
   name: myapp-redis-secret
 data:
-  username: <base64>   # the username specified in the CR
-  password: <base64>   # auto-generated 24-character random password
-  host:     <base64>   # in-cluster DNS name, e.g. my-redis.default.svc.cluster.local
-  port:     <base64>   # always 6379
+  REDIS_USERNAME: <base64>   # the username specified in the CR
+  REDIS_PASSWORD: <base64>   # auto-generated 24-character random password
+  REDIS_HOST:     <base64>   # in-cluster DNS name, e.g. my-redis.default.svc.cluster.local
+  REDIS_PORT:     <base64>   # always 6379
 ```
 
 Example usage in a Pod:
 
 ```yaml
-env:
-  - name: REDIS_USERNAME
-    valueFrom:
-      secretKeyRef:
-        name: myapp-redis-secret
-        key: username
-  - name: REDIS_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: myapp-redis-secret
-        key: password
-  - name: REDIS_HOST
-    valueFrom:
-      secretKeyRef:
-        name: myapp-redis-secret
-        key: host
-  - name: REDIS_PORT
-    valueFrom:
-      secretKeyRef:
-        name: myapp-redis-secret
-        key: port
+envFrom:
+  - secretRef:
+      name: myapp-redis-secret
 ```
 
 Available ACL categories: `read`, `write`, `set`, `sortedset`, `list`, `hash`, `string`, `bitmap`, `hyperloglog`, `geo`, `stream`, `pubsub`, `admin`, `fast`, `slow`, `blocking`, `dangerous`, `connection`, `transaction`, `scripting`, `keyspace`, `all`.
@@ -266,11 +225,11 @@ kind: Secret
 metadata:
   name: publisher-nats-secret
 data:
-  username: <base64>   # the username specified in the user entry
-  password: <base64>   # auto-generated 24-character random password
-  account:  <base64>   # name of the parent NatsAccount CR
-  host:     <base64>   # in-cluster DNS name, e.g. my-nats.default.svc.cluster.local
-  port:     <base64>   # always 4222
+  NATS_USERNAME: <base64>   # the username specified in the user entry
+  NATS_PASSWORD: <base64>   # auto-generated 24-character random password
+  NATS_ACCOUNT:  <base64>   # name of the parent NatsAccount CR
+  NATS_HOST:     <base64>   # in-cluster DNS name, e.g. my-nats.default.svc.cluster.local
+  NATS_PORT:     <base64>   # always 4222
 ```
 
 Example usage in a Pod:
@@ -279,26 +238,9 @@ Example usage in a Pod:
 env:
   - name: NATS_URL
     value: nats://$(NATS_USERNAME):$(NATS_PASSWORD)@$(NATS_HOST):$(NATS_PORT)
-  - name: NATS_USERNAME
-    valueFrom:
-      secretKeyRef:
-        name: publisher-nats-secret
-        key: username
-  - name: NATS_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: publisher-nats-secret
-        key: password
-  - name: NATS_HOST
-    valueFrom:
-      secretKeyRef:
-        name: publisher-nats-secret
-        key: host
-  - name: NATS_PORT
-    valueFrom:
-      secretKeyRef:
-        name: publisher-nats-secret
-        key: port
+envFrom:
+  - secretRef:
+      name: publisher-nats-secret
 ```
 
 ## Components

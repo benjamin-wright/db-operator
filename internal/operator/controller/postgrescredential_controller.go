@@ -120,8 +120,8 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 			"AdminSecretNotFound", fmt.Sprintf("admin Secret %q not yet visible in cache", pgdb.Status.SecretName)), nil
 	}
 
-	adminUser := string(adminSecret.Data["username"])
-	adminPass := string(adminSecret.Data["password"])
+	adminUser := string(adminSecret.Data["PGUSER"])
+	adminPass := string(adminSecret.Data["PGPASSWORD"])
 	dbName := pgdb.Spec.DatabaseName
 	host := postgresHost(&pgdb)
 
@@ -150,11 +150,11 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 				Labels:    labelsForCredential(pgcred, r.InstanceName),
 			},
 			StringData: map[string]string{
-				"username": pgcred.Spec.Username,
-				"password": password,
-				"host":     host,
-				"port":     fmt.Sprintf("%d", postgresPort),
-				"database": dbName,
+				"PGUSER":     pgcred.Spec.Username,
+				"PGPASSWORD": password,
+				"PGHOST":     host,
+				"PGPORT":     fmt.Sprintf("%d", postgresPort),
+				"PGDATABASE": dbName,
 			},
 		}
 		if err := r.client.createOwned(ctx, pgcred, secret); err != nil {
@@ -187,8 +187,8 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 		var adminSecret corev1.Secret
 		adminSecretKey := types.NamespacedName{Name: pgdb.Status.SecretName, Namespace: pgdb.Namespace}
 		if adminFound, _ := r.client.get(ctx, adminSecretKey, &adminSecret); adminFound {
-			adminUser := string(adminSecret.Data["username"])
-			adminPass := string(adminSecret.Data["password"])
+			adminUser := string(adminSecret.Data["PGUSER"])
+			adminPass := string(adminSecret.Data["PGPASSWORD"])
 			dbName := pgdb.Spec.DatabaseName
 			host := postgresHost(&pgdb)
 

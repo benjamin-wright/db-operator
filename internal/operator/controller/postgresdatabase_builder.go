@@ -36,8 +36,9 @@ func (b postgresDatabaseBuilder) desiredAdminSecret(pgdb *v1alpha1.PostgresDatab
 			Labels:    labelsForDatabase(pgdb, b.instanceName),
 		},
 		StringData: map[string]string{
-			"username": "postgres",
-			"password": password,
+			"PGUSER":     "postgres",
+			"PGPASSWORD": password,
+			"PGDATABASE": pgdb.Spec.DatabaseName,
 		},
 	}
 	_ = controllerutil.SetControllerReference(pgdb, secret, b.scheme)
@@ -115,7 +116,7 @@ func (b postgresDatabaseBuilder) desiredStatefulSet(pgdb *v1alpha1.PostgresDatab
 											LocalObjectReference: corev1.LocalObjectReference{
 												Name: adminSecretName(pgdb),
 											},
-											Key: "password",
+											Key: "PGPASSWORD",
 										},
 									},
 								},

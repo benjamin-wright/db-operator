@@ -25,7 +25,9 @@ spec:
           args:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
-            - --instance-name=default
+            {{- if .Values.instanceName }}
+            - --instance-name={{ .Values.instanceName }}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

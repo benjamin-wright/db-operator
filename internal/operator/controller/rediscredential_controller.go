@@ -118,7 +118,7 @@ func (r *RedisCredentialReconciler) reconcileRedisCredential(ctx context.Context
 			"AdminSecretNotFound", fmt.Sprintf("admin Secret %q not yet visible in cache", rdb.Status.SecretName)), nil
 	}
 
-	adminPass := string(adminSecret.Data["password"])
+	adminPass := string(adminSecret.Data["REDIS_PASSWORD"])
 	host := redisHost(&rdb)
 
 	var existingSecret corev1.Secret
@@ -147,10 +147,10 @@ func (r *RedisCredentialReconciler) reconcileRedisCredential(ctx context.Context
 				Labels:    labelsForRedisCredential(rcred, r.InstanceName),
 			},
 			StringData: map[string]string{
-				"username": rcred.Spec.Username,
-				"password": password,
-				"host":     host,
-				"port":     fmt.Sprintf("%d", redisPort),
+				"REDIS_USERNAME": rcred.Spec.Username,
+				"REDIS_PASSWORD": password,
+				"REDIS_HOST":     host,
+				"REDIS_PORT":     fmt.Sprintf("%d", redisPort),
 			},
 		}
 		if err := r.client.createOwned(ctx, rcred, secret); err != nil {
@@ -182,7 +182,7 @@ func (r *RedisCredentialReconciler) reconcileDelete(ctx context.Context, rcred *
 		var adminSecret corev1.Secret
 		adminSecretKey := types.NamespacedName{Name: rdb.Status.SecretName, Namespace: rdb.Namespace}
 		if adminFound, _ := r.client.get(ctx, adminSecretKey, &adminSecret); adminFound {
-			adminPass := string(adminSecret.Data["password"])
+			adminPass := string(adminSecret.Data["REDIS_PASSWORD"])
 			host := redisHost(&rdb)
 			if err := r.redisMgr.DropACLUser(ctx, host, adminPass, rcred.Spec.Username); err != nil {
 				logger.Error(err, "failed to drop Redis ACL user during cleanup", "username", rcred.Spec.Username)

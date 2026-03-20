@@ -12,7 +12,7 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
 - `RedisCredential` CRD — declares a Redis ACL user against a referenced `RedisDatabase`; the operator generates a random password, creates the ACL user, and writes credentials to a named Kubernetes Secret in the same namespace
   - Configurable: key patterns (`keyPatterns`), ACL categories (`aclCategories`), individual commands (`commands`)
   - Supported ACL categories: `read`, `write`, `set`, `sortedset`, `list`, `hash`, `string`, `bitmap`, `hyperloglog`, `geo`, `stream`, `pubsub`, `admin`, `fast`, `slow`, `blocking`, `dangerous`, `connection`, `transaction`, `scripting`, `keyspace`, `all`
-  - Credential Secret keys: `username`, `password`, `host`, `port`
+  - Credential Secret keys: `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`
 - `NatsCluster` CRD — declares a single NATS server instance with an optional JetStream persistence configuration; the operator provisions a Deployment, Service, ConfigMap, and optional PersistentVolume for each instance
   - When `jetStream` is set, JetStream is enabled and a PersistentVolume of the specified `storageSize` is provisioned
   - When `jetStream` is omitted, JetStream is disabled and no PersistentVolume is created

@@ -147,19 +147,19 @@ func ConnectToDatabase(dbLookup types.NamespacedName, secretLookup types.Namespa
 	var secret corev1.Secret
 	Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed(), "fetching credential secret")
 
-	username, ok := secret.Data["username"]
-	Expect(ok).To(BeTrue(), "secret missing 'username' key")
-	Expect(username).NotTo(BeEmpty(), "username in secret should not be empty")
+	username := string(secret.Data["PGUSER"])
+	Expect(username).NotTo(BeEmpty(), "PGUSER in secret should not be empty")
 
-	passwordBytes, ok := secret.Data["password"]
-	Expect(ok).To(BeTrue(), "secret missing 'password' key")
+	password := string(secret.Data["PGPASSWORD"])
+	Expect(password).NotTo(BeEmpty(), "PGPASSWORD in secret should not be empty")
 
-	password := string(passwordBytes)
+	database := string(secret.Data["PGDATABASE"])
+	Expect(database).NotTo(BeEmpty(), "PGDATABASE in secret should not be empty")
 
 	pfwdClose, port := portForward(dbLookup.Namespace, dbLookup.Name+"-0", 5432)
 
-	connStr := fmt.Sprintf("host=localhost port=%d user=postgres password=%s dbname=%s sslmode=disable",
-		port, password, "testdb",
+	connStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=%s sslmode=disable",
+		port, username, password, database,
 	)
 
 	db, err := sql.Open("postgres", connStr)
@@ -297,16 +297,33 @@ func ConnectToNats(clusterLookup types.NamespacedName, secretLookup types.Namesp
 	var secret corev1.Secret
 	Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed(), "fetching NATS credential secret")
 
-	username := string(secret.Data["username"])
-	password := string(secret.Data["password"])
+	username := string(secret.Data["NATS_USERNAME"])
+	password := string(secret.Data["NATS_PASSWORD"])
 
 	podList, err := Clientset.CoreV1().Pods(clusterLookup.Namespace).List(Ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app.kubernetes.io/name=nats,app.kubernetes.io/instance=%s", clusterLookup.Name),
 	})
 	Expect(err).NotTo(HaveOccurred(), "listing NATS pods for cluster %s", clusterLookup.Name)
-	Expect(podList.Items).NotTo(BeEmpty(), "no NATS pods found for cluster %s", clusterLookup.Name)
 
-	pfwdClose, port := portForward(clusterLookup.Namespace, podList.Items[0].Name, int(nats.DefaultPort))
+	var readyPod *corev1.Pod
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				readyPod = pod
+				break
+			}
+		}
+		if readyPod != nil {
+			break
+		}
+	}
+	Expect(readyPod).NotTo(BeNil(), "no ready NATS pods found for cluster %s", clusterLookup.Name)
+
+	pfwdClose, port := portForward(clusterLookup.Namespace, readyPod.Name, int(nats.DefaultPort))
 
 	allOpts := append([]nats.Option{
 		nats.UserInfo(username, password),
@@ -328,8 +345,8 @@ func ConnectToRedisDatabase(dbLookup types.NamespacedName, secretLookup types.Na
 	var secret corev1.Secret
 	Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed(), "fetching admin secret")
 
-	username := string(secret.Data["username"])
-	password := string(secret.Data["password"])
+	username := string(secret.Data["REDIS_USERNAME"])
+	password := string(secret.Data["REDIS_PASSWORD"])
 
 	pfwdClose, port := portForward(dbLookup.Namespace, dbLookup.Name+"-0", 6379)
 

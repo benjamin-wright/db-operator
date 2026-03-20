@@ -27,11 +27,11 @@ func (b natsAccountBuilder) desiredUserSecret(acct *v1alpha1.NatsAccount, cluste
 			Labels:    labelsForNatsAccount(acct, b.instanceName),
 		},
 		StringData: map[string]string{
-			"username": user.Username,
-			"password": password,
-			"account":  acct.Name,
-			"host":     host,
-			"port":     fmt.Sprintf("%d", natsconfig.ClientPort),
+			"NATS_USERNAME": user.Username,
+			"NATS_PASSWORD": password,
+			"NATS_ACCOUNT":  acct.Name,
+			"NATS_HOST":     host,
+			"NATS_PORT":     fmt.Sprintf("%d", natsconfig.ClientPort),
 		},
 	}
 	_ = controllerutil.SetControllerReference(acct, secret, b.scheme)

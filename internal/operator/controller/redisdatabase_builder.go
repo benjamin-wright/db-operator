@@ -34,8 +34,8 @@ func (b redisDatabaseBuilder) desiredAdminSecret(rdb *v1alpha1.RedisDatabase) (*
 			Labels:    labelsForRedisDatabase(rdb, b.instanceName),
 		},
 		StringData: map[string]string{
-			"username": "default",
-			"password": password,
+			"REDIS_USERNAME": "default",
+			"REDIS_PASSWORD": password,
 		},
 	}
 	_ = controllerutil.SetControllerReference(rdb, secret, b.scheme)
@@ -106,7 +106,7 @@ func (b redisDatabaseBuilder) desiredStatefulSet(rdb *v1alpha1.RedisDatabase) *a
 											LocalObjectReference: corev1.LocalObjectReference{
 												Name: redisAdminSecretName(rdb),
 											},
-											Key: "password",
+											Key: "REDIS_PASSWORD",
 										},
 									},
 								},

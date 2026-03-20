@@ -81,13 +81,13 @@ var _ = Describe("RedisCredentialReconciler", func() {
 		It("should create the credential Secret with expected keys", func() {
 			var secret corev1.Secret
 			Expect(K8sClient.Get(Ctx, credSecretLookup, &secret)).To(Succeed())
-			Expect(secret.Data).To(HaveKey("username"))
-			Expect(secret.Data).To(HaveKey("password"))
-			Expect(secret.Data).To(HaveKey("host"))
-			Expect(secret.Data).To(HaveKey("port"))
-			Expect(string(secret.Data["username"])).To(Equal("appuser"))
-			Expect(string(secret.Data["password"])).To(HaveLen(24))
-			Expect(string(secret.Data["port"])).To(Equal("6379"))
+			Expect(secret.Data).To(HaveKey("REDIS_USERNAME"))
+			Expect(secret.Data).To(HaveKey("REDIS_PASSWORD"))
+			Expect(secret.Data).To(HaveKey("REDIS_HOST"))
+			Expect(secret.Data).To(HaveKey("REDIS_PORT"))
+			Expect(string(secret.Data["REDIS_USERNAME"])).To(Equal("appuser"))
+			Expect(string(secret.Data["REDIS_PASSWORD"])).To(HaveLen(24))
+			Expect(string(secret.Data["REDIS_PORT"])).To(Equal("6379"))
 		})
 
 		It("should set a controller owner reference on the credential Secret", func() {

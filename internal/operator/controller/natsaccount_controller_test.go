@@ -119,21 +119,21 @@ var _ = Describe("NatsAccountReconciler", func() {
 		It("should create a user credential Secret with all expected keys", func() {
 			var secret corev1.Secret
 			Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
-			Expect(secret.Data).To(HaveKey("username"))
-			Expect(secret.Data).To(HaveKey("password"))
-			Expect(secret.Data).To(HaveKey("account"))
-			Expect(secret.Data).To(HaveKey("host"))
-			Expect(secret.Data).To(HaveKey("port"))
+			Expect(secret.Data).To(HaveKey("NATS_USERNAME"))
+			Expect(secret.Data).To(HaveKey("NATS_PASSWORD"))
+			Expect(secret.Data).To(HaveKey("NATS_ACCOUNT"))
+			Expect(secret.Data).To(HaveKey("NATS_HOST"))
+			Expect(secret.Data).To(HaveKey("NATS_PORT"))
 		})
 
 		It("should write correct values into the user credential Secret", func() {
 			var secret corev1.Secret
 			Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
-			Expect(string(secret.Data["username"])).To(Equal("alice"))
-			Expect(string(secret.Data["password"])).To(HaveLen(24))
-			Expect(string(secret.Data["account"])).To(Equal(acct.Name))
-			Expect(string(secret.Data["host"])).To(ContainSubstring(nats.Name))
-			Expect(string(secret.Data["port"])).To(Equal("4222"))
+			Expect(string(secret.Data["NATS_USERNAME"])).To(Equal("alice"))
+			Expect(string(secret.Data["NATS_PASSWORD"])).To(HaveLen(24))
+			Expect(string(secret.Data["NATS_ACCOUNT"])).To(Equal(acct.Name))
+			Expect(string(secret.Data["NATS_HOST"])).To(ContainSubstring(nats.Name))
+			Expect(string(secret.Data["NATS_PORT"])).To(Equal("4222"))
 		})
 
 		It("should set a controller owner reference on the user credential Secret", func() {
@@ -195,11 +195,11 @@ var _ = Describe("NatsAccountReconciler", func() {
 		It("should create a credential Secret for each user", func() {
 			var aliceSecret corev1.Secret
 			Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: "multi-user-alice", Namespace: ns.Name}, &aliceSecret)).To(Succeed())
-			Expect(string(aliceSecret.Data["username"])).To(Equal("alice"))
+			Expect(string(aliceSecret.Data["NATS_USERNAME"])).To(Equal("alice"))
 
 			var bobSecret corev1.Secret
 			Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: "multi-user-bob", Namespace: ns.Name}, &bobSecret)).To(Succeed())
-			Expect(string(bobSecret.Data["username"])).To(Equal("bob"))
+			Expect(string(bobSecret.Data["NATS_USERNAME"])).To(Equal("bob"))
 		})
 	})
 

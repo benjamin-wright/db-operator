@@ -211,7 +211,7 @@ func (r *NatsClusterReconciler) readUserPasswords(ctx context.Context, acct *v1a
 			return nil, fmt.Errorf("reading user Secret %q: %w", user.SecretName, err)
 		}
 		if found {
-			passwords[user.Username] = string(secret.Data["password"])
+			passwords[user.Username] = string(secret.Data["NATS_PASSWORD"])
 		}
 	}
 	return passwords, nil

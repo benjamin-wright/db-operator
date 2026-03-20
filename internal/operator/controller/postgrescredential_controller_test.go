@@ -27,11 +27,10 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			dbLookup         types.NamespacedName
 			credLookup       types.NamespacedName
 			credSecretLookup types.NamespacedName
-			adminSecretKey   types.NamespacedName
 		)
 
 		BeforeAll(func() {
-			ns, pgdb, dbLookup, adminSecretKey = NewDatabase("cred-lifecycle-db")
+			ns, pgdb, dbLookup, _ = NewDatabase("cred-lifecycle-db")
 			WaitForDatabase(dbLookup)
 
 			pgcred = &v1alpha1.PostgresCredential{
@@ -56,7 +55,6 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 
 			credLookup = types.NamespacedName{Name: pgcred.Name, Namespace: ns.Name}
 			credSecretLookup = types.NamespacedName{Name: pgcred.Spec.SecretName, Namespace: ns.Name}
-			_ = adminSecretKey
 		})
 
 		AfterAll(func() {
@@ -80,15 +78,15 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 		It("should create the credential Secret with expected keys", func() {
 			var secret corev1.Secret
 			Expect(K8sClient.Get(Ctx, credSecretLookup, &secret)).To(Succeed())
-			Expect(secret.Data).To(HaveKey("username"))
-			Expect(secret.Data).To(HaveKey("password"))
-			Expect(secret.Data).To(HaveKey("host"))
-			Expect(secret.Data).To(HaveKey("port"))
-			Expect(secret.Data).To(HaveKey("database"))
-			Expect(string(secret.Data["username"])).To(Equal("appuser"))
-			Expect(string(secret.Data["password"])).To(HaveLen(24))
-			Expect(string(secret.Data["port"])).To(Equal("5432"))
-			Expect(string(secret.Data["database"])).To(Equal("testdb"))
+			Expect(secret.Data).To(HaveKey("PGUSER"))
+			Expect(secret.Data).To(HaveKey("PGPASSWORD"))
+			Expect(secret.Data).To(HaveKey("PGHOST"))
+			Expect(secret.Data).To(HaveKey("PGPORT"))
+			Expect(secret.Data).To(HaveKey("PGDATABASE"))
+			Expect(string(secret.Data["PGUSER"])).To(Equal("appuser"))
+			Expect(string(secret.Data["PGPASSWORD"])).To(HaveLen(24))
+			Expect(string(secret.Data["PGPORT"])).To(Equal("5432"))
+			Expect(string(secret.Data["PGDATABASE"])).To(Equal("testdb"))
 		})
 
 		It("should set a controller owner reference on the credential Secret", func() {

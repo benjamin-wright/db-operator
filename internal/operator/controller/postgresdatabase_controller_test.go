@@ -189,16 +189,17 @@ var _ = Describe("PostgresDatabaseReconciler", func() {
 			Expect(passwordEnv.ValueFrom).NotTo(BeNil())
 			Expect(passwordEnv.ValueFrom.SecretKeyRef).NotTo(BeNil())
 			Expect(passwordEnv.ValueFrom.SecretKeyRef.Name).To(Equal(pgdb.Name + "-admin"))
-			Expect(passwordEnv.ValueFrom.SecretKeyRef.Key).To(Equal("password"))
+			Expect(passwordEnv.ValueFrom.SecretKeyRef.Key).To(Equal("PGPASSWORD"))
 		})
 
 		It("should create an admin Secret with username and password keys", func() {
 			var secret corev1.Secret
 			Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
-			Expect(secret.Data).To(HaveKey("username"))
-			Expect(secret.Data).To(HaveKey("password"))
-			Expect(string(secret.Data["username"])).To(Equal("postgres"))
-			Expect(string(secret.Data["password"])).To(HaveLen(24))
+			Expect(secret.Data).To(HaveKey("PGUSER"))
+			Expect(secret.Data).To(HaveKey("PGPASSWORD"))
+			Expect(secret.Data).To(HaveKey("PGDATABASE"))
+			Expect(string(secret.Data["PGUSER"])).To(Equal("postgres"))
+			Expect(string(secret.Data["PGPASSWORD"])).To(HaveLen(24))
 		})
 
 		It("should set a controller owner reference on the admin Secret", func() {

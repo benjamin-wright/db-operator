@@ -3,6 +3,8 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+instanceName: ""
+
 resources:
   requests:
     cpu: 50m

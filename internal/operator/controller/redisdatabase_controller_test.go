@@ -157,7 +157,7 @@ var _ = Describe("RedisDatabaseReconciler", func() {
 			Expect(passwordEnv.ValueFrom).NotTo(BeNil())
 			Expect(passwordEnv.ValueFrom.SecretKeyRef).NotTo(BeNil())
 			Expect(passwordEnv.ValueFrom.SecretKeyRef.Name).To(Equal(rdb.Name + "-admin"))
-			Expect(passwordEnv.ValueFrom.SecretKeyRef.Key).To(Equal("password"))
+			Expect(passwordEnv.ValueFrom.SecretKeyRef.Key).To(Equal("REDIS_PASSWORD"))
 		})
 
 		It("should set owner references on the StatefulSet and Service", func() {
@@ -181,10 +181,10 @@ var _ = Describe("RedisDatabaseReconciler", func() {
 		It("should create an admin Secret with username and password keys", func() {
 			var secret corev1.Secret
 			Expect(K8sClient.Get(Ctx, secretLookup, &secret)).To(Succeed())
-			Expect(secret.Data).To(HaveKey("username"))
-			Expect(secret.Data).To(HaveKey("password"))
-			Expect(string(secret.Data["username"])).To(Equal("default"))
-			Expect(string(secret.Data["password"])).To(HaveLen(24))
+			Expect(secret.Data).To(HaveKey("REDIS_USERNAME"))
+			Expect(secret.Data).To(HaveKey("REDIS_PASSWORD"))
+			Expect(string(secret.Data["REDIS_USERNAME"])).To(Equal("default"))
+			Expect(string(secret.Data["REDIS_PASSWORD"])).To(HaveLen(24))
 		})
 
 		It("should set a controller owner reference on the admin Secret", func() {

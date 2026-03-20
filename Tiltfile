@@ -36,7 +36,7 @@ k8s_yaml(
             "image.repository={}".format(IMAGE_NAME),
             "image.tag=latest",
             "image.pullPolicy=Always",
-            "args.instanceName=test",
+            "instanceName=test",
         ],
     )
 )
