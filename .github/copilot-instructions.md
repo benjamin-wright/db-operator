@@ -11,7 +11,8 @@
 
 - Compilable components live under `cmd/`; each has its own `spec.md`.
 - Shared internal packages live under `internal/`. Check sibling code for existing patterns before adding new ones.
-- CRD Go types are in `internal/operator/api/v1alpha1/`; Helm chart and generated CRD manifests are in `charts/db-operator/`.
+- Externally importable packages live under `pkg/`. Client applications can import these without restriction.
+- CRD Go types are in `pkg/api/v1alpha1/`; Helm chart and generated CRD manifests are in `charts/db-operator/`.
 - Shared test helpers are in `internal/test_utils/`.
 
 ## AI Agent Instructions

@@ -35,8 +35,8 @@ CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 
 .PHONY: generate
 generate: ## Generate DeepCopy methods and CRD manifests via controller-gen.
-	$(CONTROLLER_GEN) object:headerFile="" paths="./internal/operator/api/..."
-	$(CONTROLLER_GEN) crd paths="./internal/operator/api/..." output:crd:artifacts:config=charts/db-operator/crds
+	$(CONTROLLER_GEN) object:headerFile="" paths="./pkg/api/..."
+	$(CONTROLLER_GEN) crd paths="./pkg/api/..." output:crd:artifacts:config=charts/db-operator/crds
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

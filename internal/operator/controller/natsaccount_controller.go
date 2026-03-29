@@ -12,7 +12,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
+	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 )
 
 // NatsAccountReconciler reconciles a NatsAccount object.

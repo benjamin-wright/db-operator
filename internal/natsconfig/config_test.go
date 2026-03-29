@@ -6,7 +6,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/benjamin-wright/db-operator/internal/natsconfig"
-	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
+	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 )
 
 // account is a convenience constructor for a minimal NatsAccount.

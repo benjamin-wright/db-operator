@@ -9,7 +9,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/benjamin-wright/db-operator/internal/natsconfig"
-	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
+	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 )
 
 // natsAccountBuilder constructs the desired Kubernetes resources for a NatsAccount instance.

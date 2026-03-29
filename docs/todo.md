@@ -6,13 +6,13 @@ Currently each `PostgresDatabase` CR represents both a PostgreSQL **cluster** (S
 
 ## 1. CRD Type Changes
 
-### `internal/operator/api/v1alpha1/postgresdatabase_types.go`
+### `pkg/api/v1alpha1/postgresdatabase_types.go`
 
 - **Remove** the `DatabaseName` field from `PostgresDatabaseSpec`.
 - **Remove** the `+kubebuilder:printcolumn` for `Database` (`.spec.databaseName`).
 - The spec keeps only `PostgresVersion` and `StorageSize`.
 
-### `internal/operator/api/v1alpha1/postgrescredential_types.go`
+### `pkg/api/v1alpha1/postgrescredential_types.go`
 
 - **Replace** the flat `Permissions []DatabasePermission` field with a structured list:
   ```go
@@ -123,8 +123,8 @@ No automatic data migration is needed — existing StatefulSets and databases on
 
 | File | Change |
 |------|--------|
-| `internal/operator/api/v1alpha1/postgresdatabase_types.go` | Remove `DatabaseName` field and printer column |
-| `internal/operator/api/v1alpha1/postgrescredential_types.go` | Add `DatabasePermissionEntry` type; restructure `Permissions` |
+| `pkg/api/v1alpha1/postgresdatabase_types.go` | Remove `DatabaseName` field and printer column |
+| `pkg/api/v1alpha1/postgrescredential_types.go` | Add `DatabasePermissionEntry` type; restructure `Permissions` |
 | `internal/operator/controller/postgresdatabase_builder.go` | Remove `PGDATABASE` from admin secret; remove `POSTGRES_DB` env; update probes |
 | `internal/operator/controller/postgrescredential_controller.go` | Loop over permission entries; call `EnsureDatabase` + `EnsureUser` per DB; update secret construction |
 | `internal/operator/controller/postgrescredential_client.go` | Add `EnsureDatabase` to `PostgresManager` interface and implementation |

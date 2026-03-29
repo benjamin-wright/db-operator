@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
+	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 )
 
 // newTestResources creates a unique namespace and a PostgresDatabase CR inside

@@ -79,6 +79,20 @@ spec:
   storageSize: 2Gi
 ```
 
+When a `PostgresDatabase` is created the operator automatically provisions an admin Secret in the same namespace. Given the example above:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-postgres-admin   # always {name}-admin, same namespace as the CR
+data:
+  PGUSER:     <base64>   # always "postgres"
+  PGPASSWORD: <base64>   # auto-generated 24-character random password
+```
+
+The secret name is also stored on `PostgresDatabase.status.secretName`. The password is generated once and never rotated automatically — delete the Secret to force regeneration.
+
 ```yaml
 apiVersion: db-operator.benjamin-wright.github.com/v1alpha1
 kind: PostgresCredential
@@ -135,6 +149,20 @@ metadata:
 spec:
   storageSize: 1Gi
 ```
+
+When a `RedisDatabase` is created the operator automatically provisions an admin Secret in the same namespace. Given the example above:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-redis-admin   # always {name}-admin, same namespace as the CR
+data:
+  REDIS_USERNAME: <base64>   # always "default"
+  REDIS_PASSWORD: <base64>   # auto-generated 24-character random password
+```
+
+The secret name is also stored on `RedisDatabase.status.secretName`. The password is generated once and never rotated automatically — delete the Secret to force regeneration.
 
 ```yaml
 apiVersion: db-operator.benjamin-wright.github.com/v1alpha1

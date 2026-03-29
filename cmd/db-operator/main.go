@@ -17,8 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
 	"github.com/benjamin-wright/db-operator/internal/operator/controller"
+	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"

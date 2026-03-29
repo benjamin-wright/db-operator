@@ -12,7 +12,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	v1alpha1 "github.com/benjamin-wright/db-operator/internal/operator/api/v1alpha1"
+	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 )
 
 // redisCredentialClient encapsulates all Kubernetes API interactions for the

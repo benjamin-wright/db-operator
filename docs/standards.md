@@ -35,6 +35,11 @@ Every line in a spec must pass these checks:
 - **Local development:** Tilt (`Tiltfile` in the repo root).
 - **Testing:** Ginkgo v2 (test runner) and Gomega (assertions).
 
+### Package Layout
+- `cmd/XXX/` — compilable component entry points.
+- `internal/` — shared packages that are only imported within this module.
+- `pkg/` — externally importable packages; external Go modules may import these. CRD API types live here (`pkg/api/v1alpha1/`) so that client applications can interact with the Kubernetes API using the same typed struct definitions.
+
 ### Reuse Over Reinvention
 Before writing anything new — utility, pattern, convention, or routine — check whether an equivalent already exists in the project, a sibling module, or an existing dependency. If it does, use it. If it does not, create it in the appropriate shared location (`tools/`) so others can reuse it.
 
