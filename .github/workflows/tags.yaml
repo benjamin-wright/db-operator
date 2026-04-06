@@ -5,46 +5,109 @@ on:
     tags:
       - '*'
 jobs:
-  go-images:
+  # Build each platform natively to avoid slow QEMU emulation, then merge into
+  # a single multi-platform manifest.
+  build-image:
     strategy:
       matrix:
         include:
-        - app: db-migrations
-          dockerfile: migrations.Dockerfile
-        - app: db-operator
-          dockerfile: operator.Dockerfile
-    runs-on: ubuntu-latest
+          - app: db-migrations
+            dockerfile: migrations.Dockerfile
+            runner: ubuntu-latest
+            platform: linux/amd64
+            platform_pair: linux-amd64
+          - app: db-migrations
+            dockerfile: migrations.Dockerfile
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            platform_pair: linux-arm64
+          - app: db-operator
+            dockerfile: operator.Dockerfile
+            runner: ubuntu-latest
+            platform: linux/amd64
+            platform_pair: linux-amd64
+          - app: db-operator
+            dockerfile: operator.Dockerfile
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            platform_pair: linux-arm64
+    runs-on: ${{ matrix.runner }}
     environment: production
     steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+      - uses: actions/checkout@v4
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USER_NAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-      - uses: actions/checkout@v3
-      - name: Build & Push
-        run: docker buildx build --push --platform linux/amd64,linux/arm64 --progress plain -t docker.io/benwright/${{ matrix.app }}:${{ github.ref_name }} -f ${{ matrix.dockerfile }} .
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=docker.io/benwright/${{ matrix.app }},push-by-digest=true,name-canonical=true,push=true
+          # Persist the BuildKit layer + Go module/build cache in the registry
+          # so subsequent runs skip unchanged layers and reuse compiled artifacts.
+          cache-from: type=registry,ref=docker.io/benwright/${{ matrix.app }}:buildcache-${{ matrix.platform_pair }}
+          cache-to: type=registry,ref=docker.io/benwright/${{ matrix.app }}:buildcache-${{ matrix.platform_pair }},mode=max
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.app }}-${{ matrix.platform_pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-image:
+    strategy:
+      matrix:
+        app: [db-migrations, db-operator]
+    runs-on: ubuntu-latest
+    environment: production
+    needs: build-image
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.app }}-*
+          merge-multiple: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USER_NAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t docker.io/benwright/${{ matrix.app }}:${{ github.ref_name }} \
+            $(printf 'docker.io/benwright/${{ matrix.app }}@sha256:%s ' *)
+
   helm-chart:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+      - uses: actions/checkout@v4
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USER_NAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
       - name: Install Helm
-        uses: azure/setup-helm@v3
-      - uses: actions/checkout@v3
-      - name: build
-        run: helm package charts/db-operator --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
-      - name: push to dockerhub
-        run: helm push db-operator-chart-${{ github.ref_name }}.tgz oci://registry-1.docker.io/benwright
+        uses: azure/setup-helm@v4
+      - name: Package and push chart
+        run: |
+          helm package charts/db-operator --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
+          helm push db-operator-chart-${{ github.ref_name }}.tgz oci://registry-1.docker.io/benwright
