@@ -127,19 +127,25 @@ func (r *RedisCredentialReconciler) reconcileRedisCredential(ctx context.Context
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
 	}
-	if !secretFound {
-		password, err := generatePassword(24)
+
+	var password string
+	if secretFound {
+		password = string(existingSecret.Data["REDIS_PASSWORD"])
+	} else {
+		password, err = generatePassword(24)
 		if err != nil {
 			return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseFailed,
 				"PasswordGenerationFailed", err.Error()), err
 		}
+	}
 
-		if err := r.redisMgr.EnsureACLUser(ctx, host, adminPass, rcred.Spec.Username, password,
-			rcred.Spec.KeyPatterns, rcred.Spec.ACLCategories, rcred.Spec.Commands); err != nil {
-			return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseFailed,
-				"UserCreationFailed", err.Error()), err
-		}
+	if err := r.redisMgr.EnsureACLUser(ctx, host, adminPass, rcred.Spec.Username, password,
+		rcred.Spec.KeyPatterns, rcred.Spec.ACLCategories, rcred.Spec.Commands); err != nil {
+		return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseFailed,
+			"UserCreationFailed", err.Error()), err
+	}
 
+	if !secretFound {
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      rcred.Spec.SecretName,

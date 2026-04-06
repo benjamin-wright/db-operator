@@ -257,6 +257,105 @@ var _ = Describe("RedisCredentialReconciler", func() {
 		})
 	})
 
+	// ── Spec update: key patterns and ACL changes take effect ────────────────
+	Context("when a RedisCredential spec is updated", Ordered, func() {
+		var (
+			ns               *corev1.Namespace
+			rdb              *v1alpha1.RedisDatabase
+			rcred            *v1alpha1.RedisCredential
+			dbLookup         types.NamespacedName
+			credLookup       types.NamespacedName
+			credSecretLookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, rdb, dbLookup, _ = NewRedisDatabase("rcred-update-db")
+			WaitForRedisDatabase(dbLookup)
+
+			rcred = &v1alpha1.RedisCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "rcred-update",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.RedisCredentialSpec{
+					DatabaseRef:   rdb.Name,
+					Username:      "updateuser",
+					SecretName:    "rcred-update-secret",
+					KeyPatterns:   []string{"before:*"},
+					ACLCategories: []v1alpha1.RedisACLCategory{v1alpha1.RedisACLCategoryRead, v1alpha1.RedisACLCategoryWrite, v1alpha1.RedisACLCategoryString},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, rcred)).To(Succeed())
+			credLookup = types.NamespacedName{Name: rcred.Name, Namespace: ns.Name}
+			credSecretLookup = types.NamespacedName{Name: rcred.Spec.SecretName, Namespace: ns.Name}
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.RedisCredential
+				g.Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.RedisCredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should allow writes to the original key pattern before the update", func() {
+			redisCli, close := ConnectToRedisDatabase(dbLookup, credSecretLookup)
+			defer close()
+
+			Expect(redisCli.Set(Ctx, "before:foo", "bar", 0).Err()).To(Succeed())
+			Expect(redisCli.Set(Ctx, "after:foo", "bar", 0).Err()).To(MatchError(ContainSubstring("NOPERM")))
+		})
+
+		It("should update the key pattern and ACL when the spec changes", func() {
+			var fetched v1alpha1.RedisCredential
+			Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
+
+			fetched.Spec.KeyPatterns = []string{"after:*"}
+			Expect(K8sClient.Update(Ctx, &fetched)).To(Succeed())
+
+			// Wait for reconcile to re-apply the ACL.
+			Eventually(func(g Gomega) {
+				redisCli, close := ConnectToRedisDatabase(dbLookup, credSecretLookup)
+				defer close()
+
+				g.Expect(redisCli.Set(Ctx, "after:foo", "bar", 0).Err()).To(Succeed())
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should deny the old key pattern after the update", func() {
+			redisCli, close := ConnectToRedisDatabase(dbLookup, credSecretLookup)
+			defer close()
+
+			Expect(redisCli.Set(Ctx, "before:foo", "bar", 0).Err()).To(MatchError(ContainSubstring("NOPERM")))
+		})
+
+		It("should preserve the password across the update", func() {
+			var secretBefore corev1.Secret
+			Expect(K8sClient.Get(Ctx, credSecretLookup, &secretBefore)).To(Succeed())
+			passwordBefore := string(secretBefore.Data["REDIS_PASSWORD"])
+
+			// Trigger another reconcile by bumping an annotation.
+			var fetched v1alpha1.RedisCredential
+			Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
+			if fetched.Annotations == nil {
+				fetched.Annotations = map[string]string{}
+			}
+			fetched.Annotations["test/force-reconcile"] = fmt.Sprintf("%d", time.Now().UnixNano())
+			Expect(K8sClient.Update(Ctx, &fetched)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				var secretAfter corev1.Secret
+				g.Expect(K8sClient.Get(Ctx, credSecretLookup, &secretAfter)).To(Succeed())
+				g.Expect(string(secretAfter.Data["REDIS_PASSWORD"])).To(Equal(passwordBefore))
+			}, Timeout, Interval).Should(Succeed())
+		})
+	})
+
 	// ── Instance label filtering ─────────────────────────────────────────────
 	Context("when a RedisCredential has no operator-instance label", Ordered, func() {
 		var (

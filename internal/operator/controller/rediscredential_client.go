@@ -75,7 +75,7 @@ func (r redisManager) EnsureACLUser(ctx context.Context, host, adminPass, userna
 	rdb := openRedis(host, adminPass)
 	defer rdb.Close()
 
-	args := []interface{}{"ACL", "SETUSER", username, "on", ">" + password}
+	args := []interface{}{"ACL", "SETUSER", username, "on", ">" + password, "resetkeys", "nocommands"}
 
 	for _, p := range keyPatterns {
 		args = append(args, "~"+p)
