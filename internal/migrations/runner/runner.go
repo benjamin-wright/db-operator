@@ -16,6 +16,11 @@ type MigrationStore interface {
 	Applied() ([]store.Record, error)
 	Apply(id, name, sqlContent, applyHash, rollbackHash string) error
 	Rollback(id, sqlContent string) error
+	// Lock acquires a session-scoped advisory lock so that concurrent migration
+	// Job pods serialise rather than racing on the _migrations table.
+	Lock() error
+	// Unlock releases the advisory lock acquired by Lock.
+	Unlock() error
 }
 
 // action represents the type of operation to perform on a single migration.
@@ -127,6 +132,11 @@ func plan(migrations []discovery.Migration, applied []store.Record, target strin
 // Run discovers the required migration direction, validates file integrity,
 // and executes each step via the provided store.
 func Run(s MigrationStore, migrations []discovery.Migration, target string) error {
+	if err := s.Lock(); err != nil {
+		return fmt.Errorf("acquiring advisory lock: %w", err)
+	}
+	defer s.Unlock() //nolint:errcheck
+
 	if err := s.EnsureTable(); err != nil {
 		return err
 	}

@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -146,6 +147,19 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 				if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions); err != nil {
 					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 						"UserCreationFailed", err.Error()), err
+				}
+				if pgcred.Spec.DatabaseOwner {
+					conflict, conflictResult, conflictErr := r.checkOwnerConflict(ctx, pgcred, host, adminUser, adminPass, dbName)
+					if conflictErr != nil {
+						return conflictResult, conflictErr
+					}
+					if conflict {
+						return conflictResult, nil
+					}
+					if err := r.pgDB.EnsureOwner(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
+						return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+							"OwnerSetupFailed", err.Error()), err
+					}
 				}
 			}
 		}
@@ -304,6 +318,48 @@ func labelsForCredential(pgcred *v1alpha1.PostgresCredential, instanceName strin
 		"app.kubernetes.io/managed-by":                             "db-operator",
 		"db-operator.benjamin-wright.github.com/operator-instance": instanceName,
 	}
+}
+
+// checkOwnerConflict looks up the current PostgreSQL owner of dbName and, if
+// that owner belongs to a different databaseOwner:true PostgresCredential in
+// the same namespace, mutates pgcred status to Failed/OwnerConflict and
+// returns conflict=true. When conflict is false the caller should continue
+// reconciling.
+func (r *PostgresCredentialReconciler) checkOwnerConflict(
+	ctx context.Context,
+	pgcred *v1alpha1.PostgresCredential,
+	host, adminUser, adminPass, dbName string,
+) (bool, ctrl.Result, error) {
+	currentOwner, err := r.pgDB.FindOwner(host, adminUser, adminPass, dbName)
+	if err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("finding owner of database %q: %w", dbName, err)
+	}
+
+	// No owner yet, or this credential already owns it — no conflict.
+	if currentOwner == "" || currentOwner == pgcred.Spec.Username || currentOwner == "postgres" {
+		return false, ctrl.Result{}, nil
+	}
+
+	// Check whether the current owner is another databaseOwner:true credential.
+	var allCreds v1alpha1.PostgresCredentialList
+	if err := r.client.list(ctx, &allCreds, client.InNamespace(pgcred.Namespace)); err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("listing PostgresCredentials: %w", err)
+	}
+	for _, other := range allCreds.Items {
+		if other.Name == pgcred.Name {
+			continue
+		}
+		if other.Spec.DatabaseRef == pgcred.Spec.DatabaseRef &&
+			other.Spec.Username == currentOwner &&
+			other.Spec.DatabaseOwner {
+			return true, r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+				"OwnerConflict",
+				fmt.Sprintf("database %q is already owned by PostgresCredential %q", dbName, other.Name),
+			), nil
+		}
+	}
+
+	return false, ctrl.Result{}, nil
 }
 
 // SetupWithManager registers the PostgresCredentialReconciler with the controller manager.

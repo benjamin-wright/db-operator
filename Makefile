@@ -54,9 +54,24 @@ test: fmt vet ## Run unit tests.
 GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
 
 .PHONY: integration-test
-integration-test: fmt vet ## Run integration tests (requires a running k3d cluster).
-	go test -v -tags integration ./internal/migrations/...
-	$(GINKGO) --procs=3 -v --tags=integration ./internal/operator/controller/
+integration-test: fmt vet ## Run all integration tests (requires a running k3d cluster).
+	$(GINKGO) -p -v --tags=integration ./internal/migrations/... ./internal/operator/controller/
+
+.PHONY: integration-test-migrations
+integration-test-migrations: ## Run migration integration tests.
+	$(GINKGO) -p -v --silence-skips --tags=integration ./internal/migrations/...
+
+.PHONY: integration-test-postgres
+integration-test-postgres: ## Run Postgres controller integration tests.
+	$(GINKGO) -p -v --silence-skips --tags=integration --focus="Postgres" ./internal/operator/controller/
+
+.PHONY: integration-test-redis
+integration-test-redis: ## Run Redis controller integration tests.
+	$(GINKGO) -p -v --silence-skips --tags=integration --focus="Redis" ./internal/operator/controller/
+
+.PHONY: integration-test-nats
+integration-test-nats: ## Run NATS controller integration tests.
+	$(GINKGO) -p -v --silence-skips --tags=integration --focus="Nats" ./internal/operator/controller/
 
 ##@ Cluster
 

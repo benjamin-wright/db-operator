@@ -46,6 +46,7 @@ type DatabasePermissionEntry struct {
 }
 
 // PostgresCredentialSpec defines the desired state of PostgresCredential.
+// +kubebuilder:validation:XValidation:rule="!self.databaseOwner || size(self.permissions) > 0",message="databaseOwner: true requires at least one permissions entry"
 type PostgresCredentialSpec struct {
 	// DatabaseRef is the name of the PostgresDatabase resource in the same namespace
 	// that this credential targets.
@@ -71,6 +72,20 @@ type PostgresCredentialSpec struct {
 	// Each entry specifies one or more databases and the privileges to grant in them.
 	// +optional
 	Permissions []DatabasePermissionEntry `json:"permissions,omitempty"`
+
+	// DatabaseOwner, when true, makes this credential the OWNER of every database listed
+	// in spec.permissions[*].databases. The role is granted ALL privileges on the database
+	// and on the public schema, enabling DDL operations.
+	//
+	// At most one credential per (databaseRef, database) may set databaseOwner: true.
+	// A second credential setting databaseOwner: true against the same database is rejected
+	// (status Failed, reason OwnerConflict).
+	//
+	// When other credentials are reconciled against an owner-managed database, the operator
+	// also runs ALTER DEFAULT PRIVILEGES FOR ROLE <owner> so that tables created later by
+	// the owner are auto-granted to those credentials.
+	// +optional
+	DatabaseOwner bool `json:"databaseOwner,omitempty"`
 }
 
 // PostgresCredentialStatus defines the observed state of PostgresCredential.

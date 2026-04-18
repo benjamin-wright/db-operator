@@ -22,7 +22,7 @@ docker_build(
         '.',
         "./operator.Dockerfile",
     ],
-    ignore = ["**/bin/**", "**/cover.out"],
+    ignore = ["**/bin/**", "**/cover.out", "**/*.test"],
 )
 
 namespace_create(NAMESPACE)
@@ -47,10 +47,17 @@ k8s_resource(
     labels        = ["db-operator"],
 )
 
-local_resource(
-    "integration-tests",
-    cmd           = "make integration-test",
-    dir           = '.',
-    resource_deps = [RELEASE_NAME],
-    labels        = ["db-operator"],
-)
+for suite, cmd in [
+    ("test-migrations", "make integration-test-migrations"),
+    ("test-postgres",   "make integration-test-postgres"),
+    ("test-redis",      "make integration-test-redis"),
+    ("test-nats",       "make integration-test-nats"),
+]:
+    local_resource(
+        suite,
+        cmd            = cmd,
+        dir            = '.',
+        resource_deps  = [RELEASE_NAME],
+        labels         = ["db-operator"],
+        allow_parallel = True,
+    )

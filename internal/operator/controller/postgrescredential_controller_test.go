@@ -448,4 +448,325 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			Expect(err).To(HaveOccurred(), "multiuser should not have SELECT on db_gamma")
 		})
 	})
+
+	// ── databaseOwner lifecycle ──────────────────────────────────────────────
+	// Verify that a credential with databaseOwner:true becomes the PostgreSQL
+	// owner of the target database, and that ownership is surrendered when the
+	// credential is deleted.
+	Context("when a credential is the database owner", Ordered, func() {
+		var (
+			ns                *corev1.Namespace
+			pgdb              *v1alpha1.PostgresDatabase
+			ownerCred         *v1alpha1.PostgresCredential
+			dbLookup          types.NamespacedName
+			adminSecretLookup types.NamespacedName
+			credLookup        types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("owner-lifecycle-db")
+			WaitForDatabase(dbLookup)
+
+			ownerCred = &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "owner-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef:   pgdb.Name,
+					Username:      "owneruser",
+					SecretName:    "owner-cred-secret",
+					DatabaseOwner: true,
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, ownerCred)).To(Succeed())
+			credLookup = types.NamespacedName{Name: ownerCred.Name, Namespace: ns.Name}
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should make the credential user the owner of the PostgreSQL database", func() {
+			db, closeConn := ConnectToDatabase(dbLookup, adminSecretLookup)
+			defer closeConn()
+
+			var owner string
+			err := db.QueryRow(
+				"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'testdb'",
+			).Scan(&owner)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(owner).To(Equal("owneruser"), "testdb should be owned by owneruser")
+		})
+
+		It("should revert database ownership to postgres when the owner credential is deleted", func() {
+			Expect(K8sClient.Delete(Ctx, ownerCred)).To(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				err := K8sClient.Get(Ctx, credLookup, &fetched)
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}, Timeout, Interval).Should(Succeed())
+
+			db, closeConn := ConnectToDatabase(dbLookup, adminSecretLookup)
+			defer closeConn()
+
+			var owner string
+			err := db.QueryRow(
+				"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'testdb'",
+			).Scan(&owner)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(owner).To(Equal("postgres"), "testdb ownership should revert to postgres after owner credential is deleted")
+
+			var roleExists bool
+			err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'owneruser')").Scan(&roleExists)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(roleExists).To(BeFalse(), "owneruser role should have been dropped")
+		})
+	})
+
+	// ── databaseOwner conflict ───────────────────────────────────────────────
+	// A second databaseOwner:true credential targeting the same database should
+	// be rejected with phase Failed.
+	Context("when two credentials claim database ownership", Ordered, func() {
+		var (
+			ns           *corev1.Namespace
+			pgdb         *v1alpha1.PostgresDatabase
+			firstCred    *v1alpha1.PostgresCredential
+			secondCred   *v1alpha1.PostgresCredential
+			dbLookup     types.NamespacedName
+			firstLookup  types.NamespacedName
+			secondLookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, _ = NewDatabase("owner-conflict-db")
+			WaitForDatabase(dbLookup)
+
+			firstCred = &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "owner-conflict-first",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef:   pgdb.Name,
+					Username:      "firstowner",
+					SecretName:    "owner-conflict-first-secret",
+					DatabaseOwner: true,
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, firstCred)).To(Succeed())
+			firstLookup = types.NamespacedName{Name: firstCred.Name, Namespace: ns.Name}
+
+			// Wait for the first credential to be Ready before creating the second.
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, firstLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			secondCred = &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "owner-conflict-second",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef:   pgdb.Name,
+					Username:      "secondowner",
+					SecretName:    "owner-conflict-second-secret",
+					DatabaseOwner: true,
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, secondCred)).To(Succeed())
+			secondLookup = types.NamespacedName{Name: secondCred.Name, Namespace: ns.Name}
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should leave the first owner credential Ready", func() {
+			var fetched v1alpha1.PostgresCredential
+			Expect(K8sClient.Get(Ctx, firstLookup, &fetched)).To(Succeed())
+			Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+		})
+
+		It("should set the second owner credential to Failed", func() {
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, secondLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseFailed))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should leave the PostgreSQL database owned by the first user", func() {
+			var fetched v1alpha1.PostgresDatabase
+			Expect(K8sClient.Get(Ctx, dbLookup, &fetched)).To(Succeed())
+
+			adminSecretLookup := types.NamespacedName{Name: pgdb.Name + "-admin", Namespace: ns.Name}
+			db, closeConn := ConnectToDatabase(dbLookup, adminSecretLookup)
+			defer closeConn()
+
+			var owner string
+			err := db.QueryRow(
+				"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'testdb'",
+			).Scan(&owner)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(owner).To(Equal("firstowner"), "testdb should still be owned by firstowner")
+		})
+	})
+
+	// ── Deleting a non-owner credential preserves database ownership ─────────
+	// When a plain credential sharing the same database as an owner credential
+	// is deleted, the owner credential's PostgreSQL ownership must not be revoked.
+	Context("when a non-owner credential is deleted alongside an owner credential", Ordered, func() {
+		var (
+			ns                *corev1.Namespace
+			pgdb              *v1alpha1.PostgresDatabase
+			ownerCred         *v1alpha1.PostgresCredential
+			plainCred         *v1alpha1.PostgresCredential
+			dbLookup          types.NamespacedName
+			adminSecretLookup types.NamespacedName
+			ownerCredLookup   types.NamespacedName
+			plainCredLookup   types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("owner-preserve-db")
+			WaitForDatabase(dbLookup)
+
+			ownerCred = &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "preserve-owner-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef:   pgdb.Name,
+					Username:      "preserveowner",
+					SecretName:    "preserve-owner-secret",
+					DatabaseOwner: true,
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, ownerCred)).To(Succeed())
+			ownerCredLookup = types.NamespacedName{Name: ownerCred.Name, Namespace: ns.Name}
+
+			plainCred = &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "preserve-plain-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "plainuser",
+					SecretName:  "preserve-plain-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, plainCred)).To(Succeed())
+			plainCredLookup = types.NamespacedName{Name: plainCred.Name, Namespace: ns.Name}
+
+			// Wait for both credentials to be Ready.
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, ownerCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, plainCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			// Delete only the plain credential.
+			Expect(K8sClient.Delete(Ctx, plainCred)).To(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				err := K8sClient.Get(Ctx, plainCredLookup, &fetched)
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should drop the plain user role", func() {
+			db, closeConn := ConnectToDatabase(dbLookup, adminSecretLookup)
+			defer closeConn()
+
+			var exists bool
+			err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'plainuser')").Scan(&exists)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(exists).To(BeFalse(), "plainuser role should have been dropped")
+		})
+
+		It("should leave the owner credential Ready", func() {
+			var fetched v1alpha1.PostgresCredential
+			Expect(K8sClient.Get(Ctx, ownerCredLookup, &fetched)).To(Succeed())
+			Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+		})
+
+		It("should not revoke database ownership from the owner credential user", func() {
+			db, closeConn := ConnectToDatabase(dbLookup, adminSecretLookup)
+			defer closeConn()
+
+			var owner string
+			err := db.QueryRow(
+				"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'testdb'",
+			).Scan(&owner)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(owner).To(Equal("preserveowner"), "testdb ownership should not be disturbed by deleting a non-owner credential")
+		})
+	})
 })

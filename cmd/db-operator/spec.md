@@ -9,6 +9,10 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
   - Each permissions entry specifies one or more logical database names and the table-level privileges to grant in those databases; each database is created on demand if it does not already exist
   - Supported permissions: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `ALL`
   - `PGDATABASE` in the credential Secret reflects the first database from the first permissions entry
+  - `spec.databaseOwner: true` makes the credential's role the OWNER of every database listed in `spec.permissions[*].databases`; the role is granted ALL privileges on the database and its public schema, enabling DDL operations
+  - At most one credential per `(databaseRef, database)` may set `databaseOwner: true`; a second credential with `databaseOwner: true` targeting the same database transitions to `Failed` with reason `OwnerConflict`
+  - When a non-owner credential is reconciled against a database that has an owner, the operator additionally sets `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` so tables and sequences created later by the owner are auto-granted to that credential
+  - `spec.databaseOwner: true` requires `spec.permissions` to be non-empty (CEL-validated)
 - `RedisDatabase` CRD — declares a Redis 8 instance with a storage size; the operator provisions a StatefulSet, headless Service, and admin Secret for each instance
   - Admin Secret keys: `username` (always `"default"`), `password`
 - `RedisCredential` CRD — declares a Redis ACL user against a referenced `RedisDatabase`; the operator generates a random password, creates the ACL user, and writes credentials to a named Kubernetes Secret in the same namespace

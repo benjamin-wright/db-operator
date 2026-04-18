@@ -26,6 +26,8 @@ type fakeStore struct {
 }
 
 func (f *fakeStore) EnsureTable() error { return nil }
+func (f *fakeStore) Lock() error        { return nil }
+func (f *fakeStore) Unlock() error      { return nil }
 
 func (f *fakeStore) Applied() ([]store.Record, error) {
 	return f.records, nil
