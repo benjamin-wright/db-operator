@@ -17,6 +17,11 @@ func (in *DatabasePermissionEntry) DeepCopyInto(out *DatabasePermissionEntry) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.Tables != nil {
+		in, out := &in.Tables, &out.Tables
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Permissions != nil {
 		in, out := &in.Permissions, &out.Permissions
 		*out = make([]DatabasePermission, len(*in))

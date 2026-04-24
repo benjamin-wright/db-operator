@@ -8,6 +8,9 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
 - `PostgresCredential` CRD — declares a PostgreSQL user against a referenced `PostgresDatabase`; the operator generates a random password, creates the user with the specified per-database permissions, and writes credentials to a named Kubernetes Secret in the same namespace
   - Each permissions entry specifies one or more logical database names and the table-level privileges to grant in those databases; each database is created on demand if it does not already exist
   - Supported permissions: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `ALL`
+  - An optional `tables` list on a permissions entry restricts the grant to only the named tables; if `tables` is omitted or empty, privileges are granted on all tables via `GRANT … ON ALL TABLES IN SCHEMA public`
+    - When `tables` is set, only tables that already exist at reconcile time are granted; `ALTER DEFAULT PRIVILEGES` is **not** set because PostgreSQL has no mechanism to pre-grant future tables by name
+    - If any named table does not exist in the database at reconcile time, the credential transitions to `Failed` with reason `TableNotFound`
   - `PGDATABASE` in the credential Secret reflects the first database from the first permissions entry
   - `spec.databaseOwner: true` makes the credential's role the OWNER of every database listed in `spec.permissions[*].databases`; the role is granted ALL privileges on the database and its public schema, enabling DDL operations
   - At most one credential per `(databaseRef, database)` may set `databaseOwner: true`; a second credential with `databaseOwner: true` targeting the same database transitions to `Failed` with reason `OwnerConflict`

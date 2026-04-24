@@ -40,6 +40,12 @@ type DatabasePermissionEntry struct {
 	// +kubebuilder:validation:MinItems=1
 	Databases []string `json:"databases"`
 
+	// Tables is the list of table names within those databases that these privileges apply to.
+	// If empty or omitted, the privileges apply to all tables in those databases.
+	// +optional
+	// +kubebuilder:validation:MinItems=1
+	Tables []string `json:"tables,omitempty"`
+
 	// Permissions is the set of table-level privileges to grant in those databases.
 	// +kubebuilder:validation:MinItems=1
 	Permissions []DatabasePermission `json:"permissions"`

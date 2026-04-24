@@ -106,6 +106,8 @@ spec:
   permissions:
     - databases:
         - myapp
+      tables: # Omit to apply to all tables
+        - mytable
       permissions:
         - SELECT
         - INSERT
@@ -137,6 +139,30 @@ envFrom:
 ```
 
 Available permissions: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, `ALL`.
+
+To restrict a credential to specific tables rather than the whole schema, add a `tables` list to the permissions entry:
+
+```yaml
+apiVersion: db-operator.benjamin-wright.github.com/v1alpha1
+kind: PostgresCredential
+metadata:
+  name: readonly-creds
+  namespace: default
+spec:
+  databaseRef: my-postgres
+  username: readonly
+  secretName: readonly-postgres-secret
+  permissions:
+    - databases:
+        - myapp
+      tables:
+        - orders
+        - products
+      permissions:
+        - SELECT
+```
+
+When `tables` is set, the operator runs `GRANT SELECT ON TABLE orders, products TO readonly` — no other tables are accessible. Note that `ALTER DEFAULT PRIVILEGES` is **not** applied for table-scoped entries; tables created after the credential is provisioned will not be auto-granted. If any listed table does not exist when the credential is reconciled, the credential transitions to `Failed` with reason `TableNotFound`.
 
 ### Redis
 

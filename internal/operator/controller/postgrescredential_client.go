@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -69,7 +70,7 @@ func (c *postgresCredentialClient) list(ctx context.Context, obj client.ObjectLi
 // be tested without a live database.
 type PostgresManager interface {
 	EnsureDatabase(host, adminUser, adminPass, dbName string) error
-	EnsureUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission) error
+	EnsureUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission, tables []string) error
 	DropUser(host, adminUser, adminPass, dbName, username string) error
 	// EnsureOwner makes username the owner of dbName and grants it full schema access.
 	EnsureOwner(host, adminUser, adminPass, dbName, username string) error
@@ -121,7 +122,10 @@ func (p postgresManager) EnsureDatabase(host, adminUser, adminPass, dbName strin
 
 // EnsureUser connects to the target Postgres instance and creates the specified role
 // with the given password and permissions if it does not already exist.
-func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission) error {
+// When tables is non-empty, privileges are granted only on those specific tables;
+// no ALTER DEFAULT PRIVILEGES is emitted in that case because PostgreSQL has no
+// mechanism to pre-grant future tables by name.
+func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission, tables []string) error {
 	db, err := openPostgres(host, adminUser, adminPass, dbName)
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres: %w", err)
@@ -152,54 +156,73 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 		privClause := strings.Join(privs, ", ")
 		quotedUser := pq.QuoteIdentifier(username)
 
-		grantSQL := fmt.Sprintf("GRANT %s ON ALL TABLES IN SCHEMA public TO %s", privClause, quotedUser)
-		if _, err := db.Exec(grantSQL); err != nil {
-			return fmt.Errorf("granting permissions to %q: %w", username, err)
-		}
-
-		defaultSQL := fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT %s ON TABLES TO %s", privClause, quotedUser)
-		if _, err := db.Exec(defaultSQL); err != nil {
-			return fmt.Errorf("setting default privileges for %q: %w", username, err)
-		}
-
-		// Propagate default privileges for the current database owner so that tables
-		// and sequences created by the owner after this grant are auto-granted to this user.
-		var owner string
-		if err := db.QueryRow(
-			"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = $1", dbName,
-		).Scan(&owner); err != nil {
-			return fmt.Errorf("looking up owner of database %q: %w", dbName, err)
-		}
-		if owner != "" && owner != username {
-			quotedOwner := pq.QuoteIdentifier(owner)
-			ownerTableSQL := fmt.Sprintf(
-				"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public GRANT %s ON TABLES TO %s",
-				quotedOwner, privClause, quotedUser)
-			if _, err := db.Exec(ownerTableSQL); err != nil {
-				return fmt.Errorf("setting owner-scoped default table privileges for %q: %w", username, err)
-			}
-
-			// Sequences only accept SELECT, UPDATE, and ALL — filter out table-only
-			// privileges (INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER) before
-			// building the sequences grant.
-			validSeqPerms := map[v1alpha1.DatabasePermission]bool{
-				v1alpha1.PermissionSelect: true,
-				v1alpha1.PermissionUpdate: true,
-				v1alpha1.PermissionAll:    true,
-			}
-			var seqPrivs []string
-			for _, perm := range permissions {
-				if validSeqPerms[perm] {
-					seqPrivs = append(seqPrivs, string(perm))
+		if len(tables) > 0 {
+			// Table-scoped grant: privileges apply only to the named tables.
+			// No ALTER DEFAULT PRIVILEGES is emitted — PostgreSQL cannot pre-grant
+			// on specific future tables by name.
+			quotedTables := make([]string, len(tables))
+			for i, t := range tables {
+				if t == "" {
+					return fmt.Errorf("tables entry %d is an empty string", i)
 				}
+				quotedTables[i] = pq.QuoteIdentifier(t)
 			}
-			if len(seqPrivs) > 0 {
-				seqPrivClause := strings.Join(seqPrivs, ", ")
-				ownerSeqSQL := fmt.Sprintf(
-					"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public GRANT %s ON SEQUENCES TO %s",
-					quotedOwner, seqPrivClause, quotedUser)
-				if _, err := db.Exec(ownerSeqSQL); err != nil {
-					return fmt.Errorf("setting owner-scoped default sequence privileges for %q: %w - %+v", username, err, seqPrivClause)
+			grantSQL := fmt.Sprintf("GRANT %s ON TABLE %s TO %s",
+				privClause, strings.Join(quotedTables, ", "), quotedUser)
+			if _, err := db.Exec(grantSQL); err != nil {
+				return fmt.Errorf("granting table-scoped permissions to %q: %w", username, err)
+			}
+		} else {
+			// All-tables grant: privileges apply to every current and future table.
+			grantSQL := fmt.Sprintf("GRANT %s ON ALL TABLES IN SCHEMA public TO %s", privClause, quotedUser)
+			if _, err := db.Exec(grantSQL); err != nil {
+				return fmt.Errorf("granting permissions to %q: %w", username, err)
+			}
+
+			defaultSQL := fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT %s ON TABLES TO %s", privClause, quotedUser)
+			if _, err := db.Exec(defaultSQL); err != nil {
+				return fmt.Errorf("setting default privileges for %q: %w", username, err)
+			}
+
+			// Propagate default privileges for the current database owner so that tables
+			// and sequences created by the owner after this grant are auto-granted to this user.
+			var owner string
+			if err := db.QueryRow(
+				"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = $1", dbName,
+			).Scan(&owner); err != nil {
+				return fmt.Errorf("looking up owner of database %q: %w", dbName, err)
+			}
+			if owner != "" && owner != username {
+				quotedOwner := pq.QuoteIdentifier(owner)
+				ownerTableSQL := fmt.Sprintf(
+					"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public GRANT %s ON TABLES TO %s",
+					quotedOwner, privClause, quotedUser)
+				if _, err := db.Exec(ownerTableSQL); err != nil {
+					return fmt.Errorf("setting owner-scoped default table privileges for %q: %w", username, err)
+				}
+
+				// Sequences only accept SELECT, UPDATE, and ALL — filter out table-only
+				// privileges (INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER) before
+				// building the sequences grant.
+				validSeqPerms := map[v1alpha1.DatabasePermission]bool{
+					v1alpha1.PermissionSelect: true,
+					v1alpha1.PermissionUpdate: true,
+					v1alpha1.PermissionAll:    true,
+				}
+				var seqPrivs []string
+				for _, perm := range permissions {
+					if validSeqPerms[perm] {
+						seqPrivs = append(seqPrivs, string(perm))
+					}
+				}
+				if len(seqPrivs) > 0 {
+					seqPrivClause := strings.Join(seqPrivs, ", ")
+					ownerSeqSQL := fmt.Sprintf(
+						"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public GRANT %s ON SEQUENCES TO %s",
+						quotedOwner, seqPrivClause, quotedUser)
+					if _, err := db.Exec(ownerSeqSQL); err != nil {
+						return fmt.Errorf("setting owner-scoped default sequence privileges for %q: %w - %+v", username, err, seqPrivClause)
+					}
 				}
 			}
 		}
@@ -326,6 +349,17 @@ func (p postgresManager) DropUser(host, adminUser, adminPass, dbName, username s
 	}
 
 	return nil
+}
+
+// isTableNotFoundError reports whether err originated from PostgreSQL error code
+// 42P01 (undefined_table), which is returned when a GRANT targets a table that
+// does not exist in the database.
+func isTableNotFoundError(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "42P01"
+	}
+	return false
 }
 
 // openPostgres opens a verified connection to a Postgres instance.

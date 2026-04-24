@@ -12,6 +12,7 @@ import (
 
 	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -767,6 +768,165 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			).Scan(&owner)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(owner).To(Equal("preserveowner"), "testdb ownership should not be disturbed by deleting a non-owner credential")
+		})
+	})
+
+	// ── Table-scoped permission grants ───────────────────────────────────────
+	// Verify that a credential with tables: [foo] can only access the named
+	// table, that a credential without tables retains full-schema access, and
+	// that a credential referencing a non-existent table transitions to Failed.
+	Context("when permissions are scoped to specific tables", Ordered, func() {
+		var (
+			ns                 *corev1.Namespace
+			pgdb               *v1alpha1.PostgresDatabase
+			dbLookup           types.NamespacedName
+			adminSecretLookup  types.NamespacedName
+			scopedSecretLookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("table-scoped-db")
+			WaitForDatabase(dbLookup)
+
+			// Create a bootstrap credential so the operator provisions the
+			// `scopeddb` database. We then create the test tables via the admin
+			// connection before provisioning the table-scoped credential.
+			bootstrapCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "scoped-bootstrap",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "bootstrapuser",
+					SecretName:  "scoped-bootstrap-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"scopeddb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, bootstrapCred)).To(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: "scoped-bootstrap", Namespace: ns.Name}, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			// scopeddb now exists — create the test tables as admin.
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "scopeddb")
+			_, err := db.Exec("CREATE TABLE IF NOT EXISTS allowed_table (id INT)")
+			Expect(err).NotTo(HaveOccurred(), "creating allowed_table")
+			_, err = db.Exec("CREATE TABLE IF NOT EXISTS forbidden_table (id INT)")
+			Expect(err).NotTo(HaveOccurred(), "creating forbidden_table")
+			closeConn()
+
+			scopedCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "scoped-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "scopeduser",
+					SecretName:  "scoped-cred-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"scopeddb"},
+							Tables:      []string{"allowed_table"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, scopedCred)).To(Succeed())
+			scopedSecretLookup = types.NamespacedName{Name: "scoped-cred-secret", Namespace: ns.Name}
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: "scoped-cred", Namespace: ns.Name}, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should allow scopeduser to SELECT from allowed_table", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, scopedSecretLookup, "scopeddb")
+			defer closeConn()
+			_, err := db.Exec("SELECT * FROM allowed_table")
+			Expect(err).NotTo(HaveOccurred(), "scopeduser should have SELECT on allowed_table")
+		})
+
+		It("should deny scopeduser SELECT on forbidden_table", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, scopedSecretLookup, "scopeddb")
+			defer closeConn()
+			_, err := db.Exec("SELECT * FROM forbidden_table")
+			Expect(err).To(HaveOccurred(), "scopeduser should not have SELECT on forbidden_table")
+		})
+	})
+
+	Context("when a table-scoped credential references a non-existent table", Ordered, func() {
+		var (
+			ns         *corev1.Namespace
+			pgdb       *v1alpha1.PostgresDatabase
+			dbLookup   types.NamespacedName
+			credLookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, _ = NewDatabase("table-missing-db")
+			WaitForDatabase(dbLookup)
+
+			missingCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "missing-table-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "missinguser",
+					SecretName:  "missing-table-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"missingdb"},
+							Tables:      []string{"no_such_table"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, missingCred)).To(Succeed())
+			credLookup = types.NamespacedName{Name: "missing-table-cred", Namespace: ns.Name}
+			_ = dbLookup
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should transition to Failed with reason TableNotFound", func() {
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseFailed))
+				cond := meta.FindStatusCondition(fetched.Status.Conditions, "Ready")
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Reason).To(Equal("TableNotFound"))
+			}, Timeout, Interval).Should(Succeed())
 		})
 	})
 })

@@ -144,9 +144,13 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 						"DatabaseCreationFailed", err.Error()), err
 				}
-				if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions); err != nil {
+				if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions, entry.Tables); err != nil {
+					reason := "UserCreationFailed"
+					if isTableNotFoundError(err) {
+						reason = "TableNotFound"
+					}
 					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
-						"UserCreationFailed", err.Error()), err
+						reason, err.Error()), err
 				}
 				if pgcred.Spec.DatabaseOwner {
 					conflict, conflictResult, conflictErr := r.checkOwnerConflict(ctx, pgcred, host, adminUser, adminPass, dbName)
