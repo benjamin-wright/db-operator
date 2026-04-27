@@ -1,0 +1,12 @@
+apiVersion: v2
+name: db-mcp-chart
+description: MCP server for managing PostgresDatabase and PostgresCredential custom resources
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - postgres
+  - database
+maintainers:
+  - name: games-hub

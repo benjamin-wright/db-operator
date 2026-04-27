@@ -107,6 +107,9 @@ jobs:
 
   helm-chart:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [db-operator, db-mcp]
     environment: production
     steps:
       - uses: actions/checkout@v4
@@ -119,5 +122,5 @@ jobs:
         uses: azure/setup-helm@v4
       - name: Package and push chart
         run: |
-          helm package charts/db-operator --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
-          helm push db-operator-chart-${{ github.ref_name }}.tgz oci://registry-1.docker.io/benwright
+          helm package charts/${{ matrix.app }} --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
+          helm push ${{ matrix.app }}-chart-${{ github.ref_name }}.tgz oci://registry-1.docker.io/benwright

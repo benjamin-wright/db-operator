@@ -1,0 +1,14 @@
+image:
+  repository: localhost:5001/db-mcp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+addr: ":8080"
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
