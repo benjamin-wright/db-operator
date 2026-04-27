@@ -1,0 +1,16 @@
+{{- if .Values.mcp.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "db-mcp.fullname" . }}-manager
+  labels:
+    {{- include "db-mcp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "db-mcp.fullname" . }}-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "db-mcp.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

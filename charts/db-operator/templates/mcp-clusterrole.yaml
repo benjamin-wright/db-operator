@@ -1,0 +1,35 @@
+{{- if .Values.mcp.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "db-mcp.fullname" . }}-manager
+  labels:
+    {{- include "db-mcp.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - db-operator.benjamin-wright.github.com
+    resources:
+      - postgresdatabases
+      - postgrescredentials
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - db-operator.benjamin-wright.github.com
+    resources:
+      - postgrescredentials
+    verbs:
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+{{- end }}

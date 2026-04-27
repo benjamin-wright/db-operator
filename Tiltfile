@@ -1,4 +1,5 @@
 IMAGE_NAME   = "db-operator"
+MCP_IMAGE    = "db-mcp"
 RELEASE_NAME = "db-operator"
 NAMESPACE    = "db-operator"
 
@@ -25,6 +26,17 @@ docker_build(
     ignore = ["**/bin/**", "**/cover.out", "**/*.test"],
 )
 
+docker_build(
+    MCP_IMAGE,
+    context    = '.',
+    dockerfile = "./mcp.Dockerfile",
+    only = [
+        '.',
+        "./mcp.Dockerfile",
+    ],
+    ignore = ["**/bin/**", "**/cover.out", "**/*.test"],
+)
+
 namespace_create(NAMESPACE)
 
 k8s_yaml(
@@ -37,6 +49,9 @@ k8s_yaml(
             "image.tag=latest",
             "image.pullPolicy=Always",
             "instanceName=test",
+            "mcp.image.repository={}".format(MCP_IMAGE),
+            "mcp.image.tag=latest",
+            "mcp.image.pullPolicy=Always",
         ],
     )
 )
@@ -45,6 +60,12 @@ k8s_resource(
     RELEASE_NAME,
     port_forwards = ["8080:8080", "8081:8081"],
     labels        = ["db-operator"],
+)
+
+k8s_resource(
+    "{}-mcp".format(RELEASE_NAME),
+    port_forwards = ["8090:8080", "8091:8081"],
+    labels        = ["db-mcp"],
 )
 
 for suite, cmd in [

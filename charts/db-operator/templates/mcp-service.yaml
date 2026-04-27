@@ -1,0 +1,18 @@
+{{- if .Values.mcp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "db-mcp.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "db-mcp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "db-mcp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mcp
+      port: 8080
+      targetPort: mcp
+      protocol: TCP
+{{- end }}

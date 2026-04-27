@@ -31,6 +31,16 @@ jobs:
             runner: ubuntu-24.04-arm
             platform: linux/arm64
             platform_pair: linux-arm64
+          - app: db-mcp
+            dockerfile: mcp.Dockerfile
+            runner: ubuntu-latest
+            platform: linux/amd64
+            platform_pair: linux-amd64
+          - app: db-mcp
+            dockerfile: mcp.Dockerfile
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            platform_pair: linux-arm64
     runs-on: ${{ matrix.runner }}
     environment: production
     steps:
@@ -70,7 +80,7 @@ jobs:
   merge-image:
     strategy:
       matrix:
-        app: [db-migrations, db-operator]
+        app: [db-migrations, db-operator, db-mcp]
     runs-on: ubuntu-latest
     environment: production
     needs: build-image
