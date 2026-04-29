@@ -130,8 +130,8 @@ type PostgresCredentialSpec struct {
 	// permissions for additional narrowly-scoped grants.
 	// +optional
 	// +listType=set
-	ClusterRoles []PredefinedRole `json:"clusterRoles,omitempty"`
-	DatabaseOwner bool `json:"databaseOwner,omitempty"`
+	ClusterRoles  []PredefinedRole `json:"clusterRoles,omitempty"`
+	DatabaseOwner bool             `json:"databaseOwner,omitempty"`
 }
 
 // PostgresCredentialStatus defines the observed state of PostgresCredential.

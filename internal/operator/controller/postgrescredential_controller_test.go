@@ -933,13 +933,13 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 	// ── clusterRoles: pg_read_all_data without per-database permissions ──────
 	Context("when a credential sets clusterRoles only", Ordered, func() {
 		var (
-			ns               *corev1.Namespace
-			pgdb             *v1alpha1.PostgresDatabase
-			cred             *v1alpha1.PostgresCredential
-			dbLookup         types.NamespacedName
+			ns                *corev1.Namespace
+			pgdb              *v1alpha1.PostgresDatabase
+			cred              *v1alpha1.PostgresCredential
+			dbLookup          types.NamespacedName
 			adminSecretLookup types.NamespacedName
-			credLookup       types.NamespacedName
-			credSecretLookup types.NamespacedName
+			credLookup        types.NamespacedName
+			credSecretLookup  types.NamespacedName
 		)
 
 		BeforeAll(func() {
