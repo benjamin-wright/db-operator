@@ -221,7 +221,7 @@ Pass `entry.Tables` as the final argument to every `EnsureUser` call in
 
 ---
 
-# Bug: Default-Privileges Propagation Not Reaching Migrations-Owned Tables
+# Bug: Permission Reconciliation Brittle to Ordering
 
 Discovered while debugging the wasm-platform `sql-hello` e2e test (24 Apr 2026).
 Symptom: writer/reader credentials authenticate successfully but every statement
@@ -233,180 +233,149 @@ reader credential receives privileges on it.
 
 In a live PostgreSQL session against `wasm_default__sql_hello`:
 
-- `\dt greetings` → owner is `wasm_default__sql_hello__migrations` (correct).
-- `pg_default_acl` shows two rows for the `public` schema, **both with
-  `granted_by = postgres`**:
-  ```
-  postgres | public | {…__writer=arwdDxt/postgres, …__reader=r/postgres,
-                       …__migrations=arwdDxt/postgres}
-  postgres | public | {…__writer=rwU/postgres, …__reader=r/postgres,
-                       …__migrations=rwU/postgres}
-  ```
+- `greetings` is owned by `wasm_default__sql_hello__migrations` (correct).
+- `pg_default_acl` only contains rows with `defaclrole = postgres`. There is
+  no `defaclrole = …__migrations` entry, so nothing fires when the migrations
+  role creates a table.
 - `has_table_privilege('…__writer', 'greetings', 'INSERT')` → `f`.
 - `has_table_privilege('…__reader', 'greetings', 'SELECT')` → `f`.
+- The Application's writer/reader credentials use `tables: [greetings]`, so
+  the table-scoped GRANT branch in `EnsureUser` is the one that should grant
+  access (no default-privs apply to a table-scoped credential).
 
-`ALTER DEFAULT PRIVILEGES` only fires for objects created by the role named in
-its `FOR ROLE` clause (default: the role running the statement). Because the
-existing rows are `granted_by = postgres`, they only auto-grant on tables
-`postgres` creates — not tables `…__migrations` creates. Hence the bug.
+## Diagnosis (confirmed)
 
-## Likely root cause (needs verification)
+Two independent bugs combine:
 
-The "default-privileges propagation" tasks under the
-[Migrations Owner Role + Concurrency Safety](#migrations-owner-role--concurrency-safety)
-section are marked `[x]`, so `EnsureUser` should already issue
-`ALTER DEFAULT PRIVILEGES FOR ROLE <owner> …` when an owner exists. Two
-candidates for why it didn't fire here:
+**Bug A — owner transition does not retroactively rewrite default-priv entries.**
+When writer/reader were first reconciled, `FindOwner(dbName)` returned `postgres`
+(the migrations credential had not yet taken ownership), so the operator emitted
+`ALTER DEFAULT PRIVILEGES FOR ROLE postgres …`. When the migrations credential
+later became owner via `EnsureOwner`, nothing went back and replayed those
+entries against the new owner. Tables created by the migrations role
+subsequently inherit nothing.
 
-1. **wp-operator never sets `databaseOwner: true`** on the `…__migrations`
-   credential. `FindOwner` then returns the bootstrap `postgres` role, which
-   is explicitly excluded from owner-conflict logic — but the propagation code
-   may also short-circuit, leaving `FOR ROLE` unset and defaulting to
-   `postgres`. Fix would land in wp-operator (out of scope for this repo) but
-   the db-operator behaviour when the owner *is* the bootstrap role is worth
-   a deliberate decision: should it still propagate `FOR ROLE postgres`, or
-   should it require an explicit owner credential?
-2. **`EnsureUser` reconciles writer/reader before the migrations credential**
-   becomes owner. `FindOwner` at that moment returns `postgres`, propagation
-   is set against `postgres`, and is never re-run when the owner later
-   changes. Re-reconciling all sibling credentials after `EnsureOwner` would
-   fix this.
+**Bug B — the GRANT block is gated on `!secretFound`, so it runs at most once.**
+In [postgrescredential_controller.go](internal/operator/controller/postgrescredential_controller.go#L134)
+the entire `EnsureDatabase` / `EnsureUser` / `EnsureOwner` /
+`EnsureRoleMemberships` flow lives inside `if !secretFound`. Once the credential
+Secret exists, no Postgres-side reconciliation ever re-runs. For the sql-hello
+case writer/reader were created before the migrations Job ran, so the
+table-scoped `GRANT … ON TABLE greetings` failed with `42P01 undefined_table`,
+the credential went `Failed/TableNotFound`, and on subsequent reconciles the
+GRANT was never re-attempted because the secret was now present.
+
+For sql-hello specifically, Bug B is the primary cause — even with Bug A
+resolved, table-scoped grants would still need to be retryable.
+
+## Design
+
+### Fix A — replay default-priv entries on owner transition (db-operator)
+
+In `EnsureOwner`, after `ALTER DATABASE … OWNER TO <new>`, detect whether the
+owner actually changed. If it did, copy every default-priv entry currently
+attached to the previous owner so that future objects created by the new owner
+inherit the same grants:
+
+```sql
+SELECT grantee::regrole::text, privilege_type, object_type
+FROM pg_catalog.pg_default_acl dacl,
+     LATERAL pg_catalog.aclexplode(dacl.defaclacl)
+WHERE dacl.defaclrole = <previous_owner>::regrole
+  AND dacl.defaclnamespace = 'public'::regnamespace;
+```
+
+For each `(grantee, privilege_type, object_type)` row, emit:
+
+```sql
+ALTER DEFAULT PRIVILEGES FOR ROLE <new_owner> IN SCHEMA public
+  GRANT <privilege_type> ON <object_type> TO <grantee>;
+```
+
+`object_type` is one of `r` (TABLES), `S` (SEQUENCES), `f` (FUNCTIONS), `T`
+(TYPES), `n` (SCHEMAS) — restrict to TABLES + SEQUENCES, the only kinds
+`EnsureUser` itself emits.
+
+The old `defaclrole = <previous_owner>` rows can stay; the previous owner will
+not create new objects, so the stale entries are inert. Leaving them avoids
+having to compute the diff.
+
+**Surfaced subtlety:** the owner credential's reconcile is what corrects
+sibling credentials' grants. Their own status will not reflect the corrective
+action — they will silently start working on their next reconcile (they need
+no further action).
+
+### Fix B — make Postgres reconciliation idempotent and rely on rate-limited retries (db-operator)
+
+Split the `if !secretFound` block in `reconcileCredential`:
+
+- **Secret materialisation** stays one-shot. If the Secret does not exist:
+  generate a fresh password, then continue. If it does exist, read
+  `PGPASSWORD` from it and continue. This preserves the invariant that the
+  password is stable for the credential's lifetime.
+- **Postgres reconciliation** runs every reconcile: `EnsureDatabase`,
+  `EnsureUser` (or `EnsureUserExists`), `EnsureOwner`, `EnsureRoleMemberships`.
+  All of these are already idempotent.
+- After the Postgres calls succeed, create the Secret if it did not previously
+  exist.
+
+On any Postgres-side failure, return `(ctrl.Result{}, err)`.
+controller-runtime's default workqueue rate limiter applies item-scoped
+exponential backoff (5ms → 1000s, capped) automatically, so transient errors
+like `42P01 undefined_table` resolve themselves once the missing object
+appears. **Do not** set `Status.Phase = Failed` for `TableNotFound` — surface
+it as `Pending/WaitingForTable` so the UI reflects that the controller is
+still working on it.
+
+### Fix C — wp-operator orders migrations Job before non-owner credentials (wasm-platform)
+
+Belt-and-braces: in wp-operator's `application_controller`, do not create the
+writer/reader (non-owner) `PostgresCredential`s until the migrations Job has
+reported `Succeeded`. This eliminates the race that triggered Bug B in
+production and reduces the load on the rate-limited retry path.
+
+This task is owned by the wasm-platform repo; tracked here for visibility
+only.
 
 ## Tasks
 
-- [ ] **Reproduce in isolation**: write an integration test in
+- [ ] **Reproduce Bug A in isolation**
+  ([internal/operator/controller/postgrescredential_controller_test.go](internal/operator/controller/postgrescredential_controller_test.go)):
+  create a non-owner credential first, then an owner credential, have the
+  owner role `CREATE TABLE` afterwards, and assert the non-owner can
+  `SELECT` from it. Inspect `pg_default_acl.defaclrole` and assert it equals
+  the new owner. Confirm the test fails today.
+- [ ] **Reproduce Bug B in isolation**
+  ([internal/operator/controller/postgrescredential_controller_test.go](internal/operator/controller/postgrescredential_controller_test.go)):
+  create a credential with `tables: [foo]` against a database where `foo`
+  does not exist, observe the `Pending/WaitingForTable` (or current `Failed`)
+  status, then `CREATE TABLE foo` and assert the credential transitions to
+  `Ready` with the GRANT applied. Confirm the test fails today.
+- [ ] **Fix A — replay default privs on owner transition** in
+  [internal/operator/controller/postgrescredential_client.go](internal/operator/controller/postgrescredential_client.go).
+  Detect previous owner inside `EnsureOwner`; if it differs from the new
+  owner, query `pg_default_acl` + `aclexplode` for entries on the previous
+  owner and replay each TABLES/SEQUENCES grant under the new owner.
+- [ ] **Fix B — idempotent Postgres reconciliation** in
+  [internal/operator/controller/postgrescredential_controller.go](internal/operator/controller/postgrescredential_controller.go).
+  Restructure `reconcileCredential`: read existing Secret to recover password
+  if present; always run the Postgres `Ensure*` block; create the Secret
+  after success when absent. Replace the `Failed/TableNotFound` terminal
+  state with `Pending/WaitingForTable` and let controller-runtime's default
+  rate limiter handle backoff.
+- [ ] **Update existing tests**: the `Failed/TableNotFound` test in
   [internal/operator/controller/postgrescredential_controller_test.go](internal/operator/controller/postgrescredential_controller_test.go)
-  that creates an owner credential and a non-owner credential, then has the
-  owner role create a new table, and asserts the non-owner can `SELECT` from
-  it. Confirm the test fails today.
-- [ ] **Inspect `pg_default_acl.defaclrole`** in the existing owner-default-
-  privileges tests to assert it equals the owner role, not `postgres`. The
-  current tests likely only check `has_table_privilege`, which can pass for
-  pre-existing tables granted directly.
-- [ ] **Diagnose**: confirm whether the gap is (1) reconcile ordering, (2) the
-  bootstrap-owner short-circuit, or (3) a missed call site. Update this
-  section with findings before implementing.
-- [ ] **Fix** based on the diagnosis. Likely shapes:
-  - emit `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` even when the owner is
-    the bootstrap role, *and* re-reconcile sibling credentials when an owner
-    transition is detected; or
-  - require an explicit owner credential and document that non-owner
-    credentials against an unowned database are a configuration error.
+  must be updated to expect `Pending/WaitingForTable` followed by
+  `Ready` once the table is created.
+- [ ] **spec.md**: in [cmd/db-operator/spec.md](cmd/db-operator/spec.md),
+  document (a) the `WaitingForTable` reason and that it is non-terminal,
+  (b) that an owner transition replays default-priv entries from the
+  previous owner, and (c) that sibling credentials become functional on
+  their next reconcile after such a transition without their own status
+  changing.
+- [ ] **Cross-repo: Fix C in wasm-platform** — track in `wasm-platform/docs/todo.md`
+  under the Phase 9 work. Have wp-operator gate non-owner
+  `PostgresCredential` creation behind migrations Job success.
 - [ ] Trigger `e2e-tests` via the Tilt MCP server in the wasm-platform
   workspace and confirm it passes. (This is the cross-repo gate — db-operator
   alone can't prove the fix.)
-
----
-
-# DB MCP Server
-
-A new compilable component that exposes a Model Context Protocol server for
-read-only inspection of databases managed by db-operator. Lives at
-`cmd/db-mcp/` with its own `spec.md`. The server runs in-cluster, watches
-db-operator CRDs to discover database clusters, provisions a cluster-wide
-read-only credential per cluster on demand, and exposes MCP tools so an LLM
-client can list clusters and execute scoped queries.
-
-## Scope
-
-- **Postgres** — first target. Enumerates `PostgresCluster` CRs across all
-  watched namespaces, idempotently provisions a cluster-wide read-only role
-  (one per cluster), and serves the tools below.
-- **Redis** — TBD. Define the equivalent enumeration + read-only access
-  story before implementing.
-- **NATS** — TBD. Define the equivalent enumeration + observation story
-  before implementing.
-
-## Postgres tools
-
-- `pg_list_clusters` — returns all `PostgresCluster` CRs the server can see,
-  with their namespace, name, host, and the list of databases each cluster
-  hosts (derived from `PostgresCredential` CRs that target the cluster).
-- `pg_exec_sql` — executes a SQL statement against a named (cluster, database)
-  pair using the read-only credential. Inputs: cluster ref, database name,
-  SQL text, optional row limit. Output: column metadata + rows, capped at the
-  row limit.
-
-## Read-only credential provisioning
-
-The MCP server is deployed in-cluster and port-forwarded to a developer's
-host. Credential lifecycle goes through the operator: for each discovered
-`PostgresCluster`, the MCP server creates (and reconciles) a
-`PostgresCredential` CR targeting every database on that cluster with
-`SELECT`-only permissions. The operator's existing reconciliation loop
-handles role creation, grants, and Secret materialisation; the MCP server
-just mounts/reads those Secrets to obtain connection details.
-
-This keeps one source of truth for role lifecycle (the operator) and means
-no admin credentials are needed by the MCP server itself.
-
-## Catalog visibility
-
-A read-only credential automatically inherits PostgreSQL's default `USAGE` on
-`pg_catalog` and `information_schema`, so the MCP server can introspect the
-cluster without any extra grants:
-
-- **Roles & users**: `pg_roles`, `pg_user` (password hashes are masked; only
-  superusers can read `pg_authid.rolpassword`).
-- **Databases / schemas / tables / columns**: `pg_database`, `pg_namespace`,
-  `pg_class`, `pg_attribute`, plus the `information_schema.*` views.
-- **Grants**: `information_schema.table_privileges`,
-  `information_schema.role_table_grants`, `pg_class.relacl`.
-- **Constraints / indexes**: `information_schema.table_constraints`,
-  `pg_indexes`, etc.
-
-Limits to flag in the spec:
-
-- `pg_stat_activity.query` for *other* sessions is masked unless the role has
-  `pg_read_all_stats`. Not granting this by default is the right call — if
-  needed later, add it as an explicit toggle.
-- A connection is bound to one database; cross-DB queries don't work. To list
-  all databases on a cluster the MCP server reads `pg_database` from any one
-  connection.
-
-## SQL safety posture
-
-This is a development-only server with intentionally open SQL input, so
-transaction-wrapping is not worth the complexity:
-
-- `SET TRANSACTION READ ONLY` is trivially escapable from arbitrary input
-  (`COMMIT; …` / `RESET …`), so it provides no real boundary. The PG
-  privileges on the read-only role are the actual safety net.
-- A server-side **`statement_timeout`** is worth setting (via the
-  credential's connection string or `SET statement_timeout` at session
-  open) — it is enforced by the server and survives client-side escapes,
-  which guards against `pg_sleep`-style connection exhaustion.
-
-## Tasks
-
-- [ ] **Component skeleton**: create `cmd/db-mcp/main.go` and
-  `cmd/db-mcp/spec.md` per the project layout in
-  [docs/standards.md](standards.md). Wire it into the Helm chart and Tiltfile
-  alongside the existing components.
-- [ ] **Cluster discovery**: watch `PostgresCluster` (and the credential CRs
-  that reference it) using the same controller-runtime setup as
-  `cmd/db-operator`. Maintain an in-memory index of cluster → databases.
-- [ ] **Read-only credential CRs**: for each discovered `PostgresCluster`,
-  reconcile a managed `PostgresCredential` (owner-referenced by the MCP
-  Deployment) granting `SELECT` on every database on that cluster. Wait for
-  the operator-produced Secret before serving requests against that cluster.
-- [ ] **Confirm `SELECT`-only is expressible**: today the smallest grant in
-  [pkg/api/v1alpha1](../pkg/api/v1alpha1) is `read`/`write` — verify this
-  maps to plain `SELECT` (no `INSERT`/`UPDATE`/`DELETE`). If not, add a
-  `readOnly` permission level before the MCP work lands.
-- [ ] **MCP server**: pick an MCP Go SDK (research current options — none is
-  vendored today) and expose `pg_list_clusters` and `pg_exec_sql`. Set a
-  server-side `statement_timeout` on every connection; do **not** wrap input
-  in `SET TRANSACTION READ ONLY` (trivially escapable from arbitrary SQL —
-  the role's privileges are the real boundary).
-- [ ] **Tests**: integration test under `internal/` that spins up a Postgres
-  cluster via the existing test harness, exercises `pg_list_clusters` and
-  `pg_exec_sql`, and asserts that write statements (`INSERT`, `CREATE TABLE`)
-  fail with a permission error.
-- [ ] **Redis design**: draft the equivalent enumeration + read-only-tool
-  spec for `RedisCluster` CRs. Add tasks under a new sub-section once
-  agreed.
-- [ ] **NATS design**: draft the equivalent enumeration + observation-tool
-  spec for `NatsCluster` CRs. Add tasks under a new sub-section once
-  agreed.
-
