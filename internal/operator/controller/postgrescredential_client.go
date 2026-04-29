@@ -77,6 +77,15 @@ type PostgresManager interface {
 	// FindOwner returns the current PostgreSQL owner role of dbName, or an empty
 	// string if the database does not exist.
 	FindOwner(host, adminUser, adminPass, dbName string) (string, error)
+	// EnsureUserExists creates the role with a login password if it does not
+	// already exist. It is used when a credential carries no per-database
+	// permissions but still needs the role provisioned (e.g. for clusterRoles
+	// membership grants).
+	EnsureUserExists(host, adminUser, adminPass, username, password string) error
+	// EnsureRoleMemberships grants username membership in each of roles. The
+	// roles must come from the validClusterRoles allow-list; any other value
+	// returns an error without touching the database.
+	EnsureRoleMemberships(host, adminUser, adminPass, username string, roles []v1alpha1.PredefinedRole) error
 }
 
 // postgresManager is the production implementation of PostgresManager.
@@ -94,6 +103,18 @@ var validPermissions = map[v1alpha1.DatabasePermission]struct{}{
 	v1alpha1.PermissionReferences: {},
 	v1alpha1.PermissionTrigger:    {},
 	v1alpha1.PermissionAll:        {},
+}
+
+// validClusterRoles is the allow-list of PostgreSQL predefined roles that may
+// be granted via spec.clusterRoles. Any role outside this set is rejected
+// before reaching SQL — this prevents accidental escalation to roles like
+// pg_write_all_data, pg_read_server_files, or pg_execute_server_program, which
+// can yield superuser-equivalent capabilities.
+var validClusterRoles = map[v1alpha1.PredefinedRole]struct{}{
+	v1alpha1.RolePgReadAllData:     {},
+	v1alpha1.RolePgReadAllStats:    {},
+	v1alpha1.RolePgReadAllSettings: {},
+	v1alpha1.RolePgMonitor:         {},
 }
 
 // EnsureDatabase connects to the maintenance database and creates the specified
@@ -228,6 +249,64 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 		}
 	}
 
+	return nil
+}
+
+// EnsureUserExists creates the role with LOGIN PASSWORD if it does not already
+// exist. It connects to the maintenance database because role creation is
+// cluster-wide and does not require any particular target database.
+func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, password string) error {
+	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	if err != nil {
+		return fmt.Errorf("connecting to Postgres: %w", err)
+	}
+	defer db.Close()
+
+	var exists bool
+	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", username).Scan(&exists); err != nil {
+		return fmt.Errorf("checking if role exists: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s",
+		pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
+	if _, err := db.Exec(createSQL); err != nil {
+		return fmt.Errorf("creating role %q: %w", username, err)
+	}
+	return nil
+}
+
+// EnsureRoleMemberships grants username membership in each of roles. The role
+// names are validated against validClusterRoles before any SQL is executed so
+// that only known-safe predefined roles can ever reach the database.
+func (p postgresManager) EnsureRoleMemberships(host, adminUser, adminPass, username string, roles []v1alpha1.PredefinedRole) error {
+	if len(roles) == 0 {
+		return nil
+	}
+
+	for _, r := range roles {
+		if _, ok := validClusterRoles[r]; !ok {
+			return fmt.Errorf("unknown predefined role %q", r)
+		}
+	}
+
+	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	if err != nil {
+		return fmt.Errorf("connecting to Postgres: %w", err)
+	}
+	defer db.Close()
+
+	quotedUser := pq.QuoteIdentifier(username)
+	for _, r := range roles {
+		// Predefined role names are not user-supplied identifiers but quoting them
+		// is still correct and harmless.
+		grantSQL := fmt.Sprintf("GRANT %s TO %s", pq.QuoteIdentifier(string(r)), quotedUser)
+		if _, err := db.Exec(grantSQL); err != nil {
+			return fmt.Errorf("granting role %q to %q: %w", r, username, err)
+		}
+	}
 	return nil
 }
 

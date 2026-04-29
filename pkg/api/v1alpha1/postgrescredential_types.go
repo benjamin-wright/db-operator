@@ -32,6 +32,31 @@ const (
 	PermissionAll        DatabasePermission = "ALL"
 )
 
+// PredefinedRole names a PostgreSQL predefined role that may be granted to a
+// credential via spec.clusterRoles. The set is intentionally limited to roles
+// that are useful as cluster-wide membership grants (e.g. for a read-only
+// inspection user) rather than the full upstream list, which contains roles
+// that grant superuser-equivalent capabilities.
+// +kubebuilder:validation:Enum=pg_read_all_data;pg_read_all_stats;pg_read_all_settings;pg_monitor
+type PredefinedRole string
+
+const (
+	// RolePgReadAllData grants SELECT on all tables/views/sequences and USAGE on
+	// all schemas via role membership. Unlike per-table GRANTs, this covers
+	// tables created later by any role, with no ALTER DEFAULT PRIVILEGES needed.
+	// Does not bypass row-level security.
+	RolePgReadAllData PredefinedRole = "pg_read_all_data"
+	// RolePgReadAllStats grants read access to all pg_stat_* views and related
+	// statistics, even those normally restricted to superusers.
+	RolePgReadAllStats PredefinedRole = "pg_read_all_stats"
+	// RolePgReadAllSettings grants read access to all configuration variables,
+	// including those normally visible only to superusers.
+	RolePgReadAllSettings PredefinedRole = "pg_read_all_settings"
+	// RolePgMonitor is a member of pg_read_all_settings, pg_read_all_stats and
+	// pg_stat_scan_tables; convenient for monitoring users.
+	RolePgMonitor PredefinedRole = "pg_monitor"
+)
+
 // DatabasePermissionEntry maps a set of table-level privileges to one or more
 // logical databases within the target PostgreSQL instance.
 type DatabasePermissionEntry struct {
@@ -52,7 +77,8 @@ type DatabasePermissionEntry struct {
 }
 
 // PostgresCredentialSpec defines the desired state of PostgresCredential.
-// +kubebuilder:validation:XValidation:rule="!self.databaseOwner || size(self.permissions) > 0",message="databaseOwner: true requires at least one permissions entry"
+// +kubebuilder:validation:XValidation:rule="!(has(self.databaseOwner) && self.databaseOwner) || (has(self.permissions) && size(self.permissions) > 0)",message="databaseOwner: true requires at least one permissions entry"
+// +kubebuilder:validation:XValidation:rule="(has(self.permissions) && size(self.permissions) > 0) || (has(self.clusterRoles) && size(self.clusterRoles) > 0)",message="at least one of permissions or clusterRoles must be set"
 type PostgresCredentialSpec struct {
 	// DatabaseRef is the name of the PostgresDatabase resource in the same namespace
 	// that this credential targets.
@@ -91,6 +117,20 @@ type PostgresCredentialSpec struct {
 	// also runs ALTER DEFAULT PRIVILEGES FOR ROLE <owner> so that tables created later by
 	// the owner are auto-granted to those credentials.
 	// +optional
+
+	// ClusterRoles is the set of PostgreSQL predefined roles to grant to this
+	// credential via role membership (GRANT <role> TO <username>). Membership
+	// grants are cluster-wide and apply across all databases the user connects
+	// to, including future objects created by any role — they are the correct
+	// mechanism for a stable read-only inspection user that must see tables
+	// created later by an arbitrary migrations role.
+	//
+	// Use clusterRoles instead of permissions when blanket access is desired.
+	// The two fields may also be combined: clusterRoles for broad access,
+	// permissions for additional narrowly-scoped grants.
+	// +optional
+	// +listType=set
+	ClusterRoles []PredefinedRole `json:"clusterRoles,omitempty"`
 	DatabaseOwner bool `json:"databaseOwner,omitempty"`
 }
 

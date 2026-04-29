@@ -138,6 +138,16 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 				"PasswordGenerationFailed", err.Error()), err
 		}
 
+		// When the credential carries no per-database permissions (clusterRoles
+		// only), EnsureUser is never called by the loop below. Provision the
+		// role here so role-membership grants have something to attach to.
+		if len(pgcred.Spec.Permissions) == 0 {
+			if err := r.pgDB.EnsureUserExists(host, adminUser, adminPass, pgcred.Spec.Username, password); err != nil {
+				return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+					"UserCreationFailed", err.Error()), err
+			}
+		}
+
 		for _, entry := range pgcred.Spec.Permissions {
 			for _, dbName := range entry.Databases {
 				if err := r.pgDB.EnsureDatabase(host, adminUser, adminPass, dbName); err != nil {
@@ -165,6 +175,13 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 							"OwnerSetupFailed", err.Error()), err
 					}
 				}
+			}
+		}
+
+		if len(pgcred.Spec.ClusterRoles) > 0 {
+			if err := r.pgDB.EnsureRoleMemberships(host, adminUser, adminPass, pgcred.Spec.Username, pgcred.Spec.ClusterRoles); err != nil {
+				return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+					"ClusterRoleGrantFailed", err.Error()), err
 			}
 		}
 
@@ -224,6 +241,15 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 			adminUser := string(adminSecret.Data["PGUSER"])
 			adminPass := string(adminSecret.Data["PGPASSWORD"])
 			host := postgresHost(&pgdb)
+
+			if len(pgcred.Spec.Permissions) == 0 {
+				// clusterRoles-only credential: no per-database work to clear.
+				// Drop the role using the maintenance database so DROP OWNED has
+				// somewhere valid to run against.
+				if err := r.pgDB.DropUser(host, adminUser, adminPass, "postgres", pgcred.Spec.Username); err != nil {
+					logger.Error(err, "failed to drop Postgres user during cleanup", "username", pgcred.Spec.Username)
+				}
+			}
 
 			for _, entry := range pgcred.Spec.Permissions {
 				for _, dbName := range entry.Databases {

@@ -16,6 +16,9 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
   - At most one credential per `(databaseRef, database)` may set `databaseOwner: true`; a second credential with `databaseOwner: true` targeting the same database transitions to `Failed` with reason `OwnerConflict`
   - When a non-owner credential is reconciled against a database that has an owner, the operator additionally sets `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` so tables and sequences created later by the owner are auto-granted to that credential
   - `spec.databaseOwner: true` requires `spec.permissions` to be non-empty (CEL-validated)
+  - `spec.clusterRoles` grants cluster-wide PostgreSQL predefined role memberships (`GRANT <role> TO <username>`); membership is the correct mechanism when a credential needs blanket access that survives later DDL by other roles, because predefined roles are evaluated at access time and apply to all current and future objects without `ALTER DEFAULT PRIVILEGES`
+    - Allowed values: `pg_read_all_data`, `pg_read_all_stats`, `pg_read_all_settings`, `pg_monitor` — chosen to avoid superuser-equivalent roles such as `pg_write_all_data`, `pg_read_server_files`, and `pg_execute_server_program`
+    - May be combined with `spec.permissions`, or used alone (in which case the role is created but no per-database GRANTs are issued); CEL validation requires at least one of `permissions` or `clusterRoles` to be set
 - `RedisDatabase` CRD — declares a Redis 8 instance with a storage size; the operator provisions a StatefulSet, headless Service, and admin Secret for each instance
   - Admin Secret keys: `username` (always `"default"`), `password`
 - `RedisCredential` CRD — declares a Redis ACL user against a referenced `RedisDatabase`; the operator generates a random password, creates the ACL user, and writes credentials to a named Kubernetes Secret in the same namespace

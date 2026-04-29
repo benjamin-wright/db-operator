@@ -5,7 +5,7 @@ An in-cluster Model Context Protocol server that exposes read-only inspection of
 
 ## Scope
 - Discovers `PostgresCluster` CRs across all watched namespaces and maintains an in-memory index of cluster → databases
-- For each discovered `PostgresCluster`, reconciles a managed `PostgresCredential` CR granting `SELECT`-only access to every database on that cluster; credential lifecycle (role creation, grants, Secret materialisation) is handled by the operator
+- For each discovered `PostgresCluster`, reconciles a managed `PostgresCredential` CR that grants the `pg_read_all_data` predefined role via `spec.clusterRoles`; this gives the MCP user SELECT on every current and future table across all databases on the cluster without per-database `GRANT` plumbing or `ALTER DEFAULT PRIVILEGES` workarounds, and survives DDL performed by any role (including migrations users that are not the registered database owner). Credential lifecycle (role creation, role-membership grant, Secret materialisation) is handled by the operator
 - Waits for the operator-produced Secret before serving requests against a cluster
 - Exposes two MCP tools for Postgres:
   - `pg_list_clusters` — returns all visible `PostgresCluster` CRs with their namespace, name, host, and the list of databases derived from `PostgresCredential` CRs that target the cluster

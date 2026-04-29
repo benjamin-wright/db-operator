@@ -3,7 +3,6 @@ package pgwatcher
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"time"
 
@@ -71,7 +70,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, r.deleteMCPCredential(ctx, req.Namespace, req.Name)
 	}
 
-	result, err := r.reconcileMCPCredential(ctx, req.Namespace, req.Name, userDatabases)
+	result, err := r.reconcileMCPCredential(ctx, req.Namespace, req.Name)
 	if err != nil || result.Requeue || result.RequeueAfter > 0 {
 		return result, err
 	}
@@ -113,10 +112,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// reconcileMCPCredential creates or updates the MCP-managed PostgresCredential for
-// the given database, covering all databases in userDatabases with SELECT access.
+// reconcileMCPCredential creates the MCP-managed PostgresCredential for the
+// given database. The credential uses cluster-level role membership
+// (pg_read_all_data) so it does not need to list per-database permissions —
+// once created it requires no further updates as user databases come and go.
 // Returns a non-zero Result when the caller should not proceed to Secret lookup yet.
-func (r *Reconciler) reconcileMCPCredential(ctx context.Context, namespace, dbName string, userDatabases []string) (ctrl.Result, error) {
+func (r *Reconciler) reconcileMCPCredential(ctx context.Context, namespace, dbName string) (ctrl.Result, error) {
 	mcpCredName := mcpCredentialName(dbName)
 	desired := &v1alpha1.PostgresCredential{
 		ObjectMeta: metav1.ObjectMeta{
@@ -127,15 +128,10 @@ func (r *Reconciler) reconcileMCPCredential(ctx context.Context, namespace, dbNa
 			},
 		},
 		Spec: v1alpha1.PostgresCredentialSpec{
-			DatabaseRef: dbName,
-			Username:    mcpUsername,
-			SecretName:  mcpCredName,
-			Permissions: []v1alpha1.DatabasePermissionEntry{
-				{
-					Databases:   userDatabases,
-					Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
-				},
-			},
+			DatabaseRef:  dbName,
+			Username:     mcpUsername,
+			SecretName:   mcpCredName,
+			ClusterRoles: []v1alpha1.PredefinedRole{v1alpha1.RolePgReadAllData},
 		},
 	}
 
@@ -149,16 +145,6 @@ func (r *Reconciler) reconcileMCPCredential(ctx context.Context, namespace, dbNa
 			return ctrl.Result{}, fmt.Errorf("creating MCP credential: %w", createErr)
 		}
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
-	}
-
-	if !databaseSetsEqual(existing.Spec.Permissions, desired.Spec.Permissions) {
-		existing.Spec.Permissions = desired.Spec.Permissions
-		if updateErr := r.client.Update(ctx, &existing); updateErr != nil {
-			if apierrors.IsConflict(updateErr) {
-				return ctrl.Result{Requeue: true}, nil
-			}
-			return ctrl.Result{}, fmt.Errorf("updating MCP credential: %w", updateErr)
-		}
 	}
 
 	return ctrl.Result{}, nil
@@ -231,20 +217,4 @@ func userDatabaseUnion(creds []v1alpha1.PostgresCredential, dbName string) []str
 	}
 	sort.Strings(result)
 	return result
-}
-
-// databaseSetsEqual returns true if the two permission slices collectively
-// reference the same set of databases (order-independent).
-func databaseSetsEqual(a, b []v1alpha1.DatabasePermissionEntry) bool {
-	return slices.Equal(permissionDatabases(a), permissionDatabases(b))
-}
-
-// permissionDatabases extracts and sorts all database names from a permissions slice.
-func permissionDatabases(entries []v1alpha1.DatabasePermissionEntry) []string {
-	var dbs []string
-	for _, e := range entries {
-		dbs = append(dbs, e.Databases...)
-	}
-	sort.Strings(dbs)
-	return dbs
 }

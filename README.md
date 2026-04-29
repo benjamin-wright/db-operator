@@ -164,6 +164,24 @@ spec:
 
 When `tables` is set, the operator runs `GRANT SELECT ON TABLE orders, products TO readonly` — no other tables are accessible. Note that `ALTER DEFAULT PRIVILEGES` is **not** applied for table-scoped entries; tables created after the credential is provisioned will not be auto-granted. If any listed table does not exist when the credential is reconciled, the credential transitions to `Failed` with reason `TableNotFound`.
 
+For credentials that need blanket access spanning all current and future tables — including those created later by other roles such as a migrations user that is not the database owner — use `clusterRoles` to grant a PostgreSQL predefined role via membership:
+
+```yaml
+apiVersion: db-operator.benjamin-wright.github.com/v1alpha1
+kind: PostgresCredential
+metadata:
+  name: inspector-creds
+  namespace: default
+spec:
+  databaseRef: my-postgres
+  username: inspector
+  secretName: inspector-postgres-secret
+  clusterRoles:
+    - pg_read_all_data
+```
+
+Membership in `pg_read_all_data` is a cluster-wide grant resolved at access time, so it covers tables created later by any role without any per-database `GRANT` plumbing. Allowed values are `pg_read_all_data`, `pg_read_all_stats`, `pg_read_all_settings`, and `pg_monitor`. `clusterRoles` may be set on its own or combined with `permissions`; at least one of the two must be present.
+
 ### Redis
 
 ```yaml

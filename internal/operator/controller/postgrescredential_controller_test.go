@@ -929,4 +929,126 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			}, Timeout, Interval).Should(Succeed())
 		})
 	})
+
+	// ── clusterRoles: pg_read_all_data without per-database permissions ──────
+	Context("when a credential sets clusterRoles only", Ordered, func() {
+		var (
+			ns               *corev1.Namespace
+			pgdb             *v1alpha1.PostgresDatabase
+			cred             *v1alpha1.PostgresCredential
+			dbLookup         types.NamespacedName
+			adminSecretLookup types.NamespacedName
+			credLookup       types.NamespacedName
+			credSecretLookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("clusterroles-db")
+			WaitForDatabase(dbLookup)
+
+			// Create a table in the default "postgres" database as the admin so
+			// the clusterRoles user has something to read via pg_read_all_data.
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "postgres")
+			defer closeConn()
+			_, err := db.Exec("CREATE TABLE IF NOT EXISTS cr_widgets (id int)")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = db.Exec("INSERT INTO cr_widgets VALUES (1), (2), (3)")
+			Expect(err).NotTo(HaveOccurred())
+
+			cred = &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cr-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef:  pgdb.Name,
+					Username:     "cruser",
+					SecretName:   "cr-cred-secret",
+					ClusterRoles: []v1alpha1.PredefinedRole{v1alpha1.RolePgReadAllData},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, cred)).To(Succeed())
+			credLookup = types.NamespacedName{Name: cred.Name, Namespace: ns.Name}
+			credSecretLookup = types.NamespacedName{Name: cred.Spec.SecretName, Namespace: ns.Name}
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should transition to Ready", func() {
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should grant pg_read_all_data membership", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "postgres")
+			defer closeConn()
+			var hasMembership bool
+			err := db.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1 FROM pg_auth_members am
+					JOIN pg_roles r ON r.oid = am.roleid
+					JOIN pg_roles m ON m.oid = am.member
+					WHERE r.rolname = 'pg_read_all_data' AND m.rolname = 'cruser'
+				)`).Scan(&hasMembership)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hasMembership).To(BeTrue())
+		})
+
+		It("should let the user SELECT from a table created by the admin", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, credSecretLookup, "postgres")
+			defer closeConn()
+			var count int
+			err := db.QueryRow("SELECT count(*) FROM cr_widgets").Scan(&count)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(count).To(Equal(3))
+		})
+
+		It("should let the user SELECT from a table created AFTER the credential", func() {
+			adminDB, closeAdmin := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "postgres")
+			defer closeAdmin()
+			_, err := adminDB.Exec("CREATE TABLE cr_late (id int)")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = adminDB.Exec("INSERT INTO cr_late VALUES (42)")
+			Expect(err).NotTo(HaveOccurred())
+
+			userDB, closeUser := ConnectToDatabaseNamed(dbLookup, credSecretLookup, "postgres")
+			defer closeUser()
+			var v int
+			err = userDB.QueryRow("SELECT id FROM cr_late").Scan(&v)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(v).To(Equal(42))
+		})
+
+		It("should NOT let the user INSERT (read-only role)", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, credSecretLookup, "postgres")
+			defer closeConn()
+			_, err := db.Exec("INSERT INTO cr_widgets VALUES (99)")
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should drop the role on credential deletion", func() {
+			Expect(K8sClient.Delete(Ctx, cred)).To(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				err := K8sClient.Get(Ctx, credLookup, &fetched)
+				g.Expect(client.IgnoreNotFound(err)).To(Succeed())
+				g.Expect(err).To(HaveOccurred())
+			}, Timeout, Interval).Should(Succeed())
+
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "postgres")
+			defer closeConn()
+			var exists bool
+			err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'cruser')").Scan(&exists)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(exists).To(BeFalse())
+		})
+	})
 })
