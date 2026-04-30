@@ -314,21 +314,36 @@ func (p postgresManager) EnsureRoleMemberships(host, adminUser, adminPass, usern
 // public schema. It connects to the maintenance database for the ALTER DATABASE
 // statement (which cannot run inside the target database), then connects to the
 // target database to set schema-level grants.
+//
+// When ownership transitions from a different role, EnsureOwner also replays
+// every public-schema default-privilege entry that was attached to the previous
+// owner against the new owner. Without this, sibling credentials provisioned
+// before the owner transition (whose ALTER DEFAULT PRIVILEGES targeted the
+// then-current owner) would receive no grants on tables created by the new
+// owner. The previous owner's entries are left in place because they are inert
+// once the role no longer creates objects.
 func (p postgresManager) EnsureOwner(host, adminUser, adminPass, dbName, username string) error {
-	// ALTER DATABASE … OWNER TO must run outside the target database.
 	maintenanceDB, err := openPostgres(host, adminUser, adminPass, "postgres")
 	if err != nil {
 		return fmt.Errorf("connecting to maintenance database: %w", err)
 	}
 	defer maintenanceDB.Close()
 
-	alterOwnerSQL := fmt.Sprintf("ALTER DATABASE %s OWNER TO %s",
-		pq.QuoteIdentifier(dbName), pq.QuoteIdentifier(username))
-	if _, err := maintenanceDB.Exec(alterOwnerSQL); err != nil {
-		return fmt.Errorf("setting owner of database %q to %q: %w", dbName, username, err)
+	var previousOwner string
+	if err := maintenanceDB.QueryRow(
+		"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = $1", dbName,
+	).Scan(&previousOwner); err != nil {
+		return fmt.Errorf("looking up current owner of database %q: %w", dbName, err)
 	}
 
-	// Schema-level grants must run inside the target database.
+	if previousOwner != username {
+		alterOwnerSQL := fmt.Sprintf("ALTER DATABASE %s OWNER TO %s",
+			pq.QuoteIdentifier(dbName), pq.QuoteIdentifier(username))
+		if _, err := maintenanceDB.Exec(alterOwnerSQL); err != nil {
+			return fmt.Errorf("setting owner of database %q to %q: %w", dbName, username, err)
+		}
+	}
+
 	db, err := openPostgres(host, adminUser, adminPass, dbName)
 	if err != nil {
 		return fmt.Errorf("connecting to database %q: %w", dbName, err)
@@ -346,7 +361,58 @@ func (p postgresManager) EnsureOwner(host, adminUser, adminPass, dbName, usernam
 			return fmt.Errorf("granting schema access to %q: %w", username, err)
 		}
 	}
+
+	if previousOwner != "" && previousOwner != username {
+		if err := replayDefaultPrivileges(db, previousOwner, username); err != nil {
+			return fmt.Errorf("replaying default privileges from %q to %q: %w", previousOwner, username, err)
+		}
+	}
+
 	return nil
+}
+
+// replayDefaultPrivileges copies every TABLES/SEQUENCES default-privilege entry
+// attached to previousOwner in the public schema and re-emits it under
+// newOwner. Other object types (FUNCTIONS, TYPES, SCHEMAS) are skipped because
+// EnsureUser never produces them.
+func replayDefaultPrivileges(db *sql.DB, previousOwner, newOwner string) error {
+	rows, err := db.Query(`
+		SELECT grantee::regrole::text, privilege_type, dacl.defaclobjtype
+		FROM pg_catalog.pg_default_acl dacl,
+		     LATERAL pg_catalog.aclexplode(dacl.defaclacl)
+		WHERE dacl.defaclrole = $1::regrole
+		  AND dacl.defaclnamespace = 'public'::regnamespace
+		  AND dacl.defaclobjtype IN ('r', 'S')
+	`, previousOwner)
+	if err != nil {
+		return fmt.Errorf("querying pg_default_acl for %q: %w", previousOwner, err)
+	}
+	defer rows.Close()
+
+	objectTypeKeyword := map[string]string{"r": "TABLES", "S": "SEQUENCES"}
+	quotedNewOwner := pq.QuoteIdentifier(newOwner)
+
+	for rows.Next() {
+		var grantee, privilege, objType string
+		if err := rows.Scan(&grantee, &privilege, &objType); err != nil {
+			return fmt.Errorf("scanning pg_default_acl row: %w", err)
+		}
+		if grantee == "" || grantee == newOwner {
+			continue
+		}
+		keyword, ok := objectTypeKeyword[objType]
+		if !ok {
+			continue
+		}
+
+		stmt := fmt.Sprintf(
+			"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public GRANT %s ON %s TO %s",
+			quotedNewOwner, privilege, keyword, pq.QuoteIdentifier(grantee))
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("re-granting default %s on %s to %q: %w", privilege, keyword, grantee, err)
+		}
+	}
+	return rows.Err()
 }
 
 // FindOwner returns the current PostgreSQL owner of dbName, or an empty string

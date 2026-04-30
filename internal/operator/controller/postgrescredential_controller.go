@@ -131,65 +131,67 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
 	}
-	if !secretFound {
-		password, err := generatePassword(24)
+
+	password := string(existingSecret.Data["PGPASSWORD"])
+	if !secretFound || password == "" {
+		password, err = generatePassword(24)
 		if err != nil {
 			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 				"PasswordGenerationFailed", err.Error()), err
 		}
+	}
 
-		// When the credential carries no per-database permissions (clusterRoles
-		// only), EnsureUser is never called by the loop below. Provision the
-		// role here so role-membership grants have something to attach to.
-		if len(pgcred.Spec.Permissions) == 0 {
-			if err := r.pgDB.EnsureUserExists(host, adminUser, adminPass, pgcred.Spec.Username, password); err != nil {
+	// EnsureUserExists is only needed for clusterRoles-only credentials —
+	// EnsureUser inside the Permissions loop creates the role otherwise. For
+	// existing roles EnsureUserExists is a no-op (it does not rotate the
+	// password), so the password recovered from the Secret remains authoritative.
+	if len(pgcred.Spec.Permissions) == 0 {
+		if err := r.pgDB.EnsureUserExists(host, adminUser, adminPass, pgcred.Spec.Username, password); err != nil {
+			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+				"UserCreationFailed", err.Error()), err
+		}
+	}
+
+	for _, entry := range pgcred.Spec.Permissions {
+		for _, dbName := range entry.Databases {
+			if err := r.pgDB.EnsureDatabase(host, adminUser, adminPass, dbName); err != nil {
+				return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+					"DatabaseCreationFailed", err.Error()), err
+			}
+			if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions, entry.Tables); err != nil {
+				if isTableNotFoundError(err) {
+					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
+						"WaitingForTable", err.Error()), err
+				}
 				return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 					"UserCreationFailed", err.Error()), err
 			}
-		}
-
-		for _, entry := range pgcred.Spec.Permissions {
-			for _, dbName := range entry.Databases {
-				if err := r.pgDB.EnsureDatabase(host, adminUser, adminPass, dbName); err != nil {
-					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
-						"DatabaseCreationFailed", err.Error()), err
+			if pgcred.Spec.DatabaseOwner {
+				conflict, conflictResult, conflictErr := r.checkOwnerConflict(ctx, pgcred, host, adminUser, adminPass, dbName)
+				if conflictErr != nil {
+					return conflictResult, conflictErr
 				}
-				if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions, entry.Tables); err != nil {
-					reason := "UserCreationFailed"
-					if isTableNotFoundError(err) {
-						reason = "TableNotFound"
-					}
-					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
-						reason, err.Error()), err
+				if conflict {
+					return conflictResult, nil
 				}
-				if pgcred.Spec.DatabaseOwner {
-					conflict, conflictResult, conflictErr := r.checkOwnerConflict(ctx, pgcred, host, adminUser, adminPass, dbName)
-					if conflictErr != nil {
-						return conflictResult, conflictErr
-					}
-					if conflict {
-						return conflictResult, nil
-					}
-					if err := r.pgDB.EnsureOwner(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
-						return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
-							"OwnerSetupFailed", err.Error()), err
-					}
+				if err := r.pgDB.EnsureOwner(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
+					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+						"OwnerSetupFailed", err.Error()), err
 				}
 			}
 		}
+	}
 
-		if len(pgcred.Spec.ClusterRoles) > 0 {
-			if err := r.pgDB.EnsureRoleMemberships(host, adminUser, adminPass, pgcred.Spec.Username, pgcred.Spec.ClusterRoles); err != nil {
-				return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
-					"ClusterRoleGrantFailed", err.Error()), err
-			}
+	if len(pgcred.Spec.ClusterRoles) > 0 {
+		if err := r.pgDB.EnsureRoleMemberships(host, adminUser, adminPass, pgcred.Spec.Username, pgcred.Spec.ClusterRoles); err != nil {
+			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
+				"ClusterRoleGrantFailed", err.Error()), err
 		}
+	}
 
-		// Only set PGDATABASE when the credential targets exactly one database.
-		// With multiple databases the key is omitted so that applications must
-		// explicitly name the target database; a missing target will produce a
-		// permissions error rather than silently operating on an operator-chosen
-		// default.
+	if !secretFound {
+		// PGDATABASE is only set when the credential targets exactly one
+		// database; otherwise applications must name the target explicitly.
 		secretData := map[string]string{
 			"PGUSER":     pgcred.Spec.Username,
 			"PGPASSWORD": password,

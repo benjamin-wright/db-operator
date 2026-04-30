@@ -918,14 +918,14 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			_ = K8sClient.Delete(Ctx, ns)
 		})
 
-		It("should transition to Failed with reason TableNotFound", func() {
+		It("should transition to Pending with reason WaitingForTable", func() {
 			Eventually(func(g Gomega) {
 				var fetched v1alpha1.PostgresCredential
 				g.Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseFailed))
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhasePending))
 				cond := meta.FindStatusCondition(fetched.Status.Conditions, "Ready")
 				g.Expect(cond).NotTo(BeNil())
-				g.Expect(cond.Reason).To(Equal("TableNotFound"))
+				g.Expect(cond.Reason).To(Equal("WaitingForTable"))
 			}, Timeout, Interval).Should(Succeed())
 		})
 	})
@@ -1049,6 +1049,243 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'cruser')").Scan(&exists)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(exists).To(BeFalse())
+		})
+	})
+
+	Context("Bug A: non-owner created before owner transition loses default privs", Ordered, func() {
+		var (
+			ns                *corev1.Namespace
+			pgdb              *v1alpha1.PostgresDatabase
+			dbLookup          types.NamespacedName
+			adminSecretLookup types.NamespacedName
+			readerLookup      types.NamespacedName
+			ownerLookup       types.NamespacedName
+			readerSecretKey   types.NamespacedName
+			ownerSecretKey    types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("bug-a-db")
+			WaitForDatabase(dbLookup)
+
+			readerCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "bug-a-reader",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "bug_a_reader",
+					SecretName:  "bug-a-reader-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"bug_a_db"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, readerCred)).To(Succeed())
+			readerLookup = types.NamespacedName{Name: readerCred.Name, Namespace: ns.Name}
+			readerSecretKey = types.NamespacedName{Name: readerCred.Spec.SecretName, Namespace: ns.Name}
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, readerLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			ownerCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "bug-a-owner",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef:   pgdb.Name,
+					Username:      "bug_a_owner",
+					SecretName:    "bug-a-owner-secret",
+					DatabaseOwner: true,
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"bug_a_db"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, ownerCred)).To(Succeed())
+			ownerLookup = types.NamespacedName{Name: ownerCred.Name, Namespace: ns.Name}
+			ownerSecretKey = types.NamespacedName{Name: ownerCred.Spec.SecretName, Namespace: ns.Name}
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, ownerLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			adminDB, closeAdmin := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "postgres")
+			defer closeAdmin()
+			var owner string
+			Expect(adminDB.QueryRow(
+				"SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'bug_a_db'",
+			).Scan(&owner)).To(Succeed())
+			Expect(owner).To(Equal("bug_a_owner"))
+
+			ownerDB, closeOwner := ConnectToDatabaseNamed(dbLookup, ownerSecretKey, "bug_a_db")
+			defer closeOwner()
+			_, err := ownerDB.Exec("CREATE TABLE bug_a_widgets (id INT)")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = ownerDB.Exec("INSERT INTO bug_a_widgets VALUES (1), (2), (3)")
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should record bug_a_owner as defaclrole in pg_default_acl", func() {
+			adminDB, closeAdmin := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "bug_a_db")
+			defer closeAdmin()
+			var hasEntry bool
+			Expect(adminDB.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1
+					FROM pg_catalog.pg_default_acl
+					WHERE defaclrole = 'bug_a_owner'::regrole
+					  AND defaclnamespace = 'public'::regnamespace
+				)`).Scan(&hasEntry)).To(Succeed())
+			Expect(hasEntry).To(BeTrue())
+		})
+
+		It("should let the reader SELECT from the table created by the new owner", func() {
+			readerDB, closeReader := ConnectToDatabaseNamed(dbLookup, readerSecretKey, "bug_a_db")
+			defer closeReader()
+			var count int
+			err := readerDB.QueryRow("SELECT count(*) FROM bug_a_widgets").Scan(&count)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(count).To(Equal(3))
+		})
+	})
+
+	Context("Bug B: table-scoped credential should recover when the table appears", Ordered, func() {
+		var (
+			ns                *corev1.Namespace
+			pgdb              *v1alpha1.PostgresDatabase
+			dbLookup          types.NamespacedName
+			adminSecretLookup types.NamespacedName
+			lateCredLookup    types.NamespacedName
+			lateSecretLookup  types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("bug-b-db")
+			WaitForDatabase(dbLookup)
+
+			bootstrap := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "bug-b-bootstrap",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "bug_b_bootstrap",
+					SecretName:  "bug-b-bootstrap-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"bug_b_db"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, bootstrap)).To(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: bootstrap.Name, Namespace: ns.Name}, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			lateCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "bug-b-late",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "bug_b_late",
+					SecretName:  "bug-b-late-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"bug_b_db"},
+							Tables:      []string{"bug_b_late_table"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, lateCred)).To(Succeed())
+			lateCredLookup = types.NamespacedName{Name: lateCred.Name, Namespace: ns.Name}
+			lateSecretLookup = types.NamespacedName{Name: lateCred.Spec.SecretName, Namespace: ns.Name}
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).NotTo(BeEmpty())
+			}, Timeout, Interval).Should(Succeed())
+
+			adminDB, closeAdmin := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "bug_b_db")
+			defer closeAdmin()
+			_, err := adminDB.Exec("CREATE TABLE bug_b_late_table (id INT)")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = adminDB.Exec("INSERT INTO bug_b_late_table VALUES (7)")
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should not surface a terminal Failed phase for a missing table", func() {
+			Consistently(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).NotTo(Equal(v1alpha1.CredentialPhaseFailed))
+			}, 5*time.Second, Interval).Should(Succeed())
+		})
+
+		It("should transition to Ready once the table exists", func() {
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should issue credentials that authenticate against PostgreSQL", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, lateSecretLookup, "bug_b_db")
+			defer closeConn()
+			Expect(db.Ping()).To(Succeed())
+		})
+
+		It("should let the late credential SELECT from the table", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, lateSecretLookup, "bug_b_db")
+			defer closeConn()
+			var v int
+			err := db.QueryRow("SELECT id FROM bug_b_late_table").Scan(&v)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(v).To(Equal(7))
 		})
 	})
 })
