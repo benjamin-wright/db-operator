@@ -3,6 +3,7 @@ package runner
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -28,6 +29,8 @@ type fakeStore struct {
 func (f *fakeStore) EnsureTable() error { return nil }
 func (f *fakeStore) Lock() error        { return nil }
 func (f *fakeStore) Unlock() error      { return nil }
+
+func targetPtr(v int64) *int64 { return &v }
 
 func (f *fakeStore) Applied() ([]store.Record, error) {
 	return f.records, nil
@@ -67,8 +70,11 @@ func setupMigrationFiles(t *testing.T, ids, names []string) []discovery.Migratio
 		rollbackFile := filepath.Join(dir, id+"-"+name+"-rollback.sql")
 		Expect(os.WriteFile(applyFile, []byte("-- apply "+id), 0644)).To(Succeed())
 		Expect(os.WriteFile(rollbackFile, []byte("-- rollback "+id), 0644)).To(Succeed())
+		numericID, err := strconv.ParseInt(id, 10, 64)
+		Expect(err).NotTo(HaveOccurred())
 		migrations[i] = discovery.Migration{
 			ID:           id,
+			NumericID:    numericID,
 			Name:         name,
 			ApplyPath:    applyFile,
 			RollbackPath: rollbackFile,
@@ -109,7 +115,7 @@ func TestRun_ApplyAll_NoneApplied(t *testing.T) {
 	)
 
 	fs := &fakeStore{}
-	Expect(Run(fs, migrations, "")).To(Succeed())
+	Expect(Run(fs, migrations, nil)).To(Succeed())
 	Expect(fs.calls).To(HaveLen(3))
 
 	for i, c := range fs.calls {
@@ -125,7 +131,7 @@ func TestRun_NoOp_AllApplied(t *testing.T) {
 	migrations := setupMigrationFiles(t, []string{"001", "002"}, []string{"first", "second"})
 	fs := &fakeStore{records: appliedRecords(t, migrations)}
 
-	Expect(Run(fs, migrations, "")).To(Succeed())
+	Expect(Run(fs, migrations, nil)).To(Succeed())
 	Expect(fs.calls).To(BeEmpty())
 }
 
@@ -138,7 +144,7 @@ func TestRun_ApplyToTarget(t *testing.T) {
 	)
 	fs := &fakeStore{records: appliedRecords(t, migrations[:1])}
 
-	Expect(Run(fs, migrations, "002")).To(Succeed())
+	Expect(Run(fs, migrations, targetPtr(2))).To(Succeed())
 	Expect(fs.calls).To(HaveLen(1))
 	Expect(fs.calls[0].op).To(Equal("apply"))
 	Expect(fs.calls[0].id).To(Equal("002"))
@@ -153,7 +159,7 @@ func TestRun_RollbackToTarget(t *testing.T) {
 	)
 	fs := &fakeStore{records: appliedRecords(t, migrations)}
 
-	Expect(Run(fs, migrations, "001")).To(Succeed())
+	Expect(Run(fs, migrations, targetPtr(1))).To(Succeed())
 	Expect(fs.calls).To(HaveLen(2))
 
 	// Reverse order: 003 then 002
@@ -171,7 +177,7 @@ func TestRun_NoOpWhenAtTarget(t *testing.T) {
 	migrations := setupMigrationFiles(t, []string{"001", "002"}, []string{"first", "second"})
 	fs := &fakeStore{records: appliedRecords(t, migrations)}
 
-	Expect(Run(fs, migrations, "002")).To(Succeed())
+	Expect(Run(fs, migrations, targetPtr(2))).To(Succeed())
 	Expect(fs.calls).To(BeEmpty())
 }
 
@@ -185,7 +191,7 @@ func TestRun_HashMismatch(t *testing.T) {
 		},
 	}
 
-	Expect(Run(fs, migrations, "")).To(MatchError(ContainSubstring("integrity error")))
+	Expect(Run(fs, migrations, nil)).To(MatchError(ContainSubstring("integrity error")))
 	Expect(fs.calls).To(BeEmpty())
 }
 
@@ -199,7 +205,7 @@ func TestRun_RollbackHashMismatch(t *testing.T) {
 		},
 	}
 
-	Expect(Run(fs, migrations, "")).To(MatchError(ContainSubstring("integrity error")))
+	Expect(Run(fs, migrations, nil)).To(MatchError(ContainSubstring("integrity error")))
 }
 
 func TestRun_TargetNotFound(t *testing.T) {
@@ -208,5 +214,5 @@ func TestRun_TargetNotFound(t *testing.T) {
 	migrations := setupMigrationFiles(t, []string{"001"}, []string{"first"})
 	fs := &fakeStore{}
 
-	Expect(Run(fs, migrations, "999")).To(MatchError(ContainSubstring("not found")))
+	Expect(Run(fs, migrations, targetPtr(999))).To(MatchError(ContainSubstring("not found")))
 }

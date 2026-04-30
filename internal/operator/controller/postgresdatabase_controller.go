@@ -25,6 +25,12 @@ const (
 
 	// postgresPort is the default port used by PostgreSQL.
 	postgresPort = 5432
+
+	// migrationsRoleName is the operator-managed PostgreSQL role used by
+	// PostgresMigrationSet Jobs. The role is granted ownership of every
+	// logical database that a migration set targets so DDL succeeds without
+	// the user provisioning a superuser-equivalent credential.
+	migrationsRoleName = "__dbop_migrations"
 )
 
 // errStatefulSetBeingRecreated is returned by reconcileStatefulSet when the
@@ -40,6 +46,7 @@ type PostgresDatabaseReconciler struct {
 	InstanceName string
 	client       postgresDatabaseClient
 	builder      postgresDatabaseBuilder
+	pgDB         PostgresManager
 }
 
 // +kubebuilder:rbac:groups=games-hub.io,resources=postgresdatabases,verbs=get;list;watch;create;update;patch;delete
@@ -85,6 +92,10 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		reconcileErr = err
 		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
 			"AdminSecretReconcileFailed", err.Error())
+	} else if err := r.reconcileMigrationsSecret(ctx, &pgdb); err != nil {
+		reconcileErr = err
+		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
+			"MigrationsSecretReconcileFailed", err.Error())
 	} else if err := r.reconcileService(ctx, &pgdb); err != nil {
 		reconcileErr = err
 		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
@@ -102,6 +113,16 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			}
 		} else {
 			result = r.updatePhaseFromStatefulSet(&pgdb, sts)
+			// Only attempt to provision the migrations role once Postgres is
+			// actually accepting connections; otherwise the connection attempt
+			// will block reconciliation and noisily Fail.
+			if pgdb.Status.Phase == v1alpha1.DatabasePhaseReady {
+				if err := r.reconcileMigrationsRole(ctx, &pgdb); err != nil {
+					reconcileErr = err
+					result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
+						"MigrationsRoleReconcileFailed", err.Error())
+				}
+			}
 		}
 	}
 
@@ -170,6 +191,17 @@ func (r *PostgresDatabaseReconciler) reconcileDelete(ctx context.Context, pgdb *
 		return ctrl.Result{}, fmt.Errorf("deleting admin Secret: %w", err)
 	}
 
+	// Delete the operator-managed migrations Secret if it exists.
+	migrationsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      migrationsSecretName(pgdb),
+			Namespace: pgdb.Namespace,
+		},
+	}
+	if err := r.client.delete(ctx, migrationsSecret); err != nil {
+		return ctrl.Result{}, fmt.Errorf("deleting migrations Secret: %w", err)
+	}
+
 	// Remove finalizer so the CR can be garbage-collected.
 	controllerutil.RemoveFinalizer(pgdb, databaseFinalizerName)
 	if err := r.client.update(ctx, pgdb); err != nil {
@@ -210,6 +242,72 @@ func (r *PostgresDatabaseReconciler) reconcileAdminSecret(ctx context.Context, p
 	}
 
 	pgdb.Status.SecretName = name
+	return nil
+}
+
+// reconcileMigrationsSecret ensures the operator-managed Secret containing the
+// internal migrations role credentials exists. The Secret is the source of
+// truth for the role's password — reconcileMigrationsRole reads it and
+// projects the password into Postgres.
+func (r *PostgresDatabaseReconciler) reconcileMigrationsSecret(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) error {
+	name := migrationsSecretName(pgdb)
+
+	var existing corev1.Secret
+	found, err := r.client.get(ctx, client.ObjectKey{Namespace: pgdb.Namespace, Name: name}, &existing)
+	if err != nil {
+		return fmt.Errorf("fetching migrations Secret: %w", err)
+	}
+	if found {
+		return nil
+	}
+
+	secret, err := r.builder.desiredMigrationsSecret(pgdb)
+	if err != nil {
+		return fmt.Errorf("building migrations Secret: %w", err)
+	}
+	if err := r.client.create(ctx, secret); err != nil {
+		return fmt.Errorf("creating migrations Secret: %w", err)
+	}
+	return nil
+}
+
+// reconcileMigrationsRole projects the password stored in the migrations
+// Secret into a PostgreSQL login role. It must only run once Postgres is
+// accepting connections (caller's responsibility). EnsureUserExists is a no-op
+// when the role already exists, so the password is established exactly once
+// — the Secret remains the authoritative source thereafter.
+func (r *PostgresDatabaseReconciler) reconcileMigrationsRole(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) error {
+	var adminSecret corev1.Secret
+	adminKey := client.ObjectKey{Namespace: pgdb.Namespace, Name: adminSecretName(pgdb)}
+	adminFound, err := r.client.get(ctx, adminKey, &adminSecret)
+	if err != nil {
+		return fmt.Errorf("fetching admin Secret: %w", err)
+	}
+	if !adminFound {
+		return fmt.Errorf("admin Secret %q not found", adminKey.Name)
+	}
+
+	var migrationsSecret corev1.Secret
+	migrationsKey := client.ObjectKey{Namespace: pgdb.Namespace, Name: migrationsSecretName(pgdb)}
+	migrationsFound, err := r.client.get(ctx, migrationsKey, &migrationsSecret)
+	if err != nil {
+		return fmt.Errorf("fetching migrations Secret: %w", err)
+	}
+	if !migrationsFound {
+		return fmt.Errorf("migrations Secret %q not found", migrationsKey.Name)
+	}
+
+	host := postgresHost(pgdb)
+	adminUser := string(adminSecret.Data["PGUSER"])
+	adminPass := string(adminSecret.Data["PGPASSWORD"])
+	password := string(migrationsSecret.Data["PGPASSWORD"])
+	if password == "" {
+		return fmt.Errorf("migrations Secret %q is missing PGPASSWORD", migrationsKey.Name)
+	}
+
+	if err := r.pgDB.EnsureUserExists(host, adminUser, adminPass, migrationsRoleName, password); err != nil {
+		return fmt.Errorf("ensuring migrations role: %w", err)
+	}
 	return nil
 }
 
@@ -367,6 +465,9 @@ func (r *PostgresDatabaseReconciler) setPhase(
 func (r *PostgresDatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.client = postgresDatabaseClient{inner: mgr.GetClient()}
 	r.builder = postgresDatabaseBuilder{instanceName: r.InstanceName, scheme: mgr.GetScheme()}
+	if r.pgDB == nil {
+		r.pgDB = postgresManager{}
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PostgresDatabase{}).
 		Owns(&appsv1.StatefulSet{}).

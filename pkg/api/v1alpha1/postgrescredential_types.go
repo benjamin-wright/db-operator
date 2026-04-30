@@ -77,7 +77,6 @@ type DatabasePermissionEntry struct {
 }
 
 // PostgresCredentialSpec defines the desired state of PostgresCredential.
-// +kubebuilder:validation:XValidation:rule="!(has(self.databaseOwner) && self.databaseOwner) || (has(self.permissions) && size(self.permissions) > 0)",message="databaseOwner: true requires at least one permissions entry"
 // +kubebuilder:validation:XValidation:rule="(has(self.permissions) && size(self.permissions) > 0) || (has(self.clusterRoles) && size(self.clusterRoles) > 0)",message="at least one of permissions or clusterRoles must be set"
 type PostgresCredentialSpec struct {
 	// DatabaseRef is the name of the PostgresDatabase resource in the same namespace
@@ -105,19 +104,6 @@ type PostgresCredentialSpec struct {
 	// +optional
 	Permissions []DatabasePermissionEntry `json:"permissions,omitempty"`
 
-	// DatabaseOwner, when true, makes this credential the OWNER of every database listed
-	// in spec.permissions[*].databases. The role is granted ALL privileges on the database
-	// and on the public schema, enabling DDL operations.
-	//
-	// At most one credential per (databaseRef, database) may set databaseOwner: true.
-	// A second credential setting databaseOwner: true against the same database is rejected
-	// (status Failed, reason OwnerConflict).
-	//
-	// When other credentials are reconciled against an owner-managed database, the operator
-	// also runs ALTER DEFAULT PRIVILEGES FOR ROLE <owner> so that tables created later by
-	// the owner are auto-granted to those credentials.
-	// +optional
-
 	// ClusterRoles is the set of PostgreSQL predefined roles to grant to this
 	// credential via role membership (GRANT <role> TO <username>). Membership
 	// grants are cluster-wide and apply across all databases the user connects
@@ -130,8 +116,7 @@ type PostgresCredentialSpec struct {
 	// permissions for additional narrowly-scoped grants.
 	// +optional
 	// +listType=set
-	ClusterRoles  []PredefinedRole `json:"clusterRoles,omitempty"`
-	DatabaseOwner bool             `json:"databaseOwner,omitempty"`
+	ClusterRoles []PredefinedRole `json:"clusterRoles,omitempty"`
 }
 
 // PostgresCredentialStatus defines the observed state of PostgresCredential.

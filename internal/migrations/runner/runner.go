@@ -38,7 +38,8 @@ type step struct {
 }
 
 // plan determines the sequence of steps needed to reach the desired state.
-func plan(migrations []discovery.Migration, applied []store.Record, target string) ([]step, error) {
+// A nil target means "apply all discovered migrations".
+func plan(migrations []discovery.Migration, applied []store.Record, target *int64) ([]step, error) {
 	appliedSet := make(map[string]store.Record)
 	for _, r := range applied {
 		appliedSet[r.ID] = r
@@ -78,7 +79,7 @@ func plan(migrations []discovery.Migration, applied []store.Record, target strin
 	// Determine direction
 	var steps []step
 
-	if target == "" {
+	if target == nil {
 		// Apply all unapplied migrations in order
 		for _, m := range migrations {
 			if _, applied := appliedSet[m.ID]; !applied {
@@ -88,16 +89,15 @@ func plan(migrations []discovery.Migration, applied []store.Record, target strin
 		return steps, nil
 	}
 
-	// Find target index in the discovered migrations list
 	targetIdx := -1
 	for i, m := range migrations {
-		if m.ID == target {
+		if m.NumericID == *target {
 			targetIdx = i
 			break
 		}
 	}
 	if targetIdx == -1 {
-		return nil, fmt.Errorf("target migration %s not found in discovered migrations", target)
+		return nil, fmt.Errorf("target migration %d not found in discovered migrations", *target)
 	}
 
 	// Find current state: the last applied migration in discovered order
@@ -131,7 +131,7 @@ func plan(migrations []discovery.Migration, applied []store.Record, target strin
 
 // Run discovers the required migration direction, validates file integrity,
 // and executes each step via the provided store.
-func Run(s MigrationStore, migrations []discovery.Migration, target string) error {
+func Run(s MigrationStore, migrations []discovery.Migration, target *int64) error {
 	if err := s.Lock(); err != nil {
 		return fmt.Errorf("acquiring advisory lock: %w", err)
 	}

@@ -1,0 +1,7 @@
+apiVersion: db-operator.benjamin-wright.github.com/v1alpha1
+kind: PostgresDatabase
+metadata:
+  name: example-postgres
+spec:
+  postgresVersion: "17"
+  storageSize: "1Gi"

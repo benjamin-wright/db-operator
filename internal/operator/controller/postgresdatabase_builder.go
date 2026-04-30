@@ -44,6 +44,26 @@ func (b postgresDatabaseBuilder) desiredAdminSecret(pgdb *v1alpha1.PostgresDatab
 	return secret, nil
 }
 
+func (b postgresDatabaseBuilder) desiredMigrationsSecret(pgdb *v1alpha1.PostgresDatabase) (*corev1.Secret, error) {
+	password, err := generatePassword(24)
+	if err != nil {
+		return nil, fmt.Errorf("generating migrations password: %w", err)
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      migrationsSecretName(pgdb),
+			Namespace: pgdb.Namespace,
+			Labels:    labelsForDatabase(pgdb, b.instanceName),
+		},
+		StringData: map[string]string{
+			"PGUSER":     migrationsRoleName,
+			"PGPASSWORD": password,
+		},
+	}
+	_ = controllerutil.SetControllerReference(pgdb, secret, b.scheme)
+	return secret, nil
+}
+
 func (b postgresDatabaseBuilder) desiredService(pgdb *v1alpha1.PostgresDatabase) *corev1.Service {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -186,6 +206,10 @@ func serviceName(pgdb *v1alpha1.PostgresDatabase) string {
 
 func adminSecretName(pgdb *v1alpha1.PostgresDatabase) string {
 	return pgdb.Name + "-admin"
+}
+
+func migrationsSecretName(pgdb *v1alpha1.PostgresDatabase) string {
+	return pgdb.Name + "-migrations-internal"
 }
 
 func generatePassword(length int) (string, error) {

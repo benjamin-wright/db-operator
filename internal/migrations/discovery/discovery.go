@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 // Migration represents a discovered migration pair (apply + rollback SQL files).
 type Migration struct {
 	ID           string
+	NumericID    int64
 	Name         string
 	ApplyPath    string
 	RollbackPath string
@@ -36,6 +38,7 @@ func Discover(dir string) ([]Migration, error) {
 	}
 
 	pairs := make(map[string]*pair)
+	numericIDs := make(map[int64]string)
 	var ids []string
 
 	for _, entry := range entries {
@@ -53,6 +56,15 @@ func Discover(dir string) ([]Migration, error) {
 		name := matches[2]
 		kind := matches[3]
 		fullPath := filepath.Join(dir, fname)
+
+		numericID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parsing migration ID %q in %s: %w", id, fname, err)
+		}
+		if existing, clash := numericIDs[numericID]; clash && existing != id {
+			return nil, fmt.Errorf("migration ID collision: %q and %q both parse to %d (leading zeros are not significant)", existing, id, numericID)
+		}
+		numericIDs[numericID] = id
 
 		p, exists := pairs[id]
 		if !exists {
@@ -97,8 +109,10 @@ func Discover(dir string) ([]Migration, error) {
 		if p.rollbackPath == "" {
 			return nil, fmt.Errorf("migration ID %s (%s) is missing a rollback file", id, p.name)
 		}
+		numericID, _ := strconv.ParseInt(id, 10, 64)
 		migrations = append(migrations, Migration{
 			ID:           id,
+			NumericID:    numericID,
 			Name:         p.name,
 			ApplyPath:    p.applyPath,
 			RollbackPath: p.rollbackPath,

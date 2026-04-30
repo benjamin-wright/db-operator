@@ -8,6 +8,7 @@ A Kubernetes operator that provisions and manages PostgreSQL, Redis, and NATS in
 |------|-----------|-----------------|
 | `PostgresDatabase` | `pgdb` | A self-contained PostgreSQL instance (versions 14, 15, 16, 17) |
 | `PostgresCredential` | `pgcred` | A PostgreSQL role with configurable table-level privileges |
+| `PostgresMigrationSet` | `pgms` | A versioned set of SQL migrations applied to a `PostgresDatabase` from an OCI artifact |
 | `RedisDatabase` | `rdb` | A Redis 8 instance |
 | `RedisCredential` | — | A Redis ACL user with configurable key patterns and command categories |
 | `NatsCluster` | `nats` | A NATS server with optional JetStream persistence |
@@ -181,6 +182,39 @@ spec:
 ```
 
 Membership in `pg_read_all_data` is a cluster-wide grant resolved at access time, so it covers tables created later by any role without any per-database `GRANT` plumbing. Allowed values are `pg_read_all_data`, `pg_read_all_stats`, `pg_read_all_settings`, and `pg_monitor`. `clusterRoles` may be set on its own or combined with `permissions`; at least one of the two must be present.
+
+#### Migrations
+
+Schema migrations are applied via `PostgresMigrationSet`. The CR points at a `PostgresDatabase`, names a logical database, and references an OCI artifact containing versioned SQL files. The operator resolves the reference to a digest, runs a `db-migrations` Job against the target database using an internal owner role (`__dbop_migrations`, provisioned per `PostgresDatabase`), and re-reconciles every matching `PostgresCredential` on success so they pick up grants for any newly created tables.
+
+Build and push an artifact with the [`oras` CLI](https://oras.land/):
+
+```sh
+oras push registry.example.com/myapp/migrations:v1 \
+  --artifact-type application/vnd.db-operator.migrations.v1.tar+gzip \
+  ./migrations.tar.gz
+```
+
+The artifact must contain exactly one layer of media type `application/vnd.db-operator.migrations.v1.tar+gzip`. Inside the tarball, each migration is a pair of files named `<id>-<name>-apply.sql` and `<id>-<name>-rollback.sql` where `<id>` is a numeric revision (leading zeros allowed but not significant: `0001` and `1` collide).
+
+```yaml
+apiVersion: db-operator.benjamin-wright.github.com/v1alpha1
+kind: PostgresMigrationSet
+metadata:
+  name: myapp-migrations
+  namespace: default
+spec:
+  databaseRef: my-postgres        # name of the PostgresDatabase
+  database: myapp                 # logical DB name; created on demand
+  artifact: registry.example.com/myapp/migrations:v1
+  targetRevision: 5               # numeric revision to converge to
+  jobTTL: 1h                      # optional; how long completed Jobs are retained (default 1h)
+  paused: false                   # optional; when true, the operator will not launch new Jobs
+```
+
+The operator launches a `Job` whose Pod runs `db-migrations` with `--artifact <digest>` and `--target <revision>`. Lowering `targetRevision` triggers a rollback Job. Re-pushing the same tag with new content re-runs the Job once the resolved digest changes. Editing a previously-applied SQL file is a hard error surfaced as a Failed Job.
+
+Status fields of interest: `phase` (`Pending`/`Running`/`Ready`/`Failed`), `currentRevision`, `observedArtifact` (digest-pinned reference), and `activeJob`.
 
 ### Redis
 
