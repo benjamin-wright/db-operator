@@ -6,11 +6,11 @@ API types, internal migrations role/Secret on `PostgresDatabase`, and the
 
 ## Phase 4 — PostgresMigrationSet client + builder
 
-- [ ] `internal/operator/controller/postgresmigrationset_client.go`:
+- [x] `internal/operator/controller/postgresmigrationset_client.go`:
   k8s helpers (get/list/patch CR + status, list owned `batch/v1.Job`s by label,
   list `core/v1.Pod`s for failure reason) plus an ORAS resolver wrapping
   `remote.Repository.Resolve` so `spec.artifact` is digest-pinned every reconcile.
-- [ ] `internal/operator/controller/postgresmigrationset_builder.go`:
+- [x] `internal/operator/controller/postgresmigrationset_builder.go`:
   build the `Job` with `backoffLimit: 0`, env vars from `<pgdb>-migrations-internal`
   Secret + `--artifact <digest-ref>` + `--target <revision>`, OwnerRef to the CR,
   deterministic key label `db-operator.benjamin-wright.github.com/migration-key =

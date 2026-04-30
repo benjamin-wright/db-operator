@@ -3,6 +3,13 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+migrationImage:
+  repository: localhost:5001/db-migrations
+  tag: latest
+  pullPolicy: IfNotPresent
+
+serviceAccountName: ""
+
 instanceName: ""
 
 resources:

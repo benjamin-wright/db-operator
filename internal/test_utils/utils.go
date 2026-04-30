@@ -3,8 +3,12 @@
 package test_utils
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +17,10 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	godigest "github.com/opencontainers/go-digest"
+	specs "github.com/opencontainers/image-spec/specs-go"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	nats "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
@@ -27,10 +35,12 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	"oras.land/oras-go/v2/registry/remote"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/benjamin-wright/db-operator/internal/migrations/artifactfetch"
 	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 )
 
@@ -389,4 +399,99 @@ func ConnectToRedisDatabase(dbLookup types.NamespacedName, secretLookup types.Na
 		_ = rdb.Close()
 		pfwdClose()
 	}
+}
+
+// MigrationRegistry is the local k3d registry that Tilt pushes images to.
+// Tests push OCI artifacts here so the operator can resolve them.
+const MigrationRegistry = "db-operator-registry.localhost:5001"
+
+// PushMigrationArtifact builds a tar+gzip of SQL files and pushes it as an
+// ORAS artifact to MigrationRegistry under repo:tag. Returns the full
+// digest-pinned reference (registry/repo@sha256:...).
+func PushMigrationArtifact(repo, tag string, files map[string]string) string {
+	layer := buildMigrationTarGz(files)
+	layerDigest := godigest.FromBytes(layer)
+
+	configBlob := []byte("{}")
+	configDigest := godigest.FromBytes(configBlob)
+
+	manifest := ocispec.Manifest{
+		Versioned: specs.Versioned{SchemaVersion: 2},
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config: ocispec.Descriptor{
+			MediaType: "application/vnd.db-operator.migrations.config.v1+json",
+			Digest:    configDigest,
+			Size:      int64(len(configBlob)),
+		},
+		Layers: []ocispec.Descriptor{{
+			MediaType: artifactfetch.MediaType,
+			Digest:    layerDigest,
+			Size:      int64(len(layer)),
+		}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	Expect(err).NotTo(HaveOccurred(), "marshalling manifest")
+	manifestDigest := godigest.FromBytes(manifestBytes)
+
+	ref := MigrationRegistry + "/" + repo
+	ociRepo, err := remote.NewRepository(ref)
+	Expect(err).NotTo(HaveOccurred(), "creating remote repository")
+	ociRepo.PlainHTTP = true
+
+	layerDesc := ocispec.Descriptor{
+		MediaType: artifactfetch.MediaType,
+		Digest:    layerDigest,
+		Size:      int64(len(layer)),
+	}
+	Expect(ociRepo.Push(Ctx, layerDesc, bytes.NewReader(layer))).
+		To(Succeed(), "pushing migration layer blob")
+
+	configDesc := ocispec.Descriptor{
+		MediaType: "application/vnd.db-operator.migrations.config.v1+json",
+		Digest:    configDigest,
+		Size:      int64(len(configBlob)),
+	}
+	Expect(ociRepo.Push(Ctx, configDesc, bytes.NewReader(configBlob))).
+		To(Succeed(), "pushing config blob")
+
+	manifestDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    manifestDigest,
+		Size:      int64(len(manifestBytes)),
+	}
+	Expect(ociRepo.Manifests().Push(Ctx, manifestDesc, bytes.NewReader(manifestBytes))).
+		To(Succeed(), "pushing manifest")
+	Expect(ociRepo.Tag(Ctx, manifestDesc, tag)).
+		To(Succeed(), "tagging manifest")
+
+	return ref + "@" + manifestDigest.String()
+}
+
+func buildMigrationTarGz(files map[string]string) []byte {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range files {
+		hdr := &tar.Header{
+			Name:     name,
+			Mode:     0o644,
+			Size:     int64(len(body)),
+			Typeflag: tar.TypeReg,
+		}
+		Expect(tw.WriteHeader(hdr)).To(Succeed())
+		_, err := tw.Write([]byte(body))
+		Expect(err).NotTo(HaveOccurred())
+	}
+	Expect(tw.Close()).To(Succeed())
+	Expect(gz.Close()).To(Succeed())
+	return buf.Bytes()
+}
+
+// WaitForMigrationSet polls until the PostgresMigrationSet reaches the given phase.
+func WaitForMigrationSet(lookup types.NamespacedName, phase v1alpha1.MigrationSetPhase) {
+	Eventually(func(g Gomega) {
+		var fetched v1alpha1.PostgresMigrationSet
+		g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
+		g.Expect(fetched.Status.Phase).To(Equal(phase))
+	}, Timeout, Interval).Should(Succeed())
 }

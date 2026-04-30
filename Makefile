@@ -73,6 +73,10 @@ integration-test-redis: ## Run Redis controller integration tests.
 integration-test-nats: ## Run NATS controller integration tests.
 	$(GINKGO) -p -v --silence-skips --tags=integration --focus="Nats" ./internal/operator/controller/
 
+.PHONY: integration-test-migration-sets
+integration-test-migration-sets: ## Run PostgresMigrationSet controller integration tests.
+	$(GINKGO) -p -v --silence-skips --tags=integration --focus="PostgresMigrationSet" ./internal/operator/controller/
+
 ##@ Cluster
 
 .PHONY: cluster-up

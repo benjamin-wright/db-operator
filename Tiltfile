@@ -39,6 +39,20 @@ docker_build(
     ignore = ["**/bin/**", "**/cover.out", "**/*.test"],
 )
 
+MIGRATIONS_IMAGE = "db-migrations"
+
+docker_build(
+    MIGRATIONS_IMAGE,
+    context    = '.',
+    dockerfile = "./migrations.Dockerfile",
+    only = [
+        '.',
+        "./migrations.Dockerfile",
+    ],
+    ignore = ["**/bin/**", "**/cover.out", "**/*.test"],
+    match_in_env_vars = True,
+)
+
 namespace_create(NAMESPACE)
 
 k8s_yaml(
@@ -51,6 +65,9 @@ k8s_yaml(
             "image.tag=latest",
             "image.pullPolicy=Always",
             "instanceName=test",
+            "migrationImage.repository={}".format(MIGRATIONS_IMAGE),
+            "migrationImage.tag=latest",
+            "migrationImage.pullPolicy=Always",
         ],
     )
 )
@@ -81,10 +98,11 @@ k8s_resource(
 )
 
 for suite, cmd in [
-    ("test-migrations", "make integration-test-migrations"),
-    ("test-postgres",   "make integration-test-postgres"),
-    ("test-redis",      "make integration-test-redis"),
-    ("test-nats",       "make integration-test-nats"),
+    ("test-migrations",      "make integration-test-migrations"),
+    ("test-postgres",        "make integration-test-postgres"),
+    ("test-redis",           "make integration-test-redis"),
+    ("test-nats",            "make integration-test-nats"),
+    ("test-migration-sets",  "make integration-test-migration-sets"),
 ]:
     local_resource(
         suite,

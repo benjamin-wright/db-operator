@@ -39,6 +39,8 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var instanceName string
+	var migrationImage string
+	var serviceAccountName string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -47,6 +49,10 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&instanceName, "instance-name", "",
 		"The instance name used to scope this operator to CRs with a matching db-operator.benjamin-wright.github.com/operator-instance label. When empty (the default), the operator processes only CRs that have no such label.")
+	flag.StringVar(&migrationImage, "migration-image", os.Getenv("MIGRATION_IMAGE"),
+		"Container image used for migration Jobs spawned by the PostgresMigrationSet controller.")
+	flag.StringVar(&serviceAccountName, "service-account-name", "",
+		"ServiceAccount name to set on migration Job pods. Defaults to the namespace default SA when empty.")
 
 	opts := zap.Options{
 		Development: true,
@@ -82,12 +88,13 @@ func main() {
 		LeaderElectionID:       fmt.Sprintf("db-operator-%s.games-hub.io", instanceName),
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&v1alpha1.PostgresDatabase{}:   {Label: instanceSelector},
-				&v1alpha1.PostgresCredential{}: {Label: instanceSelector},
-				&v1alpha1.RedisDatabase{}:      {Label: instanceSelector},
-				&v1alpha1.RedisCredential{}:    {Label: instanceSelector},
-				&v1alpha1.NatsCluster{}:        {Label: instanceSelector},
-				&v1alpha1.NatsAccount{}:        {Label: instanceSelector},
+				&v1alpha1.PostgresDatabase{}:      {Label: instanceSelector},
+				&v1alpha1.PostgresCredential{}:    {Label: instanceSelector},
+				&v1alpha1.RedisDatabase{}:         {Label: instanceSelector},
+				&v1alpha1.RedisCredential{}:       {Label: instanceSelector},
+				&v1alpha1.NatsCluster{}:           {Label: instanceSelector},
+				&v1alpha1.NatsAccount{}:           {Label: instanceSelector},
+				&v1alpha1.PostgresMigrationSet{}: {Label: instanceSelector},
 			},
 		},
 	})
@@ -144,6 +151,15 @@ func main() {
 		InstanceName: instanceName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NatsAccount")
+		os.Exit(1)
+	}
+
+	if err := (&controller.PostgresMigrationSetReconciler{
+		InstanceName:       instanceName,
+		MigrationImage:     migrationImage,
+		ServiceAccountName: serviceAccountName,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PostgresMigrationSet")
 		os.Exit(1)
 	}
 

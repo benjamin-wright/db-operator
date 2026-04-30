@@ -28,6 +28,12 @@ spec:
             {{- if .Values.instanceName }}
             - --instance-name={{ .Values.instanceName }}
             {{- end }}
+            {{- if .Values.serviceAccountName }}
+            - --service-account-name={{ .Values.serviceAccountName }}
+            {{- end }}
+          env:
+            - name: MIGRATION_IMAGE
+              value: "{{ .Values.migrationImage.repository }}:{{ .Values.migrationImage.tag }}"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
