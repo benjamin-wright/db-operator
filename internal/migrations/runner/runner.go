@@ -132,19 +132,25 @@ func plan(migrations []discovery.Migration, applied []store.Record, target *int6
 // Run discovers the required migration direction, validates file integrity,
 // and executes each step via the provided store.
 func Run(s MigrationStore, migrations []discovery.Migration, target *int64) error {
+	fmt.Println("Acquiring advisory lock...")
 	if err := s.Lock(); err != nil {
 		return fmt.Errorf("acquiring advisory lock: %w", err)
 	}
 	defer s.Unlock() //nolint:errcheck
+	fmt.Println("Advisory lock acquired.")
 
+	fmt.Println("Ensuring migrations table exists...")
 	if err := s.EnsureTable(); err != nil {
 		return err
 	}
+	fmt.Println("Migrations table ready.")
 
+	fmt.Println("Fetching applied migrations...")
 	applied, err := s.Applied()
 	if err != nil {
 		return fmt.Errorf("fetching applied migrations: %w", err)
 	}
+	fmt.Printf("Found %d previously applied migration(s).\n", len(applied))
 
 	steps, err := plan(migrations, applied, target)
 	if err != nil {
@@ -156,18 +162,21 @@ func Run(s MigrationStore, migrations []discovery.Migration, target *int64) erro
 		return nil
 	}
 
+	fmt.Printf("Executing %d migration step(s)...\n", len(steps))
 	for _, st := range steps {
 		switch st.action {
 		case actionApply:
 			fmt.Printf("Applying migration %s (%s)...\n", st.migration.ID, st.migration.Name)
 			if err := applyMigration(s, st.migration); err != nil {
-				return err
+				return fmt.Errorf("applying migration %s (%s): %w", st.migration.ID, st.migration.Name, err)
 			}
+			fmt.Printf("Applied migration %s (%s).\n", st.migration.ID, st.migration.Name)
 		case actionRollback:
 			fmt.Printf("Rolling back migration %s (%s)...\n", st.migration.ID, st.migration.Name)
 			if err := rollbackMigration(s, st.migration); err != nil {
-				return err
+				return fmt.Errorf("rolling back migration %s (%s): %w", st.migration.ID, st.migration.Name, err)
 			}
+			fmt.Printf("Rolled back migration %s (%s).\n", st.migration.ID, st.migration.Name)
 		}
 	}
 

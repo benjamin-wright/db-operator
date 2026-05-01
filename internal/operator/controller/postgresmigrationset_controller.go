@@ -33,6 +33,7 @@ type PostgresMigrationSetReconciler struct {
 	ServiceAccountName string
 	client             postgresMigrationSetClient
 	builder            postgresMigrationSetBuilder
+	pgDB               PostgresManager
 }
 
 // Reconcile handles create/update/delete events for PostgresMigrationSet resources.
@@ -89,6 +90,12 @@ func (r *PostgresMigrationSetReconciler) reconcileMigrationSet(ctx context.Conte
 		return ctrl.Result{}, nil
 	}
 
+	// Ensure the target logical database exists and the migrations role owns it
+	// so that migration Jobs can run DDL without superuser-equivalent credentials.
+	if stopped, result, err := r.reconcileMigrationsDatabase(ctx, pgms); stopped || err != nil {
+		return result, err
+	}
+
 	key := migrationKey(pgms.Status.ObservedArtifact, pgms.Spec.TargetRevision)
 
 	jobs, err := r.client.listOwnedJobs(ctx, pgms)
@@ -130,6 +137,62 @@ func (r *PostgresMigrationSetReconciler) reconcileMigrationSet(ctx context.Conte
 	}
 	r.setPhase(pgms, v1alpha1.MigrationSetPhaseRunning, "JobCreated", "migration Job has been created")
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// reconcileMigrationsDatabase ensures the target logical database exists and
+// that the internal migrations role owns it so migration Jobs can run DDL.
+// Returns (true, result, nil) when the caller should stop and return result.
+// Returns (false, ctrl.Result{}, nil) when the database is ready to proceed.
+// Returns (false, ctrl.Result{}, err) on unexpected errors.
+func (r *PostgresMigrationSetReconciler) reconcileMigrationsDatabase(ctx context.Context, pgms *v1alpha1.PostgresMigrationSet) (bool, ctrl.Result, error) {
+	var pgdb v1alpha1.PostgresDatabase
+	dbKey := client.ObjectKey{Namespace: pgms.Namespace, Name: pgms.Spec.DatabaseRef}
+	found, err := r.client.get(ctx, dbKey, &pgdb)
+	if err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("fetching PostgresDatabase %q: %w", pgms.Spec.DatabaseRef, err)
+	}
+	if !found {
+		r.setPhase(pgms, v1alpha1.MigrationSetPhasePending, "DatabaseNotFound",
+			fmt.Sprintf("target PostgresDatabase %q not found", pgms.Spec.DatabaseRef))
+		return true, ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if pgdb.Status.Phase != v1alpha1.DatabasePhaseReady {
+		r.setPhase(pgms, v1alpha1.MigrationSetPhasePending, "DatabaseNotReady",
+			fmt.Sprintf("waiting for PostgresDatabase %q to become Ready", pgms.Spec.DatabaseRef))
+		return true, ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if pgdb.Status.SecretName == "" {
+		r.setPhase(pgms, v1alpha1.MigrationSetPhasePending, "AdminSecretNotReady",
+			"PostgresDatabase admin Secret name is not yet populated")
+		return true, ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	var adminSecret corev1.Secret
+	secretKey := client.ObjectKey{Namespace: pgdb.Namespace, Name: pgdb.Status.SecretName}
+	secretFound, err := r.client.get(ctx, secretKey, &adminSecret)
+	if err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("fetching admin Secret %q: %w", pgdb.Status.SecretName, err)
+	}
+	if !secretFound {
+		r.setPhase(pgms, v1alpha1.MigrationSetPhasePending, "AdminSecretNotFound",
+			fmt.Sprintf("admin Secret %q not yet visible in cache", pgdb.Status.SecretName))
+		return true, ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	adminUser := string(adminSecret.Data["PGUSER"])
+	adminPass := string(adminSecret.Data["PGPASSWORD"])
+	host := postgresHost(&pgdb)
+
+	if err := r.pgDB.EnsureDatabase(host, adminUser, adminPass, pgms.Spec.Database); err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("ensuring target database %q: %w", pgms.Spec.Database, err)
+	}
+	if err := r.pgDB.EnsureOwner(host, adminUser, adminPass, pgms.Spec.Database, migrationsRoleName); err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("ensuring migrations role ownership of %q: %w", pgms.Spec.Database, err)
+	}
+
+	return false, ctrl.Result{}, nil
 }
 
 func (r *PostgresMigrationSetReconciler) handleSucceeded(ctx context.Context, pgms *v1alpha1.PostgresMigrationSet, job *batchv1.Job) (ctrl.Result, error) {
@@ -277,6 +340,7 @@ func (r *PostgresMigrationSetReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		serviceAccountName: r.ServiceAccountName,
 		scheme:             mgr.GetScheme(),
 	}
+	r.pgDB = postgresManager{}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PostgresMigrationSet{}).
 		Owns(&batchv1.Job{}).

@@ -11,7 +11,7 @@
         "run", "-i", "--rm",
         "-e", "TILT_HOST=host.docker.internal",
 				"-v", "${env:HOME}/.tilt-dev/config:/root/.tilt-dev/config:ro",
-        "benwright/tilt-mcp:v0.0.5"
+        "benwright/tilt-mcp:v0.0.6"
       ]
     }
 	},
