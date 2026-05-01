@@ -94,6 +94,12 @@ func (r *PostgresMigrationSetReconciler) reconcileMigrationSet(ctx context.Conte
 		return ctrl.Result{}, nil
 	}
 
+	// Ensure the target logical database exists and the migrations role owns it
+	// so that migration Jobs can run DDL without superuser-equivalent credentials.
+	if stopped, result, err := r.reconcileMigrationsDatabase(ctx, pgms); stopped || err != nil {
+		return result, err
+	}
+
 	key := migrationKey(pgms.Status.ObservedArtifact, pgms.Spec.TargetRevision)
 
 	jobs, err := r.client.listOwnedJobs(ctx, pgms)
@@ -389,6 +395,7 @@ func (r *PostgresMigrationSetReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		serviceAccountName: r.ServiceAccountName,
 		scheme:             mgr.GetScheme(),
 	}
+	r.pgDB = postgresManager{}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PostgresMigrationSet{}).
 		Owns(&batchv1.Job{}).

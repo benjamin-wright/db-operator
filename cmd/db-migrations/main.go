@@ -26,12 +26,15 @@ func main() {
 	flag.StringVar(&artifactRef, "artifact", "", "OCI reference of a migrations artifact to fetch; overrides --migrations-dir when set")
 	flag.Parse()
 
+	fmt.Printf("db-migrations starting: artifact=%q migrationsDir=%q target=%d\n", artifactRef, migrationsDir, targetFlag)
+
 	var target *int64
 	if targetFlag >= 0 {
 		target = &targetFlag
 	}
 
 	if artifactRef != "" {
+		fmt.Printf("Fetching OCI artifact: %s\n", artifactRef)
 		dir, err := os.MkdirTemp("", "db-migrations-")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating workspace: %v\n", err)
@@ -44,17 +47,23 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error fetching artifact %s: %v\n", artifactRef, err)
 			os.Exit(1)
 		}
-		fmt.Printf("Fetched artifact %s (%s)\n", artifactRef, digest)
+		fmt.Printf("Fetched artifact %s (digest: %s)\n", artifactRef, digest)
 		migrationsDir = dir
 	}
 
+	pgHost := envOrDefault("PGHOST", "localhost")
+	pgPort := envOrDefault("PGPORT", "5432")
+	pgUser := envOrDefault("PGUSER", "postgres")
+	pgDatabase := envOrDefault("PGDATABASE", "postgres")
+	fmt.Printf("Connecting to PostgreSQL: host=%s port=%s user=%s dbname=%s\n", pgHost, pgPort, pgUser, pgDatabase)
+
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		envOrDefault("PGHOST", "localhost"),
-		envOrDefault("PGPORT", "5432"),
-		envOrDefault("PGUSER", "postgres"),
+		pgHost,
+		pgPort,
+		pgUser,
 		envOrDefault("PGPASSWORD", "postgres"),
-		envOrDefault("PGDATABASE", "postgres"),
+		pgDatabase,
 	)
 
 	db, err := sql.Open("postgres", dsn)
@@ -64,19 +73,27 @@ func main() {
 	}
 	defer db.Close()
 
+	fmt.Println("Pinging database...")
 	if err := db.Ping(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to database: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println("Database connection established.")
 
+	fmt.Printf("Discovering migrations in: %s\n", migrationsDir)
 	migrations, err := discovery.Discover(migrationsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error discovering migrations: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Printf("Discovered %d migration(s).\n", len(migrations))
+	for _, m := range migrations {
+		fmt.Printf("  [%s] %s\n", m.ID, m.Name)
+	}
 
 	s := store.New(db)
 
+	fmt.Println("Running migrations...")
 	if err := runner.Run(s, migrations, target); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running migrations: %v\n", err)
 		os.Exit(1)
