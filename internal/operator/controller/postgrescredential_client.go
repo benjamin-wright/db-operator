@@ -86,6 +86,10 @@ type PostgresManager interface {
 	// roles must come from the validClusterRoles allow-list; any other value
 	// returns an error without touching the database.
 	EnsureRoleMemberships(host, adminUser, adminPass, username string, roles []v1alpha1.PredefinedRole) error
+	// EnsureSchemaAccess grants username full access on the public schema of
+	// dbName without changing database ownership. Safe to call concurrently
+	// with other controllers.
+	EnsureSchemaAccess(host, adminUser, adminPass, dbName, username string) error
 }
 
 // postgresManager is the production implementation of PostgresManager.
@@ -305,6 +309,29 @@ func (p postgresManager) EnsureRoleMemberships(host, adminUser, adminPass, usern
 		grantSQL := fmt.Sprintf("GRANT %s TO %s", pq.QuoteIdentifier(string(r)), quotedUser)
 		if _, err := db.Exec(grantSQL); err != nil {
 			return fmt.Errorf("granting role %q to %q: %w", r, username, err)
+		}
+	}
+	return nil
+}
+
+// EnsureSchemaAccess grants username full access on the public schema of dbName
+// without changing database ownership.
+func (p postgresManager) EnsureSchemaAccess(host, adminUser, adminPass, dbName, username string) error {
+	db, err := openPostgres(host, adminUser, adminPass, dbName)
+	if err != nil {
+		return fmt.Errorf("connecting to database %q: %w", dbName, err)
+	}
+	defer db.Close()
+
+	quotedUser := pq.QuoteIdentifier(username)
+	stmts := []string{
+		fmt.Sprintf("GRANT ALL ON SCHEMA public TO %s", quotedUser),
+		fmt.Sprintf("GRANT ALL ON ALL TABLES IN SCHEMA public TO %s", quotedUser),
+		fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s", quotedUser),
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("granting schema access to %q: %w", username, err)
 		}
 	}
 	return nil

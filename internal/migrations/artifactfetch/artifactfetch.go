@@ -205,5 +205,5 @@ func isLoopback(host string) bool {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
-	return false
+	return strings.HasSuffix(host, ".localhost")
 }

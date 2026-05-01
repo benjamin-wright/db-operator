@@ -88,12 +88,12 @@ func main() {
 		LeaderElectionID:       fmt.Sprintf("db-operator-%s.games-hub.io", instanceName),
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&v1alpha1.PostgresDatabase{}:      {Label: instanceSelector},
-				&v1alpha1.PostgresCredential{}:    {Label: instanceSelector},
-				&v1alpha1.RedisDatabase{}:         {Label: instanceSelector},
-				&v1alpha1.RedisCredential{}:       {Label: instanceSelector},
-				&v1alpha1.NatsCluster{}:           {Label: instanceSelector},
-				&v1alpha1.NatsAccount{}:           {Label: instanceSelector},
+				&v1alpha1.PostgresDatabase{}:     {Label: instanceSelector},
+				&v1alpha1.PostgresCredential{}:   {Label: instanceSelector},
+				&v1alpha1.RedisDatabase{}:        {Label: instanceSelector},
+				&v1alpha1.RedisCredential{}:      {Label: instanceSelector},
+				&v1alpha1.NatsCluster{}:          {Label: instanceSelector},
+				&v1alpha1.NatsAccount{}:          {Label: instanceSelector},
 				&v1alpha1.PostgresMigrationSet{}: {Label: instanceSelector},
 			},
 		},
