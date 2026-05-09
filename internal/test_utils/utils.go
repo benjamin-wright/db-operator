@@ -401,13 +401,18 @@ func ConnectToRedisDatabase(dbLookup types.NamespacedName, secretLookup types.Na
 	}
 }
 
-// MigrationRegistry is the local k3d registry that Tilt pushes images to.
-// Tests push OCI artifacts here so the operator can resolve them.
-const MigrationRegistry = "db-operator-registry.localhost:5001"
+// MigrationRegistry is the in-cluster address of the local k3d registry.
+// This is the address stored in PostgresMigrationSet CRs and used by migration
+// job pods running inside the cluster.
+const MigrationRegistry = "db-operator-registry.localhost:5000"
+
+// migrationRegistryPush is the host-side forwarded port used to push artifacts
+// from the test runner (running on the host) into the registry.
+const migrationRegistryPush = "db-operator-registry.localhost:5001"
 
 // PushMigrationArtifact builds a tar+gzip of SQL files and pushes it as an
-// ORAS artifact to MigrationRegistry under repo:tag. Returns the full
-// digest-pinned reference (registry/repo@sha256:...).
+// ORAS artifact to the local registry under repo:tag. Returns the full
+// digest-pinned reference using the in-cluster address (MigrationRegistry).
 func PushMigrationArtifact(repo, tag string, files map[string]string) string {
 	layer := buildMigrationTarGz(files)
 	layerDigest := godigest.FromBytes(layer)
@@ -433,8 +438,8 @@ func PushMigrationArtifact(repo, tag string, files map[string]string) string {
 	Expect(err).NotTo(HaveOccurred(), "marshalling manifest")
 	manifestDigest := godigest.FromBytes(manifestBytes)
 
-	ref := MigrationRegistry + "/" + repo
-	ociRepo, err := remote.NewRepository(ref)
+	pushRef := migrationRegistryPush + "/" + repo
+	ociRepo, err := remote.NewRepository(pushRef)
 	Expect(err).NotTo(HaveOccurred(), "creating remote repository")
 	ociRepo.PlainHTTP = true
 
@@ -464,7 +469,7 @@ func PushMigrationArtifact(repo, tag string, files map[string]string) string {
 	Expect(ociRepo.Tag(Ctx, manifestDesc, tag)).
 		To(Succeed(), "tagging manifest")
 
-	return ref + "@" + manifestDigest.String()
+	return MigrationRegistry + "/" + repo + "@" + manifestDigest.String()
 }
 
 func buildMigrationTarGz(files map[string]string) []byte {
