@@ -89,6 +89,16 @@ func plan(migrations []discovery.Migration, applied []store.Record, target *int6
 		return steps, nil
 	}
 
+	// target=0 is the "pristine" sentinel: roll back every applied migration.
+	if *target == 0 {
+		for i := len(migrations) - 1; i >= 0; i-- {
+			if _, ok := appliedSet[migrations[i].ID]; ok {
+				steps = append(steps, step{action: actionRollback, migration: migrations[i]})
+			}
+		}
+		return steps, nil
+	}
+
 	targetIdx := -1
 	for i, m := range migrations {
 		if m.NumericID == *target {

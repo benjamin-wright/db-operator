@@ -34,6 +34,10 @@ spec:
           env:
             - name: MIGRATION_IMAGE
               value: "{{ .Values.migrationImage.repository }}:{{ .Values.migrationImage.tag }}"
+            {{- if .Values.jobRegistryHost }}
+            - name: JOB_REGISTRY_HOST
+              value: {{ .Values.jobRegistryHost | quote }}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

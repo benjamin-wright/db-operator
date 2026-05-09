@@ -49,7 +49,10 @@ func Fetch(ctx context.Context, ref, dest string) (string, error) {
 	}
 
 	if isLoopback(repo.Reference.Registry) {
+		fmt.Printf("artifactfetch: registry %q is loopback — using plain HTTP\n", repo.Reference.Registry)
 		repo.PlainHTTP = true
+	} else {
+		fmt.Printf("artifactfetch: registry %q — using HTTPS\n", repo.Reference.Registry)
 	}
 
 	credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{})
@@ -205,5 +208,6 @@ func isLoopback(host string) bool {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
-	return false
+	// Subdomains of .localhost are loopback per RFC 6761 §6.3.
+	return strings.HasSuffix(host, ".localhost")
 }

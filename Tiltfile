@@ -68,6 +68,7 @@ k8s_yaml(
             "migrationImage.repository={}".format(MIGRATIONS_IMAGE),
             "migrationImage.tag=latest",
             "migrationImage.pullPolicy=Always",
+            "jobRegistryHost=db-operator-registry.localhost:5000",
         ],
     )
 )

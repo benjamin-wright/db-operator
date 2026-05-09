@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strconv"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -32,6 +33,7 @@ const (
 type postgresMigrationSetBuilder struct {
 	migrationImage     string
 	serviceAccountName string
+	jobRegistryHost    string
 	scheme             *runtime.Scheme
 }
 
@@ -50,6 +52,7 @@ func migrationKey(observedArtifact string, targetRevision int64) string {
 // calling this method.
 func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigrationSet) *batchv1.Job {
 	key := migrationKey(pgms.Status.ObservedArtifact, pgms.Spec.TargetRevision)
+	artifact := b.jobArtifact(pgms.Status.ObservedArtifact)
 	backoffLimit := int32(0)
 	secretName := pgms.Spec.DatabaseRef + "-migrations-internal"
 
@@ -79,7 +82,7 @@ func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigration
 							Name:  "migrations",
 							Image: b.migrationImage,
 							Args: []string{
-								"--artifact", pgms.Status.ObservedArtifact,
+								"--artifact", artifact,
 								"--target", strconv.FormatInt(pgms.Spec.TargetRevision, 10),
 							},
 							Env: []corev1.EnvVar{
@@ -103,7 +106,7 @@ func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigration
 								},
 								{
 									Name:  "PGHOST",
-									Value: pgms.Spec.DatabaseRef,
+									Value: fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", pgms.Spec.DatabaseRef, pgms.Spec.DatabaseRef, pgms.Namespace),
 								},
 								{
 									Name:  "PGDATABASE",
@@ -122,4 +125,22 @@ func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigration
 	}
 	_ = controllerutil.SetControllerReference(pgms, job, b.scheme)
 	return job
+}
+
+// jobArtifact returns the artifact reference to embed in the Job's --artifact
+// arg. When jobRegistryHost is set the registry host portion of ref is
+// replaced, so pods use the in-cluster registry address rather than the
+// host-machine address that the operator used to resolve the digest.
+//
+// ref is expected to be in the form "registry/repository@digest".
+func (b postgresMigrationSetBuilder) jobArtifact(ref string) string {
+	if b.jobRegistryHost == "" {
+		return ref
+	}
+	// Find the first '/' which separates the registry host from the rest.
+	slash := strings.IndexByte(ref, '/')
+	if slash < 0 {
+		return ref
+	}
+	return b.jobRegistryHost + ref[slash:]
 }

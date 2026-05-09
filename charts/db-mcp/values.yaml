@@ -1,5 +1,5 @@
 image:
-  repository: localhost:5001/db-mcp
+  repository: db-operator-registry.localhost:5001/db-mcp
   tag: latest
   pullPolicy: IfNotPresent
 

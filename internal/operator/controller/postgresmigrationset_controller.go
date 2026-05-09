@@ -31,9 +31,16 @@ type PostgresMigrationSetReconciler struct {
 	InstanceName       string
 	MigrationImage     string
 	ServiceAccountName string
-	client             postgresMigrationSetClient
-	builder            postgresMigrationSetBuilder
-	pgDB               PostgresManager
+	// JobRegistryHost, when non-empty, replaces the registry host in the
+	// ObservedArtifact reference that is passed to migration Job pods. Use
+	// this when the operator resolves artifacts via a host-side registry
+	// address (e.g. localhost:5001) that is not reachable from inside the
+	// cluster, and pods must use a different address (e.g.
+	// db-operator-registry.localhost:5000).
+	JobRegistryHost string
+	client          postgresMigrationSetClient
+	builder         postgresMigrationSetBuilder
+	pgDB            PostgresManager
 }
 
 // Reconcile handles create/update/delete events for PostgresMigrationSet resources.
@@ -71,6 +78,7 @@ func (r *PostgresMigrationSetReconciler) Reconcile(ctx context.Context, req ctrl
 }
 
 func (r *PostgresMigrationSetReconciler) reconcileMigrationSet(ctx context.Context, pgms *v1alpha1.PostgresMigrationSet) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	pgms.Status.ObservedGeneration = pgms.Generation
 
 	if r.MigrationImage == "" {
@@ -135,6 +143,11 @@ func (r *PostgresMigrationSetReconciler) reconcileMigrationSet(ctx context.Conte
 	if err := r.client.createOwned(ctx, pgms, job); err != nil {
 		return ctrl.Result{}, fmt.Errorf("creating migration Job: %w", err)
 	}
+	logger.Info("created migration Job",
+		"artifact", pgms.Status.ObservedArtifact,
+		"targetRevision", pgms.Spec.TargetRevision,
+		"migrationKey", key,
+	)
 	r.setPhase(pgms, v1alpha1.MigrationSetPhaseRunning, "JobCreated", "migration Job has been created")
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
@@ -225,6 +238,7 @@ func (r *PostgresMigrationSetReconciler) handleSucceeded(ctx context.Context, pg
 }
 
 func (r *PostgresMigrationSetReconciler) handleFailed(ctx context.Context, pgms *v1alpha1.PostgresMigrationSet, job *batchv1.Job) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	reason := "JobFailed"
 	message := fmt.Sprintf("migration Job %q failed", job.Name)
 
@@ -239,12 +253,28 @@ func (r *PostgresMigrationSetReconciler) handleFailed(ctx context.Context, pgms 
 					if cs.State.Terminated.Message != "" {
 						message = cs.State.Terminated.Message
 					}
+					logger.Error(nil, "migration Job container failed",
+						"job", job.Name,
+						"pod", pods.Items[i].Name,
+						"exitCode", cs.State.Terminated.ExitCode,
+						"reason", cs.State.Terminated.Reason,
+						"message", cs.State.Terminated.Message,
+					)
 					break
 				}
 			}
 		}
+	} else {
+		logger.Error(err, "failed to list pods for migration Job", "job", job.Name)
 	}
 
+	logger.Error(nil, "migration Job failed",
+		"job", job.Name,
+		"artifact", pgms.Status.ObservedArtifact,
+		"targetRevision", pgms.Spec.TargetRevision,
+		"reason", reason,
+		"message", message,
+	)
 	r.setPhase(pgms, v1alpha1.MigrationSetPhaseFailed, reason, message)
 	return ctrl.Result{}, nil
 }
@@ -334,10 +364,11 @@ func (r *PostgresMigrationSetReconciler) setPhase(pgms *v1alpha1.PostgresMigrati
 
 // SetupWithManager registers the PostgresMigrationSetReconciler with the controller manager.
 func (r *PostgresMigrationSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.client = postgresMigrationSetClient{inner: mgr.GetClient(), scheme: mgr.GetScheme()}
+	r.client = postgresMigrationSetClient{inner: mgr.GetClient(), scheme: mgr.GetScheme(), jobRegistryHost: r.JobRegistryHost}
 	r.builder = postgresMigrationSetBuilder{
 		migrationImage:     r.MigrationImage,
 		serviceAccountName: r.ServiceAccountName,
+		jobRegistryHost:    r.JobRegistryHost,
 		scheme:             mgr.GetScheme(),
 	}
 	r.pgDB = postgresManager{}
@@ -346,5 +377,3 @@ func (r *PostgresMigrationSetReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		Owns(&batchv1.Job{}).
 		Complete(r)
 }
-
-

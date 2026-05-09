@@ -54,7 +54,7 @@ test: fmt vet ## Run unit tests.
 GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
 
 .PHONY: integration-test
-integration-test: fmt vet ## Run all integration tests (requires a running k3d cluster).
+integration-test: fmt vet ## Run all integration tests.
 	$(GINKGO) -p -v --tags=integration ./internal/migrations/... ./internal/operator/controller/
 
 .PHONY: integration-test-migrations

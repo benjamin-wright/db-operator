@@ -1,12 +1,19 @@
 image:
-  repository: localhost:5001/db-operator
+  repository: db-operator-registry.localhost:5001/db-operator
   tag: latest
   pullPolicy: IfNotPresent
 
 migrationImage:
-  repository: localhost:5001/db-migrations
+  repository: db-operator-registry.localhost:5001/db-migrations
   tag: latest
   pullPolicy: IfNotPresent
+
+# jobRegistryHost overrides the registry host used in migration Job artifact
+# references. Set this when the in-cluster registry address differs from the
+# address the operator uses to resolve artifact digests (e.g. k3d local
+# registries where the host uses localhost:5001 but pods use
+# db-operator-registry.localhost:5000).
+jobRegistryHost: ""
 
 serviceAccountName: ""
 

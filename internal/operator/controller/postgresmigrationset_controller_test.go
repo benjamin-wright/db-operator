@@ -194,10 +194,16 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 		})
 
 		It("should create a new Job when the same tag is re-pushed with new content", func() {
-			// Push a new artifact with the same repo:tag but different SQL content.
+			// Push a new artifact with the same repo:tag but different digest.
+			// We add a new migration (0002) rather than modifying 0001 — modifying
+			// an already-applied migration would trigger the runner's integrity check
+			// and cause the job to fail. The targetRevision remains 1, so the second
+			// job is a no-op (0001 is already applied) but still succeeds → Ready.
 			newArtifact := PushMigrationArtifact("pgms-digest", "v1", map[string]string{
-				"0001-init-apply.sql":    initMigrations + "\nCOMMENT ON TABLE test_table IS 'v2';",
-				"0001-init-rollback.sql": rollbackMigrations,
+				"0001-init-apply.sql":      initMigrations,
+				"0001-init-rollback.sql":   rollbackMigrations,
+				"0002-update-apply.sql":    "COMMENT ON TABLE test_table IS 'v2';",
+				"0002-update-rollback.sql": "COMMENT ON TABLE test_table IS NULL;",
 			})
 
 			// Point the migration set at the tag (not the old digest) so the

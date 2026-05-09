@@ -24,6 +24,14 @@ import (
 type postgresMigrationSetClient struct {
 	inner  client.Client
 	scheme *runtime.Scheme
+	// jobRegistryHost, when non-empty, is used as the registry host when
+	// resolving tag references. This allows the operator pod (running inside
+	// the cluster) to reach the registry via its in-cluster address (e.g.
+	// db-operator-registry.localhost:5000) even when Spec.Artifact contains
+	// the host-side address (e.g. db-operator-registry.localhost:5001). The
+	// returned resolved ref always uses the original host from Spec.Artifact
+	// so that ObservedArtifact remains consistent with the user-visible ref.
+	jobRegistryHost string
 }
 
 func (c *postgresMigrationSetClient) get(ctx context.Context, key client.ObjectKey, obj client.Object) (bool, error) {
@@ -84,10 +92,40 @@ func (c *postgresMigrationSetClient) listPodsForJob(ctx context.Context, jobName
 // of the form `registry/repository@sha256:…`. If ref already contains a
 // digest (i.e. the reference segment begins with "sha256:"), it is returned
 // unchanged.
+//
+// When jobRegistryHost is set and the ref's registry differs from it, the tag
+// is resolved via the in-cluster host (jobRegistryHost) so that the operator
+// pod can reach the registry over the Docker-internal network. The returned
+// ref always uses the original registry host to keep ObservedArtifact
+// consistent with Spec.Artifact.
 func (c *postgresMigrationSetClient) resolveArtifact(ctx context.Context, ref string) (string, error) {
-	repo, err := remote.NewRepository(ref)
+	origRepo, err := remote.NewRepository(ref)
 	if err != nil {
 		return "", fmt.Errorf("parsing artifact reference %q: %w", ref, err)
+	}
+
+	tag := origRepo.Reference.Reference
+	if tag == "" {
+		return "", fmt.Errorf("artifact reference %q is missing a tag or digest", ref)
+	}
+	if strings.HasPrefix(tag, "sha256:") {
+		// Already digest-pinned — no network call needed.
+		return ref, nil
+	}
+
+	// When jobRegistryHost is set and differs from the ref's registry, resolve
+	// the tag via the in-cluster address so the operator pod (inside k3d's
+	// Docker network) can reach the registry at its container port.
+	resolutionRef := ref
+	if c.jobRegistryHost != "" && origRepo.Reference.Registry != c.jobRegistryHost {
+		if slash := strings.IndexByte(ref, '/'); slash >= 0 {
+			resolutionRef = c.jobRegistryHost + ref[slash:]
+		}
+	}
+
+	repo, err := remote.NewRepository(resolutionRef)
+	if err != nil {
+		return "", fmt.Errorf("parsing resolution reference %q: %w", resolutionRef, err)
 	}
 
 	if isRegistryLoopback(repo.Reference.Registry) {
@@ -103,20 +141,14 @@ func (c *postgresMigrationSetClient) resolveArtifact(ctx context.Context, ref st
 		}
 	}
 
-	tag := repo.Reference.Reference
-	if tag == "" {
-		return "", fmt.Errorf("artifact reference %q is missing a tag or digest", ref)
-	}
-	if strings.HasPrefix(tag, "sha256:") {
-		return ref, nil
-	}
-
 	desc, err := repo.Resolve(ctx, tag)
 	if err != nil {
 		return "", fmt.Errorf("resolving artifact %q: %w", ref, err)
 	}
 
-	return repo.Reference.Registry + "/" + repo.Reference.Repository + "@" + desc.Digest.String(), nil
+	// Return the digest ref using the ORIGINAL registry host so that
+	// ObservedArtifact matches the registry host in Spec.Artifact.
+	return origRepo.Reference.Registry + "/" + origRepo.Reference.Repository + "@" + desc.Digest.String(), nil
 }
 
 // isRegistryLoopback reports whether the registry host is a loopback address.
@@ -128,5 +160,6 @@ func isRegistryLoopback(host string) bool {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
-	return false
+	// Subdomains of .localhost are loopback per RFC 6761 §6.3.
+	return strings.HasSuffix(host, ".localhost")
 }
