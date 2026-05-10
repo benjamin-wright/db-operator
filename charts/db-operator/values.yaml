@@ -1,11 +1,13 @@
 image:
-  repository: db-operator-registry.localhost:5001/db-operator
-  tag: latest
+  repository: docker.io/benwright/db-operator
+  # tag defaults to .Chart.AppVersion when empty
+  tag: ""
   pullPolicy: IfNotPresent
 
 migrationImage:
-  repository: db-operator-registry.localhost:5001/db-migrations
-  tag: latest
+  repository: docker.io/benwright/db-migrations
+  # tag defaults to .Chart.AppVersion when empty
+  tag: ""
   pullPolicy: IfNotPresent
 
 # jobRegistryHost overrides the registry host used in migration Job artifact
@@ -27,3 +29,22 @@ resources:
     cpu: 200m
     memory: 128Mi
 
+mcp:
+  # Set to true to deploy the MCP server alongside the operator.
+  enabled: false
+
+  image:
+    repository: docker.io/benwright/db-mcp
+    # tag defaults to .Chart.AppVersion when empty
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  addr: ":8080"
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

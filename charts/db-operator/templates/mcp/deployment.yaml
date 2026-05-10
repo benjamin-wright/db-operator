@@ -1,43 +1,31 @@
+{{- if .Values.mcp.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "db-operator.fullname" . }}
+  name: {{ include "db-operator.mcp.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "db-operator.labels" . | nindent 4 }}
+    {{- include "db-operator.mcp.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "db-operator.selectorLabels" . | nindent 6 }}
+      {{- include "db-operator.mcp.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "db-operator.selectorLabels" . | nindent 8 }}
+        {{- include "db-operator.mcp.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "db-operator.fullname" . }}
+      serviceAccountName: {{ include "db-operator.mcp.fullname" . }}
       securityContext:
         runAsNonRoot: true
       containers:
-        - name: manager
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+        - name: db-mcp
+          image: {{ include "db-operator.mcp.image" . | quote }}
+          imagePullPolicy: {{ .Values.mcp.image.pullPolicy }}
           args:
-            - --metrics-bind-address=:8080
+            - --addr={{ .Values.mcp.addr }}
             - --health-probe-bind-address=:8081
-            {{- if .Values.instanceName }}
-            - --instance-name={{ .Values.instanceName }}
-            {{- end }}
-            {{- if .Values.serviceAccountName }}
-            - --service-account-name={{ .Values.serviceAccountName }}
-            {{- end }}
-          env:
-            - name: MIGRATION_IMAGE
-              value: "{{ .Values.migrationImage.repository }}:{{ .Values.migrationImage.tag }}"
-            {{- if .Values.jobRegistryHost }}
-            - name: JOB_REGISTRY_HOST
-              value: {{ .Values.jobRegistryHost | quote }}
-            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -59,13 +47,14 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           ports:
-            - name: metrics
+            - name: mcp
               containerPort: 8080
               protocol: TCP
             - name: health
               containerPort: 8081
               protocol: TCP
-          {{- with .Values.resources }}
+          {{- with .Values.mcp.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+{{- end }}

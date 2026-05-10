@@ -46,14 +46,22 @@ helm upgrade db-operator oci://ghcr.io/benjamin-wright/db-operator/db-operator \
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `image.repository` | `localhost:5001/db-operator` | Operator image repository |
-| `image.tag` | `latest` | Operator image tag |
+| `image.repository` | `docker.io/benwright/db-operator` | Operator image repository |
+| `image.tag` | `""` (defaults to chart `appVersion`) | Operator image tag |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
+| `migrationImage.repository` | `docker.io/benwright/db-migrations` | Migration job image repository |
+| `migrationImage.tag` | `""` (defaults to chart `appVersion`) | Migration job image tag |
+| `migrationImage.pullPolicy` | `IfNotPresent` | Migration job image pull policy |
 | `instanceName` | `""` | Operator instance name; when set, only CRs carrying a matching `db-operator.benjamin-wright.github.com/operator-instance` label are reconciled |
 | `resources.requests.cpu` | `50m` | CPU request |
 | `resources.requests.memory` | `64Mi` | Memory request |
 | `resources.limits.cpu` | `200m` | CPU limit |
 | `resources.limits.memory` | `128Mi` | Memory limit |
+| `mcp.enabled` | `false` | Deploy the MCP server alongside the operator |
+| `mcp.image.repository` | `docker.io/benwright/db-mcp` | MCP server image repository |
+| `mcp.image.tag` | `""` (defaults to chart `appVersion`) | MCP server image tag |
+| `mcp.image.pullPolicy` | `IfNotPresent` | MCP server image pull policy |
+| `mcp.addr` | `:8080` | Bind address for the MCP server |
 
 Override values with `--set` or a values file:
 

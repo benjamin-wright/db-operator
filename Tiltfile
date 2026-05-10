@@ -1,11 +1,9 @@
 IMAGE_NAME      = "db-operator"
 MCP_IMAGE       = "db-mcp"
 RELEASE_NAME    = "db-operator"
-MCP_RELEASE     = "db-mcp"
 NAMESPACE       = "db-operator"
 
-CHART_DIR     = "./charts/db-operator"
-MCP_CHART_DIR = "./charts/db-mcp"
+CHART_DIR = "./charts/db-operator"
 
 def namespace_create(name):
     """Emit a Kubernetes Namespace manifest so Tilt creates it if absent."""
@@ -69,19 +67,10 @@ k8s_yaml(
             "migrationImage.tag=latest",
             "migrationImage.pullPolicy=Always",
             "jobRegistryHost=db-operator-registry.localhost:5000",
-        ],
-    )
-)
-
-k8s_yaml(
-    helm(
-        MCP_CHART_DIR,
-        name      = MCP_RELEASE,
-        namespace = NAMESPACE,
-        set = [
-            "image.repository={}".format(MCP_IMAGE),
-            "image.tag=latest",
-            "image.pullPolicy=Always",
+            "mcp.enabled=true",
+            "mcp.image.repository={}".format(MCP_IMAGE),
+            "mcp.image.tag=latest",
+            "mcp.image.pullPolicy=Always",
         ],
     )
 )
@@ -93,7 +82,7 @@ k8s_resource(
 )
 
 k8s_resource(
-    MCP_RELEASE,
+    "{}-mcp".format(RELEASE_NAME),
     port_forwards = ["8090:8080", "8091:8081"],
     labels        = ["db-mcp"],
 )
