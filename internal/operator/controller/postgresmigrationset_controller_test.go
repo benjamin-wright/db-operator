@@ -70,7 +70,7 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 		})
 
 		AfterAll(func() {
-			_ = K8sClient.Delete(Ctx, ns)
+			// _ = K8sClient.Delete(Ctx, ns)
 		})
 
 		It("should transition to Running while the Job executes", func() {
