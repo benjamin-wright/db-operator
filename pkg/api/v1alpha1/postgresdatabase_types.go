@@ -42,6 +42,13 @@ type PostgresDatabaseStatus struct {
 	// +optional
 	SecretName string `json:"secretName,omitempty"`
 
+	// MigrationsSecretVersion is the ResourceVersion of the migrations Secret
+	// the last time the migrations role password was successfully synced to the
+	// database. When this differs from the current Secret's ResourceVersion the
+	// operator re-syncs the role password, covering PVC reuse and forced rotation.
+	// +optional
+	MigrationsSecretVersion string `json:"migrationsSecretVersion,omitempty"`
+
 	// Conditions contains detailed status conditions for the PostgresDatabase.
 	// +listType=map
 	// +listMapKey=type

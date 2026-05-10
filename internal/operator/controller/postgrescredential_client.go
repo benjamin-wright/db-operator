@@ -90,6 +90,11 @@ type PostgresManager interface {
 	// dbName without changing database ownership. Safe to call concurrently
 	// with other controllers.
 	EnsureSchemaAccess(host, adminUser, adminPass, dbName, username string) error
+	// SetUserPassword unconditionally updates the password for an existing role.
+	// Use this when the Kubernetes Secret is the authoritative source and the
+	// database-side password may have drifted (e.g. after PVC reuse or forced
+	// Secret regeneration).
+	SetUserPassword(host, adminUser, adminPass, username, password string) error
 }
 
 // postgresManager is the production implementation of PostgresManager.
@@ -332,6 +337,23 @@ func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, 
 		pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
 	if _, err := db.Exec(createSQL); err != nil {
 		return fmt.Errorf("creating role %q: %w", username, err)
+	}
+	return nil
+}
+
+// SetUserPassword unconditionally updates the password for username using
+// ALTER ROLE. It connects as adminUser to the maintenance database.
+func (p postgresManager) SetUserPassword(host, adminUser, adminPass, username, password string) error {
+	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	if err != nil {
+		return fmt.Errorf("connecting to Postgres: %w", err)
+	}
+	defer db.Close()
+
+	sql := fmt.Sprintf("ALTER ROLE %s PASSWORD %s",
+		pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
+	if _, err := db.Exec(sql); err != nil {
+		return fmt.Errorf("setting password for role %q: %w", username, err)
 	}
 	return nil
 }

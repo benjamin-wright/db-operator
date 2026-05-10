@@ -92,35 +92,38 @@ func (r *PostgresDatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		reconcileErr = err
 		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
 			"AdminSecretReconcileFailed", err.Error())
-	} else if err := r.reconcileMigrationsSecret(ctx, &pgdb); err != nil {
-		reconcileErr = err
-		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
-			"MigrationsSecretReconcileFailed", err.Error())
-	} else if err := r.reconcileService(ctx, &pgdb); err != nil {
-		reconcileErr = err
-		result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
-			"ServiceReconcileFailed", err.Error())
 	} else {
-		sts, err := r.reconcileStatefulSet(ctx, &pgdb)
+		migrationsSecretVersion, err := r.reconcileMigrationsSecret(ctx, &pgdb)
 		if err != nil {
-			if errors.Is(err, errStatefulSetBeingRecreated) {
-				result = r.setPhase(&pgdb, v1alpha1.DatabasePhasePending,
-					"StatefulSetBeingRecreated", "StatefulSet is being recreated to apply volume claim template changes")
-			} else {
-				reconcileErr = err
-				result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
-					"StatefulSetReconcileFailed", err.Error())
-			}
+			reconcileErr = err
+			result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
+				"MigrationsSecretReconcileFailed", err.Error())
+		} else if err := r.reconcileService(ctx, &pgdb); err != nil {
+			reconcileErr = err
+			result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
+				"ServiceReconcileFailed", err.Error())
 		} else {
-			result = r.updatePhaseFromStatefulSet(&pgdb, sts)
-			// Only attempt to provision the migrations role once Postgres is
-			// actually accepting connections; otherwise the connection attempt
-			// will block reconciliation and noisily Fail.
-			if pgdb.Status.Phase == v1alpha1.DatabasePhaseReady {
-				if err := r.reconcileMigrationsRole(ctx, &pgdb); err != nil {
+			sts, err := r.reconcileStatefulSet(ctx, &pgdb)
+			if err != nil {
+				if errors.Is(err, errStatefulSetBeingRecreated) {
+					result = r.setPhase(&pgdb, v1alpha1.DatabasePhasePending,
+						"StatefulSetBeingRecreated", "StatefulSet is being recreated to apply volume claim template changes")
+				} else {
 					reconcileErr = err
 					result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
-						"MigrationsRoleReconcileFailed", err.Error())
+						"StatefulSetReconcileFailed", err.Error())
+				}
+			} else {
+				result = r.updatePhaseFromStatefulSet(&pgdb, sts)
+				// Only attempt to provision the migrations role once Postgres is
+				// actually accepting connections; otherwise the connection attempt
+				// will block reconciliation and noisily Fail.
+				if pgdb.Status.Phase == v1alpha1.DatabasePhaseReady {
+					if err := r.reconcileMigrationsRole(ctx, &pgdb, migrationsSecretVersion); err != nil {
+						reconcileErr = err
+						result = r.setPhase(&pgdb, v1alpha1.DatabasePhaseFailed,
+							"MigrationsRoleReconcileFailed", err.Error())
+					}
 				}
 			}
 		}
@@ -246,37 +249,41 @@ func (r *PostgresDatabaseReconciler) reconcileAdminSecret(ctx context.Context, p
 }
 
 // reconcileMigrationsSecret ensures the operator-managed Secret containing the
-// internal migrations role credentials exists. The Secret is the source of
-// truth for the role's password — reconcileMigrationsRole reads it and
-// projects the password into Postgres.
-func (r *PostgresDatabaseReconciler) reconcileMigrationsSecret(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) error {
+// internal migrations role credentials exists. It returns the Secret's
+// ResourceVersion so callers can detect when a new Secret has been created
+// (e.g. after PVC reuse or forced rotation) and sync the role password.
+func (r *PostgresDatabaseReconciler) reconcileMigrationsSecret(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) (string, error) {
 	name := migrationsSecretName(pgdb)
 
 	var existing corev1.Secret
 	found, err := r.client.get(ctx, client.ObjectKey{Namespace: pgdb.Namespace, Name: name}, &existing)
 	if err != nil {
-		return fmt.Errorf("fetching migrations Secret: %w", err)
+		return "", fmt.Errorf("fetching migrations Secret: %w", err)
 	}
 	if found {
-		return nil
+		return existing.ResourceVersion, nil
 	}
 
 	secret, err := r.builder.desiredMigrationsSecret(pgdb)
 	if err != nil {
-		return fmt.Errorf("building migrations Secret: %w", err)
+		return "", fmt.Errorf("building migrations Secret: %w", err)
 	}
 	if err := r.client.create(ctx, secret); err != nil {
-		return fmt.Errorf("creating migrations Secret: %w", err)
+		return "", fmt.Errorf("creating migrations Secret: %w", err)
 	}
-	return nil
+	return secret.ResourceVersion, nil
 }
 
-// reconcileMigrationsRole projects the password stored in the migrations
-// Secret into a PostgreSQL login role. It must only run once Postgres is
-// accepting connections (caller's responsibility). EnsureUserExists is a no-op
-// when the role already exists, so the password is established exactly once
-// — the Secret remains the authoritative source thereafter.
-func (r *PostgresDatabaseReconciler) reconcileMigrationsRole(ctx context.Context, pgdb *v1alpha1.PostgresDatabase) error {
+// reconcileMigrationsRole syncs the migrations role password to the database
+// when the migrations Secret's ResourceVersion differs from the last-synced
+// version stored in pgdb.Status.MigrationsSecretVersion. This fires on fresh
+// starts (role absent), PVC reuse after CR recreation (role exists with stale
+// password), and forced Secret deletion+regeneration. It is a no-op on normal
+// reconciles where the Secret has not changed.
+func (r *PostgresDatabaseReconciler) reconcileMigrationsRole(ctx context.Context, pgdb *v1alpha1.PostgresDatabase, secretVersion string) error {
+	if secretVersion != "" && secretVersion == pgdb.Status.MigrationsSecretVersion {
+		return nil
+	}
 	var adminSecret corev1.Secret
 	adminKey := client.ObjectKey{Namespace: pgdb.Namespace, Name: adminSecretName(pgdb)}
 	adminFound, err := r.client.get(ctx, adminKey, &adminSecret)
@@ -308,6 +315,10 @@ func (r *PostgresDatabaseReconciler) reconcileMigrationsRole(ctx context.Context
 	if err := r.pgDB.EnsureUserExists(host, adminUser, adminPass, migrationsRoleName, password); err != nil {
 		return fmt.Errorf("ensuring migrations role: %w", err)
 	}
+	if err := r.pgDB.SetUserPassword(host, adminUser, adminPass, migrationsRoleName, password); err != nil {
+		return fmt.Errorf("syncing migrations role password: %w", err)
+	}
+	pgdb.Status.MigrationsSecretVersion = migrationsSecret.ResourceVersion
 	return nil
 }
 
