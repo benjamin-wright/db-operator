@@ -28,7 +28,7 @@ app.kubernetes.io/component: operator
 Resolve the operator image, defaulting tag to .Chart.AppVersion.
 */}}
 {{- define "db-operator.image" -}}
-{{- $tag := .Values.image.tag | default (printf "v%s" .Chart.AppVersion) -}}
+{{- $tag := .Values.image.tag | default printf.Chart.AppVersion -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end }}
 
@@ -36,7 +36,7 @@ Resolve the operator image, defaulting tag to .Chart.AppVersion.
 Resolve the migration image, defaulting tag to .Chart.AppVersion.
 */}}
 {{- define "db-operator.migrationImage" -}}
-{{- $tag := .Values.migrationImage.tag | default (printf "v%s" .Chart.AppVersion) -}}
+{{- $tag := .Values.migrationImage.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" .Values.migrationImage.repository $tag -}}
 {{- end }}
 
@@ -66,6 +66,6 @@ app.kubernetes.io/component: mcp
 Resolve the MCP image, defaulting tag to .Chart.AppVersion.
 */}}
 {{- define "db-operator.mcp.image" -}}
-{{- $tag := .Values.mcp.image.tag | default (printf "v%s" .Chart.AppVersion) -}}
+{{- $tag := .Values.mcp.image.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" .Values.mcp.image.repository $tag -}}
 {{- end }}
