@@ -181,6 +181,21 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 		privClause := strings.Join(privs, ", ")
 		quotedUser := pq.QuoteIdentifier(username)
 
+		// Sequences only accept SELECT, UPDATE, and ALL — filter out table-only
+		// privileges (INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER) before
+		// building any sequence-targeted GRANT.
+		validSeqPerms := map[v1alpha1.DatabasePermission]bool{
+			v1alpha1.PermissionSelect: true,
+			v1alpha1.PermissionUpdate: true,
+			v1alpha1.PermissionAll:    true,
+		}
+		var seqPrivs []string
+		for _, perm := range permissions {
+			if validSeqPerms[perm] {
+				seqPrivs = append(seqPrivs, string(perm))
+			}
+		}
+
 		if len(tables) > 0 {
 			// Table-scoped grant: privileges apply only to the named tables.
 			// No ALTER DEFAULT PRIVILEGES is emitted — PostgreSQL cannot pre-grant
@@ -197,11 +212,64 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 			if _, err := db.Exec(grantSQL); err != nil {
 				return fmt.Errorf("granting table-scoped permissions to %q: %w", username, err)
 			}
+
+			// Fix C: grant sequence-compatible privileges on sequences owned by
+			// the named tables. PostgreSQL has no equivalent of ALTER DEFAULT
+			// PRIVILEGES scoped to specific tables, so this query is re-run on
+			// every reconcile to catch sequences added by later migrations.
+			if len(seqPrivs) > 0 {
+				rows, err := db.Query(`
+SELECT d.objid::regclass::text AS seq_name
+FROM   pg_depend d
+JOIN   pg_class  c ON c.oid = d.refobjid
+WHERE  d.classid       = 'pg_class'::regclass
+  AND  d.deptype       = 'a'
+  AND  d.refclassid    = 'pg_class'::regclass
+  AND  c.relname       = ANY($1)
+  AND  c.relnamespace  = 'public'::regnamespace
+`, pq.Array(tables))
+				if err != nil {
+					return fmt.Errorf("looking up sequences for named tables: %w", err)
+				}
+				var seqNames []string
+				for rows.Next() {
+					var name string
+					if err := rows.Scan(&name); err != nil {
+						rows.Close()
+						return fmt.Errorf("scanning sequence name: %w", err)
+					}
+					seqNames = append(seqNames, name)
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return fmt.Errorf("iterating sequence rows: %w", err)
+				}
+				rows.Close()
+
+				seqPrivClause := strings.Join(seqPrivs, ", ")
+				for _, seqName := range seqNames {
+					// seqName comes from regclass::text which is already
+					// schema-qualified and quoted as needed by PostgreSQL.
+					seqGrantSQL := fmt.Sprintf("GRANT %s ON SEQUENCE %s TO %s",
+						seqPrivClause, seqName, quotedUser)
+					if _, err := db.Exec(seqGrantSQL); err != nil {
+						return fmt.Errorf("granting sequence permissions on %q to %q: %w", seqName, username, err)
+					}
+				}
+			}
 		} else {
 			// All-tables grant: privileges apply to every current and future table.
 			grantSQL := fmt.Sprintf("GRANT %s ON ALL TABLES IN SCHEMA public TO %s", privClause, quotedUser)
 			if _, err := db.Exec(grantSQL); err != nil {
 				return fmt.Errorf("granting permissions to %q: %w", username, err)
+			}
+
+			// Fix A: also grant on existing sequences. The ALTER DEFAULT
+			// PRIVILEGES below covers sequences created after this point;
+			// this covers sequences that already exist at reconcile time.
+			seqGrantSQL := fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s", quotedUser)
+			if _, err := db.Exec(seqGrantSQL); err != nil {
+				return fmt.Errorf("granting sequence permissions to %q: %w", username, err)
 			}
 
 			defaultSQL := fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT %s ON TABLES TO %s", privClause, quotedUser)
@@ -226,20 +294,6 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 					return fmt.Errorf("setting owner-scoped default table privileges for %q: %w", username, err)
 				}
 
-				// Sequences only accept SELECT, UPDATE, and ALL — filter out table-only
-				// privileges (INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER) before
-				// building the sequences grant.
-				validSeqPerms := map[v1alpha1.DatabasePermission]bool{
-					v1alpha1.PermissionSelect: true,
-					v1alpha1.PermissionUpdate: true,
-					v1alpha1.PermissionAll:    true,
-				}
-				var seqPrivs []string
-				for _, perm := range permissions {
-					if validSeqPerms[perm] {
-						seqPrivs = append(seqPrivs, string(perm))
-					}
-				}
 				if len(seqPrivs) > 0 {
 					seqPrivClause := strings.Join(seqPrivs, ", ")
 					ownerSeqSQL := fmt.Sprintf(

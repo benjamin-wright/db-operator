@@ -4,6 +4,7 @@ package controller_test
 
 import (
 	"fmt"
+	"time"
 
 	. "github.com/benjamin-wright/db-operator/internal/test_utils"
 	. "github.com/onsi/ginkgo/v2"
@@ -285,6 +286,89 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 			Expect(K8sClient.Update(Ctx, &fetched)).To(Succeed())
 
 			WaitForMigrationSet(msLook, v1alpha1.MigrationSetPhaseReady)
+		})
+	})
+
+	// ── In-flight Job blocks new desired-state Job ───────────────────────────
+	Context("in-flight Job blocks a new desired-state Job", Ordered, func() {
+		var (
+			ns     *corev1.Namespace
+			pgdb   *v1alpha1.PostgresDatabase
+			pgms   *v1alpha1.PostgresMigrationSet
+			dbLook types.NamespacedName
+			msLook types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLook, _ = NewDatabase("pgms-inflight-db")
+			WaitForDatabase(dbLook)
+
+			// Use a slow "migration" so the controller observes Running long enough
+			// for us to change targetRevision mid-flight.
+			artifact := PushMigrationArtifact("pgms-inflight", "v1", map[string]string{
+				"0001-slow-apply.sql":    "SELECT pg_sleep(15);",
+				"0001-slow-rollback.sql": "SELECT 1;",
+			})
+
+			pgms = newMigrationSet(ns.Name, "pgms-inflight", pgdb.Name, "testdb", artifact, 1)
+			Expect(K8sClient.Create(Ctx, pgms)).To(Succeed())
+			msLook = types.NamespacedName{Name: pgms.Name, Namespace: ns.Name}
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should enter Running while the slow Job executes", func() {
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresMigrationSet
+				g.Expect(K8sClient.Get(Ctx, msLook, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.MigrationSetPhaseRunning))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should not create a new Job when targetRevision changes while the original Job runs", func() {
+			// Change desired state while the first job is still in-flight.
+			var fetched v1alpha1.PostgresMigrationSet
+			Expect(K8sClient.Get(Ctx, msLook, &fetched)).To(Succeed())
+			fetched.Spec.TargetRevision = 0
+			Expect(K8sClient.Update(Ctx, &fetched)).To(Succeed())
+
+			// The controller must not create a second Job while the first is running.
+			Consistently(func(g Gomega) {
+				var jobList batchv1.JobList
+				g.Expect(K8sClient.List(Ctx, &jobList,
+					client.InNamespace(ns.Name),
+					client.MatchingLabels{"db-operator.benjamin-wright.github.com/migration-set": pgms.Name},
+				)).To(Succeed())
+				g.Expect(jobList.Items).To(HaveLen(1), "must not create a second Job while the first is running")
+			}, 5*time.Second, Interval).Should(Succeed())
+
+			// Phase should be Pending with WaitingForInFlightJob.
+			Eventually(func(g Gomega) {
+				var latest v1alpha1.PostgresMigrationSet
+				g.Expect(K8sClient.Get(Ctx, msLook, &latest)).To(Succeed())
+				g.Expect(latest.Status.Phase).To(Equal(v1alpha1.MigrationSetPhasePending))
+				found := false
+				for _, c := range latest.Status.Conditions {
+					if c.Type == "Ready" && c.Reason == "WaitingForInFlightJob" {
+						found = true
+					}
+				}
+				g.Expect(found).To(BeTrue(), "expected WaitingForInFlightJob condition reason")
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should create a rollback Job and reach Ready once the first Job completes", func() {
+			// The pg_sleep Job will finish after ~15 s; the rollback Job then runs.
+			WaitForMigrationSet(msLook, v1alpha1.MigrationSetPhaseReady)
+
+			var jobList batchv1.JobList
+			Expect(K8sClient.List(Ctx, &jobList,
+				client.InNamespace(ns.Name),
+				client.MatchingLabels{"db-operator.benjamin-wright.github.com/migration-set": pgms.Name},
+			)).To(Succeed())
+			Expect(jobList.Items).To(HaveLen(2), "expected original Job plus rollback Job")
 		})
 	})
 

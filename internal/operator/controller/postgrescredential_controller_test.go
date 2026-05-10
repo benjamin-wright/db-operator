@@ -20,19 +20,58 @@ import (
 
 var _ = Describe("PostgresCredentialReconciler", func() {
 	// ── Full lifecycle: create → ready → delete ─────────────────────────────
+	// Uses a credential with SERIAL columns so that sequence access is part of the
+	// baseline expectation for any all-tables grant.
 	Context("full credential lifecycle", Ordered, func() {
 		var (
-			ns               *corev1.Namespace
-			pgdb             *v1alpha1.PostgresDatabase
-			pgcred           *v1alpha1.PostgresCredential
-			dbLookup         types.NamespacedName
-			credLookup       types.NamespacedName
-			credSecretLookup types.NamespacedName
+			ns                *corev1.Namespace
+			pgdb              *v1alpha1.PostgresDatabase
+			pgcred            *v1alpha1.PostgresCredential
+			dbLookup          types.NamespacedName
+			adminSecretLookup types.NamespacedName
+			credLookup        types.NamespacedName
+			credSecretLookup  types.NamespacedName
 		)
 
 		BeforeAll(func() {
-			ns, pgdb, dbLookup, _ = NewDatabase("cred-lifecycle-db")
+			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("cred-lifecycle-db")
 			WaitForDatabase(dbLookup)
+
+			// Bootstrap the target database by creating an owner credential first,
+			// then create the SERIAL table before provisioning the test credential.
+			// This ensures the sequence exists at reconcile time, exercising the
+			// all-tables sequence grant path.
+			owner := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cred-lifecycle-owner",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "lifecycle_owner",
+					SecretName:  "cred-lifecycle-owner-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, owner)).To(Succeed())
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: owner.Name, Namespace: ns.Name}, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+
+			adminDB, closeAdmin := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "testdb")
+			defer closeAdmin()
+			_, err := adminDB.Exec("CREATE TABLE IF NOT EXISTS items (id SERIAL, label TEXT)")
+			Expect(err).NotTo(HaveOccurred(), "creating items table as admin")
 
 			pgcred = &v1alpha1.PostgresCredential{
 				ObjectMeta: metav1.ObjectMeta{
@@ -48,11 +87,8 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 					SecretName:  "cred-lifecycle-secret",
 					Permissions: []v1alpha1.DatabasePermissionEntry{
 						{
-							Databases: []string{"testdb"},
-							Permissions: []v1alpha1.DatabasePermission{
-								v1alpha1.PermissionSelect,
-								v1alpha1.PermissionInsert,
-							},
+							Databases:   []string{"testdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
 						},
 					},
 				},
@@ -113,6 +149,16 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			db, close := ConnectToDatabase(dbLookup, credSecretLookup)
 			defer close()
 			Expect(db.Ping()).To(Succeed(), "pinging database with created credentials should succeed")
+		})
+
+		It("should allow the user to INSERT into a table with a pre-existing SERIAL column", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, credSecretLookup, "testdb")
+			defer closeConn()
+			var nextID int64
+			Expect(db.QueryRow("SELECT nextval('items_id_seq')").Scan(&nextID)).To(Succeed(),
+				"nextval() on a pre-existing sequence must succeed — requires GRANT ALL ON ALL SEQUENCES")
+			_, err := db.Exec("INSERT INTO items (label) VALUES ('lifecycle-test')")
+			Expect(err).NotTo(HaveOccurred(), "INSERT on a SERIAL table requires sequence access to be granted")
 		})
 	})
 
@@ -451,9 +497,9 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 	})
 
 	// ── Table-scoped permission grants ───────────────────────────────────────
-	// Verify that a credential with tables: [foo] can only access the named
-	// table, that a credential without tables retains full-schema access, and
-	// that a credential referencing a non-existent table transitions to Failed.
+	// A table-scoped credential grants access to named tables and their owned
+	// sequences, but not to any other tables or sequences. When the named table
+	// does not exist yet the credential waits and recovers once it appears.
 	Context("when permissions are scoped to specific tables", Ordered, func() {
 		var (
 			ns                 *corev1.Namespace
@@ -461,15 +507,16 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			dbLookup           types.NamespacedName
 			adminSecretLookup  types.NamespacedName
 			scopedSecretLookup types.NamespacedName
+			lateCredLookup     types.NamespacedName
+			lateSecretLookup   types.NamespacedName
 		)
 
 		BeforeAll(func() {
 			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("table-scoped-db")
 			WaitForDatabase(dbLookup)
 
-			// Create a bootstrap credential so the operator provisions the
-			// `scopeddb` database. We then create the test tables via the admin
-			// connection before provisioning the table-scoped credential.
+			// Bootstrap credential provisions the target database. Tables are
+			// created via the admin connection after the database exists.
 			bootstrapCred := &v1alpha1.PostgresCredential{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "scoped-bootstrap",
@@ -497,13 +544,50 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
 			}, Timeout, Interval).Should(Succeed())
 
-			// scopeddb now exists — create the test tables as admin.
+			// Create tables as admin. allowed_table has a SERIAL column to exercise
+			// sequence access scoping; forbidden_table exists to confirm isolation.
+			// late_table is intentionally absent here — the late credential is
+			// created first and the table appears after, testing recovery.
 			db, closeConn := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "scopeddb")
-			_, err := db.Exec("CREATE TABLE IF NOT EXISTS allowed_table (id INT)")
+			_, err := db.Exec("CREATE TABLE IF NOT EXISTS allowed_table (id SERIAL, label TEXT)")
 			Expect(err).NotTo(HaveOccurred(), "creating allowed_table")
-			_, err = db.Exec("CREATE TABLE IF NOT EXISTS forbidden_table (id INT)")
+			_, err = db.Exec("CREATE TABLE IF NOT EXISTS forbidden_table (id SERIAL, label TEXT)")
 			Expect(err).NotTo(HaveOccurred(), "creating forbidden_table")
 			closeConn()
+
+			// Late credential is created before its named table exists. The
+			// credential should wait in Pending and become Ready once the table appears.
+			lateCred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "scoped-late",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "lateuser",
+					SecretName:  "scoped-late-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"scopeddb"},
+							Tables:      []string{"late_table"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, lateCred)).To(Succeed())
+			lateCredLookup = types.NamespacedName{Name: lateCred.Name, Namespace: ns.Name}
+			lateSecretLookup = types.NamespacedName{Name: lateCred.Spec.SecretName, Namespace: ns.Name}
+
+			// Wait for the late credential to have been processed at least once.
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).NotTo(BeEmpty())
+			}, Timeout, Interval).Should(Succeed())
 
 			scopedCred := &v1alpha1.PostgresCredential{
 				ObjectMeta: metav1.ObjectMeta{
@@ -521,7 +605,7 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 						{
 							Databases:   []string{"scopeddb"},
 							Tables:      []string{"allowed_table"},
-							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
 						},
 					},
 				},
@@ -547,65 +631,62 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			Expect(err).NotTo(HaveOccurred(), "scopeduser should have SELECT on allowed_table")
 		})
 
+		It("should allow scopeduser to INSERT into allowed_table using its sequence", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, scopedSecretLookup, "scopeddb")
+			defer closeConn()
+			_, err := db.Exec("INSERT INTO allowed_table (label) VALUES ('scoped-test')")
+			Expect(err).NotTo(HaveOccurred(), "INSERT on allowed_table requires sequence access to be granted for the named table")
+		})
+
 		It("should deny scopeduser SELECT on forbidden_table", func() {
 			db, closeConn := ConnectToDatabaseNamed(dbLookup, scopedSecretLookup, "scopeddb")
 			defer closeConn()
 			_, err := db.Exec("SELECT * FROM forbidden_table")
 			Expect(err).To(HaveOccurred(), "scopeduser should not have SELECT on forbidden_table")
 		})
-	})
 
-	Context("when a table-scoped credential references a non-existent table", Ordered, func() {
-		var (
-			ns         *corev1.Namespace
-			pgdb       *v1alpha1.PostgresDatabase
-			dbLookup   types.NamespacedName
-			credLookup types.NamespacedName
-		)
-
-		BeforeAll(func() {
-			ns, pgdb, dbLookup, _ = NewDatabase("table-missing-db")
-			WaitForDatabase(dbLookup)
-
-			missingCred := &v1alpha1.PostgresCredential{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "missing-table-cred",
-					Namespace: ns.Name,
-					Labels: map[string]string{
-						"db-operator.benjamin-wright.github.com/operator-instance": "test",
-					},
-				},
-				Spec: v1alpha1.PostgresCredentialSpec{
-					DatabaseRef: pgdb.Name,
-					Username:    "missinguser",
-					SecretName:  "missing-table-secret",
-					Permissions: []v1alpha1.DatabasePermissionEntry{
-						{
-							Databases:   []string{"missingdb"},
-							Tables:      []string{"no_such_table"},
-							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
-						},
-					},
-				},
-			}
-			Expect(K8sClient.Create(Ctx, missingCred)).To(Succeed())
-			credLookup = types.NamespacedName{Name: "missing-table-cred", Namespace: ns.Name}
-			_ = dbLookup
+		It("should deny scopeduser access to a sequence owned by forbidden_table", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, scopedSecretLookup, "scopeddb")
+			defer closeConn()
+			var nextID int64
+			err := db.QueryRow("SELECT nextval('forbidden_table_id_seq')").Scan(&nextID)
+			Expect(err).To(HaveOccurred(), "sequence access should be scoped to named tables only")
 		})
 
-		AfterAll(func() {
-			_ = K8sClient.Delete(Ctx, ns)
-		})
-
-		It("should transition to Pending with reason WaitingForTable", func() {
-			Eventually(func(g Gomega) {
+		It("should hold a table-scoped credential in Pending while its named table is absent", func() {
+			Consistently(func(g Gomega) {
 				var fetched v1alpha1.PostgresCredential
-				g.Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhasePending))
+				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).NotTo(Equal(v1alpha1.CredentialPhaseFailed))
 				cond := meta.FindStatusCondition(fetched.Status.Conditions, "Ready")
 				g.Expect(cond).NotTo(BeNil())
 				g.Expect(cond.Reason).To(Equal("WaitingForTable"))
+			}, 5*time.Second, Interval).Should(Succeed())
+		})
+
+		It("should transition the late credential to Ready once the table is created", func() {
+			adminDB, closeAdmin := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "scopeddb")
+			defer closeAdmin()
+			_, err := adminDB.Exec("CREATE TABLE late_table (id SERIAL, label TEXT)")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = adminDB.Exec("INSERT INTO late_table (label) VALUES ('seed')")
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
 			}, Timeout, Interval).Should(Succeed())
+		})
+
+		It("should allow the late credential to SELECT and INSERT on the late table", func() {
+			db, closeConn := ConnectToDatabaseNamed(dbLookup, lateSecretLookup, "scopeddb")
+			defer closeConn()
+			var label string
+			Expect(db.QueryRow("SELECT label FROM late_table").Scan(&label)).To(Succeed())
+			Expect(label).To(Equal("seed"))
+			_, err := db.Exec("INSERT INTO late_table (label) VALUES ('late-write')")
+			Expect(err).NotTo(HaveOccurred(), "INSERT on late_table requires sequence access after recovery")
 		})
 	})
 
@@ -728,122 +809,6 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'cruser')").Scan(&exists)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(exists).To(BeFalse())
-		})
-	})
-
-	Context("Bug B: table-scoped credential should recover when the table appears", Ordered, func() {
-		var (
-			ns                *corev1.Namespace
-			pgdb              *v1alpha1.PostgresDatabase
-			dbLookup          types.NamespacedName
-			adminSecretLookup types.NamespacedName
-			lateCredLookup    types.NamespacedName
-			lateSecretLookup  types.NamespacedName
-		)
-
-		BeforeAll(func() {
-			ns, pgdb, dbLookup, adminSecretLookup = NewDatabase("bug-b-db")
-			WaitForDatabase(dbLookup)
-
-			bootstrap := &v1alpha1.PostgresCredential{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "bug-b-bootstrap",
-					Namespace: ns.Name,
-					Labels: map[string]string{
-						"db-operator.benjamin-wright.github.com/operator-instance": "test",
-					},
-				},
-				Spec: v1alpha1.PostgresCredentialSpec{
-					DatabaseRef: pgdb.Name,
-					Username:    "bug_b_bootstrap",
-					SecretName:  "bug-b-bootstrap-secret",
-					Permissions: []v1alpha1.DatabasePermissionEntry{
-						{
-							Databases:   []string{"bug_b_db"},
-							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
-						},
-					},
-				},
-			}
-			Expect(K8sClient.Create(Ctx, bootstrap)).To(Succeed())
-			Eventually(func(g Gomega) {
-				var fetched v1alpha1.PostgresCredential
-				g.Expect(K8sClient.Get(Ctx, types.NamespacedName{Name: bootstrap.Name, Namespace: ns.Name}, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
-			}, Timeout, Interval).Should(Succeed())
-
-			lateCred := &v1alpha1.PostgresCredential{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "bug-b-late",
-					Namespace: ns.Name,
-					Labels: map[string]string{
-						"db-operator.benjamin-wright.github.com/operator-instance": "test",
-					},
-				},
-				Spec: v1alpha1.PostgresCredentialSpec{
-					DatabaseRef: pgdb.Name,
-					Username:    "bug_b_late",
-					SecretName:  "bug-b-late-secret",
-					Permissions: []v1alpha1.DatabasePermissionEntry{
-						{
-							Databases:   []string{"bug_b_db"},
-							Tables:      []string{"bug_b_late_table"},
-							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionSelect},
-						},
-					},
-				},
-			}
-			Expect(K8sClient.Create(Ctx, lateCred)).To(Succeed())
-			lateCredLookup = types.NamespacedName{Name: lateCred.Name, Namespace: ns.Name}
-			lateSecretLookup = types.NamespacedName{Name: lateCred.Spec.SecretName, Namespace: ns.Name}
-
-			Eventually(func(g Gomega) {
-				var fetched v1alpha1.PostgresCredential
-				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).NotTo(BeEmpty())
-			}, Timeout, Interval).Should(Succeed())
-
-			adminDB, closeAdmin := ConnectToDatabaseNamed(dbLookup, adminSecretLookup, "bug_b_db")
-			defer closeAdmin()
-			_, err := adminDB.Exec("CREATE TABLE bug_b_late_table (id INT)")
-			Expect(err).NotTo(HaveOccurred())
-			_, err = adminDB.Exec("INSERT INTO bug_b_late_table VALUES (7)")
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		AfterAll(func() {
-			_ = K8sClient.Delete(Ctx, ns)
-		})
-
-		It("should not surface a terminal Failed phase for a missing table", func() {
-			Consistently(func(g Gomega) {
-				var fetched v1alpha1.PostgresCredential
-				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).NotTo(Equal(v1alpha1.CredentialPhaseFailed))
-			}, 5*time.Second, Interval).Should(Succeed())
-		})
-
-		It("should transition to Ready once the table exists", func() {
-			Eventually(func(g Gomega) {
-				var fetched v1alpha1.PostgresCredential
-				g.Expect(K8sClient.Get(Ctx, lateCredLookup, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
-			}, Timeout, Interval).Should(Succeed())
-		})
-
-		It("should issue credentials that authenticate against PostgreSQL", func() {
-			db, closeConn := ConnectToDatabaseNamed(dbLookup, lateSecretLookup, "bug_b_db")
-			defer closeConn()
-			Expect(db.Ping()).To(Succeed())
-		})
-
-		It("should let the late credential SELECT from the table", func() {
-			db, closeConn := ConnectToDatabaseNamed(dbLookup, lateSecretLookup, "bug_b_db")
-			defer closeConn()
-			var v int
-			err := db.QueryRow("SELECT id FROM bug_b_late_table").Scan(&v)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(v).To(Equal(7))
 		})
 	})
 })

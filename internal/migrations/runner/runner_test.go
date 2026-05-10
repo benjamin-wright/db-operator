@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,14 +22,29 @@ type call struct {
 }
 
 // fakeStore implements MigrationStore for unit testing.
+// events records every method call in order so tests can assert call ordering.
+// applyErr, if non-nil, is returned by the first Apply call.
 type fakeStore struct {
-	records []store.Record
-	calls   []call
+	records  []store.Record
+	calls    []call
+	events   []string // ordered log: "Lock", "Unlock", "EnsureTable", "Apply:<id>", "Rollback:<id>"
+	applyErr error    // if set, Apply returns this error instead of recording the call
 }
 
-func (f *fakeStore) EnsureTable() error { return nil }
-func (f *fakeStore) Lock() error        { return nil }
-func (f *fakeStore) Unlock() error      { return nil }
+func (f *fakeStore) EnsureTable() error {
+	f.events = append(f.events, "EnsureTable")
+	return nil
+}
+
+func (f *fakeStore) Lock() error {
+	f.events = append(f.events, "Lock")
+	return nil
+}
+
+func (f *fakeStore) Unlock() error {
+	f.events = append(f.events, "Unlock")
+	return nil
+}
 
 func targetPtr(v int64) *int64 { return &v }
 
@@ -37,6 +53,10 @@ func (f *fakeStore) Applied() ([]store.Record, error) {
 }
 
 func (f *fakeStore) Apply(id, name, sqlContent, applyHash, rollbackHash string) error {
+	f.events = append(f.events, "Apply:"+id)
+	if f.applyErr != nil {
+		return f.applyErr
+	}
 	f.calls = append(f.calls, call{op: "apply", id: id, name: name, sqlContent: sqlContent})
 	f.records = append(f.records, store.Record{
 		ID:           id,
@@ -48,6 +68,7 @@ func (f *fakeStore) Apply(id, name, sqlContent, applyHash, rollbackHash string) 
 }
 
 func (f *fakeStore) Rollback(id, sqlContent string) error {
+	f.events = append(f.events, "Rollback:"+id)
 	f.calls = append(f.calls, call{op: "rollback", id: id, sqlContent: sqlContent})
 	var updated []store.Record
 	for _, r := range f.records {
@@ -215,4 +236,68 @@ func TestRun_TargetNotFound(t *testing.T) {
 	fs := &fakeStore{}
 
 	Expect(Run(fs, migrations, targetPtr(999))).To(MatchError(ContainSubstring("not found")))
+}
+
+// ── Lock / Unlock ordering ────────────────────────────────────────────────────
+
+// TestRun_LockCalledBeforeEnsureTable verifies that Lock precedes EnsureTable in
+// the event log on every successful run.
+func TestRun_LockCalledBeforeEnsureTable(t *testing.T) {
+	RegisterTestingT(t)
+
+	migrations := setupMigrationFiles(t, []string{"001"}, []string{"first"})
+	fs := &fakeStore{}
+	Expect(Run(fs, migrations, nil)).To(Succeed())
+
+	lockIdx, ensureIdx := -1, -1
+	for i, ev := range fs.events {
+		switch ev {
+		case "Lock":
+			lockIdx = i
+		case "EnsureTable":
+			ensureIdx = i
+		}
+	}
+	Expect(lockIdx).To(BeNumerically(">=", 0), "Lock should be called")
+	Expect(ensureIdx).To(BeNumerically(">=", 0), "EnsureTable should be called")
+	Expect(lockIdx).To(BeNumerically("<", ensureIdx), "Lock must precede EnsureTable")
+}
+
+// TestRun_UnlockCalledOnSuccess verifies that Unlock is called after a successful run.
+func TestRun_UnlockCalledOnSuccess(t *testing.T) {
+	RegisterTestingT(t)
+
+	migrations := setupMigrationFiles(t, []string{"001"}, []string{"first"})
+	fs := &fakeStore{}
+	Expect(Run(fs, migrations, nil)).To(Succeed())
+
+	Expect(fs.events).To(ContainElement("Unlock"), "Unlock should be called on success")
+}
+
+// TestRun_UnlockCalledOnPlanError verifies that Unlock is called when planning fails
+// (e.g. an integrity error before any migration step runs).
+func TestRun_UnlockCalledOnPlanError(t *testing.T) {
+	RegisterTestingT(t)
+
+	migrations := setupMigrationFiles(t, []string{"001"}, []string{"first"})
+	fs := &fakeStore{
+		records: []store.Record{
+			{ID: "001", Name: "first", ApplyHash: "wronghash", RollbackHash: hashTestFile(t, migrations[0].RollbackPath)},
+		},
+	}
+	Expect(Run(fs, migrations, nil)).To(MatchError(ContainSubstring("integrity error")))
+	Expect(fs.events).To(ContainElement("Unlock"), "Unlock should be called even when planning fails")
+}
+
+// TestRun_UnlockCalledOnApplyError verifies that Unlock is called when an Apply step
+// returns an error.
+func TestRun_UnlockCalledOnApplyError(t *testing.T) {
+	RegisterTestingT(t)
+
+	migrations := setupMigrationFiles(t, []string{"001"}, []string{"first"})
+	fs := &fakeStore{
+		applyErr: errors.New("simulated apply failure"),
+	}
+	Expect(Run(fs, migrations, nil)).To(MatchError(ContainSubstring("simulated apply failure")))
+	Expect(fs.events).To(ContainElement("Unlock"), "Unlock should be called even when Apply fails")
 }
