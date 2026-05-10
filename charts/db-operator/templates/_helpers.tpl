@@ -28,7 +28,7 @@ app.kubernetes.io/component: operator
 Resolve the operator image, defaulting tag to .Chart.AppVersion.
 */}}
 {{- define "db-operator.image" -}}
-{{- $tag := .Values.image.tag | default printf.Chart.AppVersion -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end }}
 
