@@ -811,4 +811,81 @@ var _ = Describe("PostgresCredentialReconciler", func() {
 			Expect(exists).To(BeFalse())
 		})
 	})
+
+	// ── Password rotation: Secret deleted while PG role survives ─────────────
+	// Simulates the scenario where a Kubernetes Secret is deleted (e.g. after a
+	// cluster reset that preserves the PVC) but the PostgreSQL role already exists
+	// with a stale password. EnsureUser must update the role's password so the
+	// new Secret can authenticate.
+	Context("when the credential Secret is deleted and re-reconciled", Ordered, func() {
+		var (
+			ns               *corev1.Namespace
+			pgdb             *v1alpha1.PostgresDatabase
+			dbLookup         types.NamespacedName
+			credLookup       types.NamespacedName
+			credSecretLookup types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			ns, pgdb, dbLookup, _ = NewDatabase("pwd-rotation-db")
+			WaitForDatabase(dbLookup)
+
+			cred := &v1alpha1.PostgresCredential{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pwd-rotation-cred",
+					Namespace: ns.Name,
+					Labels: map[string]string{
+						"db-operator.benjamin-wright.github.com/operator-instance": "test",
+					},
+				},
+				Spec: v1alpha1.PostgresCredentialSpec{
+					DatabaseRef: pgdb.Name,
+					Username:    "rotationuser",
+					SecretName:  "pwd-rotation-secret",
+					Permissions: []v1alpha1.DatabasePermissionEntry{
+						{
+							Databases:   []string{"rotationdb"},
+							Permissions: []v1alpha1.DatabasePermission{v1alpha1.PermissionAll},
+						},
+					},
+				},
+			}
+			Expect(K8sClient.Create(Ctx, cred)).To(Succeed())
+			credLookup = types.NamespacedName{Name: cred.Name, Namespace: ns.Name}
+			credSecretLookup = types.NamespacedName{Name: cred.Spec.SecretName, Namespace: ns.Name}
+
+			Eventually(func(g Gomega) {
+				var fetched v1alpha1.PostgresCredential
+				g.Expect(K8sClient.Get(Ctx, credLookup, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(v1alpha1.CredentialPhaseReady))
+			}, Timeout, Interval).Should(Succeed())
+		})
+
+		AfterAll(func() {
+			_ = K8sClient.Delete(Ctx, ns)
+		})
+
+		It("should re-provision the credential after the Secret is deleted", func() {
+			// Capture the original password before deleting the Secret.
+			var originalSecret corev1.Secret
+			Expect(K8sClient.Get(Ctx, credSecretLookup, &originalSecret)).To(Succeed())
+			originalPassword := string(originalSecret.Data["PGPASSWORD"])
+
+			// Delete the Secret directly, simulating PVC reuse after a cluster reset.
+			Expect(K8sClient.Delete(Ctx, &originalSecret)).To(Succeed())
+
+			// Wait for the controller to recreate the Secret with a new password.
+			Eventually(func(g Gomega) {
+				var newSecret corev1.Secret
+				g.Expect(K8sClient.Get(Ctx, credSecretLookup, &newSecret)).To(Succeed())
+				g.Expect(string(newSecret.Data["PGPASSWORD"])).NotTo(Equal(originalPassword))
+			}, Timeout, Interval).Should(Succeed())
+
+			// The new Secret must allow authentication — EnsureUser must have
+			// updated the PG role's password to match the regenerated Secret.
+			db, closeConn := ConnectToDatabase(dbLookup, credSecretLookup)
+			defer closeConn()
+			Expect(db.Ping()).To(Succeed(), "authentication with new password must succeed after password rotation")
+		})
+	})
 })

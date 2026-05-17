@@ -150,8 +150,9 @@ func (p postgresManager) EnsureDatabase(host, adminUser, adminPass, dbName strin
 	return nil
 }
 
-// EnsureUser connects to the target Postgres instance and creates the specified role
-// with the given password and permissions if it does not already exist.
+// EnsureUser connects to the target Postgres instance and ensures the specified role
+// exists with the given password and permissions. If the role already exists its
+// password is updated so that the Kubernetes Secret remains the authoritative source.
 // When tables is non-empty, privileges are granted only on those specific tables;
 // no ALTER DEFAULT PRIVILEGES is emitted in that case because PostgreSQL has no
 // mechanism to pre-grant future tables by name.
@@ -172,6 +173,12 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
 		if _, err := db.Exec(createSQL); err != nil {
 			return fmt.Errorf("creating role %q: %w", username, err)
+		}
+	} else {
+		alterSQL := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s",
+			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
+		if _, err := db.Exec(alterSQL); err != nil {
+			return fmt.Errorf("updating password for role %q: %w", username, err)
 		}
 	}
 
@@ -315,9 +322,10 @@ WHERE  d.classid       = 'pg_class'::regclass
 	return nil
 }
 
-// EnsureUserExists creates the role with LOGIN PASSWORD if it does not already
-// exist. It connects to the maintenance database because role creation is
-// cluster-wide and does not require any particular target database.
+// EnsureUserExists ensures the role exists with the given password. If the role
+// already exists its password is updated so that the Kubernetes Secret remains
+// the authoritative source. It connects to the maintenance database because role
+// operations are cluster-wide and do not require any particular target database.
 func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, password string) error {
 	db, err := openPostgres(host, adminUser, adminPass, "postgres")
 	if err != nil {
@@ -329,14 +337,20 @@ func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, 
 	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", username).Scan(&exists); err != nil {
 		return fmt.Errorf("checking if role exists: %w", err)
 	}
-	if exists {
+
+	if !exists {
+		createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s",
+			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
+		if _, err := db.Exec(createSQL); err != nil {
+			return fmt.Errorf("creating role %q: %w", username, err)
+		}
 		return nil
 	}
 
-	createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s",
+	alterSQL := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s",
 		pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
-	if _, err := db.Exec(createSQL); err != nil {
-		return fmt.Errorf("creating role %q: %w", username, err)
+	if _, err := db.Exec(alterSQL); err != nil {
+		return fmt.Errorf("updating password for role %q: %w", username, err)
 	}
 	return nil
 }
