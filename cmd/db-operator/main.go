@@ -65,9 +65,6 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Build a label selector to restrict the cache to CRs belonging to this instance.
-	// When instanceName is empty, select CRs that have no operator-instance label.
-	// When instanceName is set, select CRs whose label value matches exactly.
 	var instanceSelector labels.Selector
 	var selectorErr error
 	const instanceLabelKey = "db-operator.benjamin-wright.github.com/operator-instance"

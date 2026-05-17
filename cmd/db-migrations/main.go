@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 
 	_ "github.com/lib/pq"
 
@@ -16,22 +17,27 @@ import (
 )
 
 func main() {
-	// -1 sentinel means "unset" — distinguishes from a valid 0 target.
-	var targetFlag int64
+	var target *int64
 	var migrationsDir string
 	var artifactRef string
 
-	flag.Int64Var(&targetFlag, "target", -1, "Target migration revision to apply/rollback to (optional; omit to apply all)")
+	flag.Func("target", "Target migration revision to apply/rollback to (optional; omit to apply all)", func(s string) error {
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return err
+		}
+		target = &v
+		return nil
+	})
 	flag.StringVar(&migrationsDir, "migrations-dir", "/migrations", "Directory containing migration SQL files")
 	flag.StringVar(&artifactRef, "artifact", "", "OCI reference of a migrations artifact to fetch; overrides --migrations-dir when set")
 	flag.Parse()
 
-	fmt.Printf("db-migrations starting: artifact=%q migrationsDir=%q target=%d\n", artifactRef, migrationsDir, targetFlag)
-
-	var target *int64
-	if targetFlag >= 0 {
-		target = &targetFlag
+	targetStr := "<unset>"
+	if target != nil {
+		targetStr = fmt.Sprintf("%d", *target)
 	}
+	fmt.Printf("db-migrations starting: artifact=%q migrationsDir=%q target=%s\n", artifactRef, migrationsDir, targetStr)
 
 	if artifactRef != "" {
 		fmt.Printf("Fetching OCI artifact: %s\n", artifactRef)

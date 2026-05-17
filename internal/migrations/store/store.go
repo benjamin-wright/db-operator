@@ -15,20 +15,15 @@ type Record struct {
 	RollbackHash string
 }
 
-// Store manages the _migrations tracking table and executes migration SQL
-// against a PostgreSQL database. All direct database interaction is
-// consolidated here so that consumers (e.g. the runner) need only depend on
-// the Store interface.
+// Store manages the _migrations tracking table.
 type Store struct {
 	db *sql.DB
 }
 
-// New creates a new Store backed by the given database connection.
 func New(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-// EnsureTable creates the _migrations tracking table if it does not exist.
 func (s *Store) EnsureTable() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS _migrations (
@@ -45,7 +40,6 @@ func (s *Store) EnsureTable() error {
 	return nil
 }
 
-// Applied returns all applied migration records ordered by ID.
 func (s *Store) Applied() ([]Record, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, applied_at, apply_hash, rollback_hash
@@ -68,9 +62,8 @@ func (s *Store) Applied() ([]Record, error) {
 	return records, rows.Err()
 }
 
-// Apply executes the given SQL within a transaction, then inserts a tracking
-// record with the provided content hashes. If the SQL execution or the record
-// insertion fails the transaction is rolled back.
+// Apply executes sqlContent in a transaction and records the migration in _migrations.
+// Rolls back on any failure.
 func (s *Store) Apply(id, name, sqlContent, applyHash, rollbackHash string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -95,8 +88,8 @@ func (s *Store) Apply(id, name, sqlContent, applyHash, rollbackHash string) erro
 	return nil
 }
 
-// Rollback executes the given rollback SQL within a transaction, then removes
-// the tracking record. If either operation fails the transaction is rolled back.
+// Rollback executes sqlContent in a transaction and removes the migration record from _migrations.
+// Rolls back on any failure.
 func (s *Store) Rollback(id, sqlContent string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -133,7 +126,6 @@ func (s *Store) Lock() error {
 	return nil
 }
 
-// Unlock releases the advisory lock acquired by Lock.
 func (s *Store) Unlock() error {
 	if _, err := s.db.Exec("SELECT pg_advisory_unlock($1)", lockKey); err != nil {
 		return fmt.Errorf("releasing advisory lock: %w", err)

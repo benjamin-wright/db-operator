@@ -12,7 +12,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	// Pure Go Postgres driver.
 	"github.com/lib/pq"
 
 	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
@@ -36,7 +35,6 @@ func (c *postgresCredentialClient) get(ctx context.Context, key client.ObjectKey
 	return true, nil
 }
 
-// createOwned sets a controller owner reference on obj then creates it in the cluster.
 func (c *postgresCredentialClient) createOwned(ctx context.Context, owner, obj client.Object) error {
 	_ = controllerutil.SetControllerReference(owner, obj, c.scheme)
 	return c.inner.Create(ctx, obj)
@@ -62,10 +60,6 @@ func (c *postgresCredentialClient) list(ctx context.Context, obj client.ObjectLi
 	return c.inner.List(ctx, obj, opts...)
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// PostgresManager — external Postgres dependency interface
-// ────────────────────────────────────────────────────────────────────────────
-
 // PostgresManager abstracts direct Postgres interactions so the reconciler can
 // be tested without a live database.
 type PostgresManager interface {
@@ -77,10 +71,8 @@ type PostgresManager interface {
 	// FindOwner returns the current PostgreSQL owner role of dbName, or an empty
 	// string if the database does not exist.
 	FindOwner(host, adminUser, adminPass, dbName string) (string, error)
-	// EnsureUserExists creates the role with a login password if it does not
-	// already exist. It is used when a credential carries no per-database
-	// permissions but still needs the role provisioned (e.g. for clusterRoles
-	// membership grants).
+	// EnsureUserExists provisions the role when a credential carries no per-database
+	// permissions but still needs the role provisioned (e.g. for clusterRoles membership grants).
 	EnsureUserExists(host, adminUser, adminPass, username, password string) error
 	// EnsureRoleMemberships grants username membership in each of roles. The
 	// roles must come from the validClusterRoles allow-list; any other value

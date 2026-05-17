@@ -31,7 +31,7 @@ const (
 	actionRollback action = iota
 )
 
-// step describes a single migration action to execute.
+// step holds a single migration action to execute.
 type step struct {
 	action    action
 	migration discovery.Migration
@@ -45,7 +45,6 @@ func plan(migrations []discovery.Migration, applied []store.Record, target *int6
 		appliedSet[r.ID] = r
 	}
 
-	// Build index of discovered migrations by ID
 	migrationIdx := make(map[string]discovery.Migration)
 	for _, m := range migrations {
 		migrationIdx[m.ID] = m
@@ -76,11 +75,9 @@ func plan(migrations []discovery.Migration, applied []store.Record, target *int6
 		}
 	}
 
-	// Determine direction
 	var steps []step
 
 	if target == nil {
-		// Apply all unapplied migrations in order
 		for _, m := range migrations {
 			if _, applied := appliedSet[m.ID]; !applied {
 				steps = append(steps, step{action: actionApply, migration: m})
@@ -110,7 +107,6 @@ func plan(migrations []discovery.Migration, applied []store.Record, target *int6
 		return nil, fmt.Errorf("target migration %d not found in discovered migrations", *target)
 	}
 
-	// Find current state: the last applied migration in discovered order
 	currentIdx := -1
 	for i := len(migrations) - 1; i >= 0; i-- {
 		if _, ok := appliedSet[migrations[i].ID]; ok {
@@ -120,14 +116,12 @@ func plan(migrations []discovery.Migration, applied []store.Record, target *int6
 	}
 
 	if targetIdx > currentIdx {
-		// Apply forward: apply unapplied migrations from currentIdx+1 to targetIdx (inclusive)
 		for i := currentIdx + 1; i <= targetIdx; i++ {
 			if _, ok := appliedSet[migrations[i].ID]; !ok {
 				steps = append(steps, step{action: actionApply, migration: migrations[i]})
 			}
 		}
 	} else if targetIdx < currentIdx {
-		// Rollback: rollback from currentIdx down to targetIdx+1 (exclusive of target) in reverse
 		for i := currentIdx; i > targetIdx; i-- {
 			if _, ok := appliedSet[migrations[i].ID]; ok {
 				steps = append(steps, step{action: actionRollback, migration: migrations[i]})
