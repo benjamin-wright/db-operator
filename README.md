@@ -185,6 +185,11 @@ Membership in `pg_read_all_data` is a cluster-wide grant resolved at access time
 
 #### Migrations
 
+Planned ownership and admission behavior is defined in the
+[migration design](docs/migrations-design.md), with implementation work tracked
+in the [migration plan](docs/todo.md). Admission-time ownership reservations are
+not yet implemented in this checkout.
+
 Schema migrations are applied via `PostgresMigrationSet`. The CR points at a `PostgresDatabase`, names a logical database, and references an OCI artifact containing versioned SQL files. The operator resolves the reference to a digest, runs a `db-migrations` Job against the target database using an internal owner role (`__dbop_migrations`, provisioned per `PostgresDatabase`), and re-reconciles every matching `PostgresCredential` on success so they pick up grants for any newly created tables.
 
 Build and push an artifact with the [`oras` CLI](https://oras.land/):

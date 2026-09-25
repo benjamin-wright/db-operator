@@ -1,109 +1,137 @@
-# PostgresMigrationSet CRD — remaining phases
+# PostgresMigrationSet implementation plan
 
-Phases 1–3 of the [`PostgresMigrationSet`](../README.md#migrations) work are complete:
-API types, internal migrations role/Secret on `PostgresDatabase`, and the
-`db-migrations` artifact-fetch mode. The remaining work is operator wiring.
+The [migration ownership design](migrations-design.md) is the source of truth for
+the planned admission and ownership protocol. Work starts in db-operator;
+wasm-platform design and integration changes follow once this contract is settled
+and verified here.
 
-## Phase 4 — PostgresMigrationSet client + builder
+API types, artifact fetching, the internal migrations role, Job client/builder,
+controller wiring, RBAC, and integration scenarios already exist. Their presence
+does not establish completion: the current controller calls an undefined
+`reconcileMigrationsDatabase`, and the admission protocol is not implemented.
+The phases below replace the earlier checklist that treated missing Jobs as
+authorization to execute and delegated migration ownership to wasm-platform.
 
-- [x] `internal/operator/controller/postgresmigrationset_client.go`:
-  k8s helpers (get/list/patch CR + status, list owned `batch/v1.Job`s by label,
-  list `core/v1.Pod`s for failure reason) plus an ORAS resolver wrapping
-  `remote.Repository.Resolve` so `spec.artifact` is digest-pinned every reconcile.
-- [x] `internal/operator/controller/postgresmigrationset_builder.go`:
-  build the `Job` with `backoffLimit: 0`, env vars from `<pgdb>-migrations-internal`
-  Secret + `--artifact <digest-ref>` + `--target <revision>`, OwnerRef to the CR,
-  deterministic key label `db-operator.benjamin-wright.github.com/migration-key =
-  short(sha256(observedArtifact|targetRevision))`, `generateName` for the actual
-  Job name, ServiceAccount = operator's namespace SA.
+## 1. Restore and verify the baseline
 
-## Phase 5 — PostgresMigrationSet controller + tests
+- [ ] Reconcile `reconcileMigrationsDatabase` and `ensureMigrationDatabase` in
+  [the migration controller](../internal/operator/controller/postgresmigrationset_controller.go).
+  Restore compilation while preserving the intended database and schema grants.
+- [ ] Run `go test ./...` and the existing migration-set integration suite.
+  Record which lifecycle scenarios pass before changing their semantics.
+- [ ] Review existing tests and APIs against the design; retain useful coverage
+  without treating old unchecked tasks as missing implementations.
 
-- [ ] `internal/operator/controller/postgresmigrationset_controller.go`. Reconcile loop:
-  resolve artifact → digest (write to `status.observedArtifact`); compute desired
-  Job key; list owned Jobs:
-  - matching key Running → `phase = Running`, requeue.
-  - matching key Succeeded → set `currentRevision = spec.targetRevision`,
-    `phase = Ready`; enqueue every `PostgresCredential` in the same namespace
-    whose `databaseRef == migrationset.databaseRef` and whose
-    `permissions[*].databases` includes `spec.database`; schedule Job deletion
-    at `completionTime + jobTTL` (controller-managed, default 1h).
-  - matching key Failed → `phase = Failed` with reason from Pod; leave Job for TTL.
-  - non-matching key in-flight → `phase = Pending`, reason `WaitingForInFlightJob`,
-    do not delete.
-  - no matching Job and not paused → create one.
-  - `spec.paused` short-circuits before create with reason `Paused`.
-- [ ] `internal/operator/controller/postgresmigrationset_controller_test.go`
-  (Ginkgo integration, build tag `integration`). Cover: apply → Ready;
-  bump `targetRevision` to a lower ID → rollback Job runs; re-pushing same tag
-  with new digest re-runs Job; in-flight Job blocks new desired-state Job;
-  `paused: true` short-circuits; sibling `PostgresCredential` created before
-  migration becomes Ready post-Job (Fix C).
+## 2. Specify claim storage and controller recovery
 
-## Phase 6 — cmd/db-operator wiring + RBAC
+- [ ] Resolve the [open protocol details](migrations-design.md#details-to-settle-before-implementation),
+  including controller orphan cleanup, target replacement, and bootstrap of
+  existing resources.
+- [ ] Specify the canonical target encoding, Lease name, and immutable resource
+  namespace/name annotations. The design requires no candidate tracking or UID
+  confirmation on the Lease.
+- [ ] Define controller grace/recheck timing, outstanding-work checks,
+  conditional deletion, missing-claim repair, and cleanup/scheduling coordination.
+- [ ] Define operation-status and retry fields; settle rollback authorization and
+  artifact refresh policy before changing their existing behavior.
 
-- [ ] [cmd/db-operator/main.go](../cmd/db-operator/main.go): register
-  `&controller.PostgresMigrationSetReconciler{}` and add
-  `&v1alpha1.PostgresMigrationSet{}` to the cache `ByObject` map.
-- [ ] [internal/operator/controller/suite_test.go](../internal/operator/controller/suite_test.go):
-  register the new scheme + reconciler.
-- [ ] [charts/db-operator/templates/clusterrole.yaml](../charts/db-operator/templates/clusterrole.yaml):
-  add verbs for `batch/jobs` (create/get/list/watch/delete),
-  `core/pods` (get/list/watch — for failure-reason surfacing),
-  and `postgresmigrationsets` + `/status` + `/finalizers`.
+## 3. Implement admission and controller claim lifecycle
 
-## Phase 7 — Specs + README + todo
+- [ ] Add validating admission for migration-set creates and updates, including
+  immutable database bindings and an atomic Lease reservation before acceptance.
+- [ ] Implement Create/Get admission: derive the Lease location from the target,
+  verify resource namespace/name, handle `AlreadyExists` races, and reject
+  competing addresses. Retries and same-name recreation require no Lease updates.
+- [ ] Implement controller orphan detection and removal with claim watches and
+  follow-up reconciliation, including when the resource never persisted.
+- [ ] Gate migration scheduling on the current target-to-address association.
+  Handle missing or invalid claims through controller recovery and preserve
+  resource-UID attribution for Jobs, status, and cleanup.
+- [ ] Add deletion/finalizer handling and safe claim release after outstanding
+  execution finishes. Preserve database contents and migration history.
 
-- [ ] [cmd/db-operator/spec.md](cmd/db-operator/spec.md): add `PostgresMigrationSet`
-  section; remove `databaseOwner` semantics; document the internal migrations role,
-  post-migration credential re-reconciliation, `jobTTL` default, `paused`, and
-  "wait for in-flight Job before applying new desired state".
-- [ ] [cmd/db-migrations/spec.md](cmd/db-migrations/spec.md): document
-  `--artifact` mode, expected media type
-  `application/vnd.db-operator.migrations.v1.tar+gzip`, retain the advisory-lock
-  note, and document that editing an applied SQL file in a new artifact is a
-  hard error.
-- [ ] [README.md](../README.md): quickstart for
-  `oras push --artifact-type application/vnd.db-operator.migrations.v1.tar+gzip`.
-- [ ] Trim the legacy `databaseOwner` items below once Phase 5 verified end-to-end.
+## 4. Wire admission into deployment
 
----
+- [ ] Register the webhook server and handlers in
+  [cmd/db-operator](../cmd/db-operator/main.go).
+- [ ] Add Helm webhook configuration, Service, certificate provisioning, and
+  installation/upgrade ordering. Verify `failurePolicy: Fail`,
+  `sideEffects: NoneOnDryRun`, and rule scope from the design.
+- [ ] Add narrowly scoped Lease permissions and any admission-related RBAC;
+  preserve ownership across operator instance selectors and restarts.
+- [ ] Update the integration environment to exercise real API admission and
+  cleanup, rather than relying solely on direct reconciler calls.
 
-# Migrations Owner Role + Concurrency Safety
+## 5. Reconcile intent independently of Job retention
 
-Driven by wasm-platform Phase 9.3 (migrations Job lifecycle). The wasm-platform operator
-provisions a per-app `migrations` PostgresCredential that must run DDL (`CREATE TABLE`,
-etc.) and grant resulting tables to other per-app credentials. Today's `PostgresCredential`
-only grants table-level privileges and offers no way to make a role the database owner,
-so DDL fails. Separately, the migrations runner has no concurrency guard — concurrent
-Job pods can race on the `_migrations` tracking table.
+- [ ] Replace the current Job-existence-driven decision in
+  [the controller](../internal/operator/controller/postgresmigrationset_controller.go)
+  with the execution/completion contract in the design.
+- [ ] Include the database binding in execution identity; distinguish resolved,
+  running, and successfully applied operations in status.
+- [ ] Record a finished Job against its original operation; process the latest
+  desired state after in-flight work completes.
+- [ ] Retain success and failure outcomes after Job cleanup. Recover uncertain
+  execution through the database ledger rather than assuming a missing Job
+  authorizes another attempt.
+- [ ] Verify credential re-reconciliation after successful migration, including
+  credentials previously blocked on `WaitingForTable`.
+- [ ] Verify advisory-lock acquisition and release on the intended database
+  session, including success, plan errors, and execution errors.
 
-## Remaining Tasks
+## 6. Acceptance coverage
 
-- [ ] **Runner tests** ([internal/migrations/runner/runner_test.go](internal/migrations/runner/runner_test.go)):
-  add a fake-store assertion that `Lock` is called before `EnsureTable` and `Unlock`
-  is called on every exit path (success, plan error, apply error).
-- [ ] **README + spec**: document `databaseOwner` semantics, the owner-conflict rule,
-  and the auto-granted default-privileges behaviour in
-  [README.md](README.md) and [cmd/db-operator/spec.md](cmd/db-operator/spec.md). Note the
-  advisory lock in [cmd/db-migrations/spec.md](cmd/db-migrations/spec.md) under the
-  Interfaces section.
+- [ ] Concurrent creates with different user-chosen names targeting the same
+  logical database, including different revisions: exactly one reservation
+  wins, the competing request is rejected, and only the owner schedules work.
+- [ ] Independent target databases remain independently claimable.
+- [ ] Concurrent creates that both observe an absent Lease resolve through
+  atomic creation; the loser checks the winning claim after `AlreadyExists`.
+- [ ] Repeated admission calls and client retries at the same resource address
+  reuse the claim without updating it; ordinary owner updates succeed and
+  binding changes are rejected before reserving another target.
+- [ ] Dry runs create no reservation. Webhook failure prevents real admission.
+- [ ] The controller discovers and removes orphan claims after later admission
+  rejection, storage failure, or uncertain responses, even with no resource event
+  and across controller restarts. Pending creates receive the documented grace
+  period; live resources and unresolved execution prevent orphan removal.
+- [ ] Delayed persistence and cleanup/scheduling races obey the execution guard.
+  A missing or differently assigned claim blocks work until controller recovery;
+  a matching current claim permits the named resource under the agreed semantics.
+- [ ] Stale cleanup cannot delete a changed or recreated Lease; conditional
+  deletion failures cause re-evaluation.
+- [ ] Controller restarts retain live claims. Same-name recreation passes
+  admission but cannot accidentally inherit previous-UID Jobs or status.
+  Deletion during execution does not release the claim early.
+- [ ] Missing claims, target replacement, and pre-existing duplicate resources
+  follow the chosen bootstrap/recovery procedure without overlapping execution.
+- [ ] Successful and failed Job cleanup, status updates, and controller restarts
+  do not request new migrations. Explicit retry follows its settled contract.
+- [ ] Desired-state changes during execution report the completed operation
+  accurately, then reconcile the latest request. Pausing retains ownership.
+- [ ] Standalone db-operator usage passes without wasm-platform being deployed.
 
----
+## 7. Align shipped documentation
 
-# Bug: Permission Reconciliation Brittle to Ordering — cross-repo follow-up
+- [ ] Update [the operator spec](../cmd/db-operator/spec.md) with verified
+  `PostgresMigrationSet` behavior and remove obsolete `databaseOwner` claims.
+  Keep protocol implementation details in the design document.
+- [ ] Update [the runner spec](../cmd/db-migrations/spec.md) for artifact mode,
+  file integrity, supported revision targets, and advisory-lock behavior.
+- [ ] Update [README migration examples](../README.md#migrations) to match the
+  implemented artifact, retry, ownership, and rollback contract; remove the
+  planned-feature notice only after admission is verified.
+- [ ] Document the standalone recovery workflow and refresh this checklist with
+  verified completion rather than inferring completion from file presence.
 
-Bug A (owner-transition default-priv replay) and Bug B (idempotent Postgres
-reconciliation, `Pending/WaitingForTable` instead of terminal `Failed`) have
-been fixed and verified by the integration suite in db-operator. Two
-follow-up items remain, both owned outside this repo:
+## Later: consumer alignment
 
-## Remaining Tasks
+After the db-operator design is settled and its implementation is verified:
 
-- [ ] **Fix C in wasm-platform**: in wp-operator's `application_controller`,
-  gate creation of non-owner (writer/reader) `PostgresCredential`s behind the
-  migrations Job reporting `Succeeded`. Tracked in `wasm-platform/docs/todo.md`
-  under the Phase 9 work.
-- [ ] Trigger `e2e-tests` via the Tilt MCP server in the wasm-platform
-  workspace and confirm it passes. (This is the cross-repo gate — db-operator
-  alone can't prove the fix.)
+- [ ] Revisit wasm-platform's migration design and dependency versions to consume
+  the verified db-operator contract instead of creating its own migration Jobs.
+- [ ] Define application activation against the requested migration completion
+  and credential readiness, then verify the cross-repository e2e workflow.
+
+The older per-application `databaseOwner` proposal and platform-owned migration
+Job plan are superseded context, not implementation tasks for this operator.
