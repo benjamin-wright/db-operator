@@ -141,9 +141,9 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 	}
 
 	// EnsureUserExists is only needed for clusterRoles-only credentials —
-	// EnsureUser inside the Permissions loop creates the role otherwise. For
-	// existing roles EnsureUserExists is a no-op (it does not rotate the
-	// password), so the password recovered from the Secret remains authoritative.
+	// EnsureUser inside the Permissions loop creates the role otherwise.
+	// Both functions update the password when the role already exists, keeping
+	// the Kubernetes Secret as the authoritative credential source.
 	if len(pgcred.Spec.Permissions) == 0 {
 		if err := r.pgDB.EnsureUserExists(host, adminUser, adminPass, pgcred.Spec.Username, password); err != nil {
 			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,

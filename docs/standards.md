@@ -51,6 +51,7 @@ Before writing anything new — utility, pattern, convention, or routine — che
 - Names (functions, variables, types) must be descriptive enough to make their purpose obvious without a comment.
 - Comments must add information the code cannot express — explain *why*, not *what*. Never write a comment that just restates the line it sits next to.
 - Prefer fewer, meaningful comments over many redundant ones.
+- Before writing a comment, consider whether it would be better placed in the project documentation.
 
 ### Single Responsibility Principle
 - Code must be well composed, with clear responsibilities for each component. This applies both in terms of subject matter (separate controllers for separate CRD resource types) and in terms of clients (How something is done) and orchestrators (When something is done).

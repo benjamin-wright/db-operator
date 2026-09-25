@@ -138,3 +138,37 @@ func TestDiscover_IgnoresSubdirectories(t *testing.T) {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(migrations).To(HaveLen(1))
 }
+
+func TestDiscover_IgnoresMacOSMetadataFiles(t *testing.T) {
+	RegisterTestingT(t)
+
+	// macOS AppleDouble files (._. and ._<name>) must be silently skipped so
+	// that artifacts produced on macOS do not cause spurious discovery errors.
+	dir := setupDir(t, []string{
+		"001-init-apply.sql",
+		"001-init-rollback.sql",
+		"._.",
+		"._001-init-apply.sql",
+		".DS_Store",
+	})
+
+	migrations, err := Discover(dir)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(migrations).To(HaveLen(1))
+}
+
+func TestDiscover_IgnoresNonSQLFiles(t *testing.T) {
+	RegisterTestingT(t)
+
+	// Non-.sql files (READMEs, checksums, etc.) must not cause a hard failure.
+	dir := setupDir(t, []string{
+		"001-init-apply.sql",
+		"001-init-rollback.sql",
+		"README.md",
+		"checksums.txt",
+	})
+
+	migrations, err := Discover(dir)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(migrations).To(HaveLen(1))
+}

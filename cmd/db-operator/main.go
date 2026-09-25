@@ -41,6 +41,7 @@ func main() {
 	var instanceName string
 	var migrationImage string
 	var serviceAccountName string
+	var jobRegistryHost string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -53,6 +54,8 @@ func main() {
 		"Container image used for migration Jobs spawned by the PostgresMigrationSet controller.")
 	flag.StringVar(&serviceAccountName, "service-account-name", "",
 		"ServiceAccount name to set on migration Job pods. Defaults to the namespace default SA when empty.")
+	flag.StringVar(&jobRegistryHost, "job-registry-host", os.Getenv("JOB_REGISTRY_HOST"),
+		"Registry host (host:port) to use in migration Job artifact references. When set, overrides the registry host resolved by the operator. Use when the in-cluster registry address differs from the host-side address (e.g. k3d local registries).")
 
 	opts := zap.Options{
 		Development: true,
@@ -62,9 +65,6 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Build a label selector to restrict the cache to CRs belonging to this instance.
-	// When instanceName is empty, select CRs that have no operator-instance label.
-	// When instanceName is set, select CRs whose label value matches exactly.
 	var instanceSelector labels.Selector
 	var selectorErr error
 	const instanceLabelKey = "db-operator.benjamin-wright.github.com/operator-instance"
@@ -158,6 +158,7 @@ func main() {
 		InstanceName:       instanceName,
 		MigrationImage:     migrationImage,
 		ServiceAccountName: serviceAccountName,
+		JobRegistryHost:    jobRegistryHost,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PostgresMigrationSet")
 		os.Exit(1)

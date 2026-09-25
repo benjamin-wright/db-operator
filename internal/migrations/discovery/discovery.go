@@ -47,6 +47,19 @@ func Discover(dir string) ([]Migration, error) {
 		}
 
 		fname := entry.Name()
+
+		// Skip hidden files. macOS creates AppleDouble companion files (e.g.
+		// ._. and ._<name>) when tarballs are produced on HFS+ volumes; these
+		// must not cause a hard failure.
+		if strings.HasPrefix(fname, ".") {
+			continue
+		}
+
+		// Skip non-SQL files silently; only .sql files can be migrations.
+		if !strings.HasSuffix(fname, ".sql") {
+			continue
+		}
+
 		matches := filenamePattern.FindStringSubmatch(fname)
 		if matches == nil {
 			return nil, fmt.Errorf("malformed migration filename: %s (expected <id>-<name>-apply.sql or <id>-<name>-rollback.sql)", fname)

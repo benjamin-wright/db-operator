@@ -43,6 +43,19 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
   - Leader election lock ID incorporates the instance name (or `"default"` when empty) to prevent conflicts between instances
   - Instance name is configured via `--instance-name` flag (default: empty)
   - The standalone local deployment (for integration testing) runs as a separate instance from the platform-wide deployment, without replacing or disabling it
+- `PostgresMigrationSet` CRD — declares a versioned set of SQL migrations to apply to a named logical database within a referenced `PostgresDatabase`
+  - `spec.artifact` — OCI reference (tag or digest) to the migration artifact; the operator resolves it to a digest on every reconcile and stores the pinned reference in `status.observedArtifact`
+  - `spec.database` — logical database name; created on demand by the internal migrations role if it does not already exist
+  - `spec.targetRevision` — numeric revision to converge to; lowering the value triggers a rollback Job
+  - `spec.jobTTL` — how long a completed Job (Succeeded or Failed) is retained before the operator deletes it; defaults to `1h`
+  - `spec.paused` — when `true`, the operator sets `phase = Pending` with reason `Paused` and will not create new Jobs; any in-flight Job runs to completion
+  - The operator uses a dedicated internal migrations role (`__dbop_migrations`) provisioned per `PostgresDatabase`; this role is made the owner of the target database so it can run DDL. The role and its credentials are stored in a Secret named `<pgdb>-migrations-internal` in the same namespace
+  - Each reconcile computes a deterministic Job key (`sha256(observedArtifact|targetRevision)`); only one Job per key is ever created
+  - If a Job with a different key is still in-flight (not yet Succeeded or Failed), the controller sets `phase = Pending` with reason `WaitingForInFlightJob` and requeues; it does not delete the running Job
+  - When the matching Job succeeds, the controller sets `status.currentRevision = spec.targetRevision`, transitions to `phase = Ready`, and enqueues every `PostgresCredential` in the same namespace whose `databaseRef` and `permissions[*].databases` overlap with the migration set — ensuring credentials pick up grants for newly created tables
+  - When the matching Job fails, the controller sets `phase = Failed` and surfaces the failure reason from the Job's Pod; the Job is left until its TTL elapses
+  - Completed Jobs are deleted by the operator after `jobTTL` from completion time; this is controller-managed and does not rely on Kubernetes `ttlSecondsAfterFinished`
+  - Status fields: `phase` (`Pending`/`Running`/`Ready`/`Failed`), `currentRevision`, `observedArtifact`, conditions
 
 ## Interfaces
 - `games-hub.io/v1alpha1/PostgresDatabase` — namespaced CRD; consumed by application deployments to request a PostgreSQL instance
@@ -51,5 +64,6 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
 - `games-hub.io/v1alpha1/RedisCredential` — namespaced CRD; consumed by application deployments to request a Redis ACL user and credentials Secret
 - `games-hub.io/v1alpha1/NatsCluster` — namespaced CRD; consumed by application deployments to request a NATS server instance
 - `games-hub.io/v1alpha1/NatsAccount` — namespaced CRD; consumed by application deployments to declare a NATS account (with users, exports, and imports) on a cluster
-- Kubernetes API server — the operator reads and writes StatefulSets, Deployments, Services, ConfigMaps, and Secrets as owned sub-resources of each CRD
+- `games-hub.io/v1alpha1/PostgresMigrationSet` — namespaced CRD; consumed by application deployments to declare a versioned SQL migration set to run against a `PostgresDatabase`
+- Kubernetes API server — the operator reads and writes StatefulSets, Deployments, Services, ConfigMaps, Secrets, and `batch/v1` Jobs as owned sub-resources of each CRD; it also reads Pods (read-only) to surface Job failure reasons
 

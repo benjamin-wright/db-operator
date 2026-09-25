@@ -5,24 +5,45 @@ the planned admission and ownership protocol. Work starts in db-operator;
 wasm-platform design and integration changes follow once this contract is settled
 and verified here.
 
-API types, artifact fetching, the internal migrations role, Job client/builder,
-controller wiring, RBAC, and integration scenarios already exist. Their presence
-does not establish completion: the current controller calls an undefined
-`reconcileMigrationsDatabase`, and the admission protocol is not implemented.
-The phases below replace the earlier checklist that treated missing Jobs as
-authorization to execute and delegated migration ownership to wasm-platform.
+## Implemented baseline
 
-## 1. Restore and verify the baseline
+Reviewed against upstream `93affcb` on 2026-09-25. The existing migration rollout
+is implemented; the ownership and execution changes in the design are follow-on
+work, not missing pieces of that rollout.
 
-- [ ] Reconcile `reconcileMigrationsDatabase` and `ensureMigrationDatabase` in
-  [the migration controller](../internal/operator/controller/postgresmigrationset_controller.go).
-  Restore compilation while preserving the intended database and schema grants.
-- [ ] Run `go test ./...` and the existing migration-set integration suite.
-  Record which lifecycle scenarios pass before changing their semantics.
-- [ ] Review existing tests and APIs against the design; retain useful coverage
-  without treating old unchecked tasks as missing implementations.
+- The controller calls `ensureMigrationDatabase` and compiles. API types, OCI
+  artifact fetching, the internal migrations role, Jobs, controller registration,
+  and deployment RBAC are present. The operator chart now contains the optional
+  MCP deployment under `templates/mcp/` and operator resources under
+  `templates/operator/`.
+- Credential re-reconciliation after migration success, sequence-grant fixes,
+  migration-role password synchronization, rollback to revision zero, and
+  migration-file discovery fixes are present. The runner has advisory-lock call
+  ordering tests. Existing integration scenarios cover apply, rollback, mutable
+  tags, pausing, in-flight work, and credentials waiting for migrated tables.
+- `go test ./...` passes, and the migration/controller integration suites compile
+  with `-tags=integration -run '^$'`. Live integration tests were not rerun during
+  this review: neither the current kubeconfig nor the suite's fallback
+  `~/.scratch/db-operator.yaml` has a current context. Upstream's completed
+  checklist reports previous integration verification.
 
-## 2. Specify claim storage and controller recovery
+The remaining assumptions were checked against the implementation:
+
+- There is no migration admission webhook, ownership Lease, immutable-binding
+  validation, or migration-set finalizer. These remain new work.
+- [Job selection](../internal/operator/controller/postgresmigrationset_controller.go)
+  still determines whether to execute. Successful Job deletion can trigger
+  another attempt. Returning to an earlier target while its successful Job is
+  retained can reuse stale success instead of migrating back to that target.
+  Failed Jobs have no TTL cleanup in the failure handler.
+- [Job lookup](../internal/operator/controller/postgresmigrationset_client.go)
+  filters by migration-set name, without verifying the owner UID. The Job key
+  contains artifact digest and target revision but omits the database binding.
+- [The SQL store](../internal/migrations/store/store.go) uses a pooled `*sql.DB`
+  for session-scoped lock/unlock and migration operations. The existing fake
+  store tests establish call order, not a retained-session guarantee.
+
+## 1. Specify claim storage and controller recovery
 
 - [ ] Resolve the [open protocol details](migrations-design.md#details-to-settle-before-implementation),
   including controller orphan cleanup, target replacement, and bootstrap of
@@ -35,7 +56,7 @@ authorization to execute and delegated migration ownership to wasm-platform.
 - [ ] Define operation-status and retry fields; settle rollback authorization and
   artifact refresh policy before changing their existing behavior.
 
-## 3. Implement admission and controller claim lifecycle
+## 2. Implement admission and controller claim lifecycle
 
 - [ ] Add validating admission for migration-set creates and updates, including
   immutable database bindings and an atomic Lease reservation before acceptance.
@@ -50,7 +71,7 @@ authorization to execute and delegated migration ownership to wasm-platform.
 - [ ] Add deletion/finalizer handling and safe claim release after outstanding
   execution finishes. Preserve database contents and migration history.
 
-## 4. Wire admission into deployment
+## 3. Wire admission into deployment
 
 - [ ] Register the webhook server and handlers in
   [cmd/db-operator](../cmd/db-operator/main.go).
@@ -58,11 +79,12 @@ authorization to execute and delegated migration ownership to wasm-platform.
   installation/upgrade ordering. Verify `failurePolicy: Fail`,
   `sideEffects: NoneOnDryRun`, and rule scope from the design.
 - [ ] Add narrowly scoped Lease permissions and any admission-related RBAC;
+  extend the existing `charts/db-operator/templates/operator/` resources and
   preserve ownership across operator instance selectors and restarts.
 - [ ] Update the integration environment to exercise real API admission and
   cleanup, rather than relying solely on direct reconciler calls.
 
-## 5. Reconcile intent independently of Job retention
+## 4. Reconcile intent independently of Job retention
 
 - [ ] Replace the current Job-existence-driven decision in
   [the controller](../internal/operator/controller/postgresmigrationset_controller.go)
@@ -70,16 +92,20 @@ authorization to execute and delegated migration ownership to wasm-platform.
 - [ ] Include the database binding in execution identity; distinguish resolved,
   running, and successfully applied operations in status.
 - [ ] Record a finished Job against its original operation; process the latest
-  desired state after in-flight work completes.
+  desired state after in-flight work completes. Returning to an earlier target
+  after a rollback must not reuse an old successful Job as current completion.
+- [ ] Verify the Job's controller owner UID when associating it with a migration
+  set; keep detection of older in-flight work separate from success attribution.
 - [ ] Retain success and failure outcomes after Job cleanup. Recover uncertain
   execution through the database ledger rather than assuming a missing Job
-  authorizes another attempt.
-- [ ] Verify credential re-reconciliation after successful migration, including
-  credentials previously blocked on `WaitingForTable`.
-- [ ] Verify advisory-lock acquisition and release on the intended database
-  session, including success, plan errors, and execution errors.
+  authorizes another attempt. Implement consistent retention for failed Jobs.
+- [ ] Preserve the existing credential re-reconciliation and sequence grants;
+  rerun their integration coverage after changing migration completion handling.
+- [ ] Ensure advisory-lock acquisition, migration work, and release retain the
+  intended database session. Keep the existing runner call-order tests and add
+  coverage that exercises the actual store/session behavior.
 
-## 6. Acceptance coverage
+## 5. Acceptance coverage
 
 - [ ] Concurrent creates with different user-chosen names targeting the same
   logical database, including different revisions: exactly one reservation
@@ -107,17 +133,26 @@ authorization to execute and delegated migration ownership to wasm-platform.
   follow the chosen bootstrap/recovery procedure without overlapping execution.
 - [ ] Successful and failed Job cleanup, status updates, and controller restarts
   do not request new migrations. Explicit retry follows its settled contract.
+- [ ] Apply revision 1, roll back to 0, then request 1 again while the original
+  success Job is retained: SQL is reapplied and completion describes the new run.
 - [ ] Desired-state changes during execution report the completed operation
   accurately, then reconcile the latest request. Pausing retains ownership.
 - [ ] Standalone db-operator usage passes without wasm-platform being deployed.
 
-## 7. Align shipped documentation
+## 6. Align shipped documentation
 
 - [ ] Update [the operator spec](../cmd/db-operator/spec.md) with verified
-  `PostgresMigrationSet` behavior and remove obsolete `databaseOwner` claims.
-  Keep protocol implementation details in the design document.
-- [ ] Update [the runner spec](../cmd/db-migrations/spec.md) for artifact mode,
-  file integrity, supported revision targets, and advisory-lock behavior.
+  ownership and execution behavior. Its `PostgresMigrationSet` section already
+  exists, but claims about permanent Job deduplication and failed-Job TTL do not
+  match the code. Keep protocol implementation details in the design document.
+- [ ] Remove obsolete `PostgresCredential.spec.databaseOwner` examples and
+  claims from README and the operator spec; the field is absent from the API.
+  Correct the claim that the internal migrations role owns the logical database:
+  the current controller creates it via the admin connection and grants schema
+  access to the role without transferring database ownership.
+- [ ] Align [the runner spec](../cmd/db-migrations/spec.md) with its implemented
+  artifact workflow, revision-zero semantics, and verified advisory-lock
+  behavior; artifact mode and integrity checking are already documented.
 - [ ] Update [README migration examples](../README.md#migrations) to match the
   implemented artifact, retry, ownership, and rollback contract; remove the
   planned-feature notice only after admission is verified.
@@ -132,6 +167,11 @@ After the db-operator design is settled and its implementation is verified:
   the verified db-operator contract instead of creating its own migration Jobs.
 - [ ] Define application activation against the requested migration completion
   and credential readiness, then verify the cross-repository e2e workflow.
+- [ ] Carry forward upstream's wasm-platform credential-ordering follow-up
+  ("wp-operator Fix C") under that contract. Verify sequence access end to end
+  with the existing db-operator grant fixes; do not reimplement those fixes.
+- [ ] Run the wasm-platform e2e suite after updating the consumer. Its current
+  Go dependency and deployed chart still predate this operator baseline.
 
 The older per-application `databaseOwner` proposal and platform-owned migration
 Job plan are superseded context, not implementation tasks for this operator.

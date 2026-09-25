@@ -153,6 +153,11 @@ spec:
                 - Ready
                 - Failed
                 type: string
+              migrationsSecretVersion:
+                description: |-
+                  MigrationsSecretVersion is the ResourceVersion of the migrations Secret
+                  the last time the migrations role password was successfully synced.
+                type: string
               secretName:
                 description: |-
                   SecretName is the name of the Kubernetes Secret containing the admin

@@ -46,14 +46,22 @@ helm upgrade db-operator oci://ghcr.io/benjamin-wright/db-operator/db-operator \
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `image.repository` | `localhost:5001/db-operator` | Operator image repository |
-| `image.tag` | `latest` | Operator image tag |
+| `image.repository` | `docker.io/benwright/db-operator` | Operator image repository |
+| `image.tag` | `""` (defaults to chart `appVersion`) | Operator image tag |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
+| `migrationImage.repository` | `docker.io/benwright/db-migrations` | Migration job image repository |
+| `migrationImage.tag` | `""` (defaults to chart `appVersion`) | Migration job image tag |
+| `migrationImage.pullPolicy` | `IfNotPresent` | Migration job image pull policy |
 | `instanceName` | `""` | Operator instance name; when set, only CRs carrying a matching `db-operator.benjamin-wright.github.com/operator-instance` label are reconciled |
 | `resources.requests.cpu` | `50m` | CPU request |
 | `resources.requests.memory` | `64Mi` | Memory request |
 | `resources.limits.cpu` | `200m` | CPU limit |
 | `resources.limits.memory` | `128Mi` | Memory limit |
+| `mcp.enabled` | `false` | Deploy the MCP server alongside the operator |
+| `mcp.image.repository` | `docker.io/benwright/db-mcp` | MCP server image repository |
+| `mcp.image.tag` | `""` (defaults to chart `appVersion`) | MCP server image tag |
+| `mcp.image.pullPolicy` | `IfNotPresent` | MCP server image pull policy |
+| `mcp.addr` | `:8080` | Bind address for the MCP server |
 
 Override values with `--set` or a values file:
 
@@ -163,7 +171,29 @@ spec:
         - SELECT
 ```
 
-When `tables` is set, the operator runs `GRANT SELECT ON TABLE orders, products TO readonly` — no other tables are accessible. Note that `ALTER DEFAULT PRIVILEGES` is **not** applied for table-scoped entries; tables created after the credential is provisioned will not be auto-granted. If any listed table does not exist when the credential is reconciled, the credential transitions to `Failed` with reason `TableNotFound`.
+When `tables` is set, the operator runs `GRANT SELECT ON TABLE orders, products TO readonly` — no other tables are accessible. Note that `ALTER DEFAULT PRIVILEGES` is **not** applied for table-scoped entries; tables created after the credential is provisioned will not be auto-granted. If any listed table does not exist when the credential is reconciled, the credential transitions to `Pending` with reason `WaitingForTable` and retries automatically once the table appears.
+
+To make a credential the **owner** of a database — enabling DDL operations such as `CREATE TABLE` — set `spec.databaseOwner: true`:
+
+```yaml
+apiVersion: db-operator.benjamin-wright.github.com/v1alpha1
+kind: PostgresCredential
+metadata:
+  name: migrations-creds
+  namespace: default
+spec:
+  databaseRef: my-postgres
+  username: migrations
+  secretName: migrations-postgres-secret
+  databaseOwner: true
+  permissions:
+    - databases:
+        - myapp
+      permissions:
+        - ALL
+```
+
+The operator makes the credential's role the `OWNER` of every database listed in `permissions[*].databases` and grants it `ALL` privileges on the public schema, allowing it to run `CREATE TABLE`, `ALTER TABLE`, and similar DDL. At most one credential per `(databaseRef, database)` pair may set `databaseOwner: true`; a second credential attempting ownership of the same database transitions to `Failed` with reason `OwnerConflict`. When a non-owner credential is reconciled against a database that already has an owner, the operator automatically sets `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` so that tables created by the owner after the non-owner credential was provisioned are still accessible.
 
 For credentials that need blanket access spanning all current and future tables — including those created later by other roles such as a migrations user that is not the database owner — use `clusterRoles` to grant a PostgreSQL predefined role via membership:
 

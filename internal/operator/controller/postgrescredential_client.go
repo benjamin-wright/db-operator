@@ -12,7 +12,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	// Pure Go Postgres driver.
 	"github.com/lib/pq"
 
 	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
@@ -36,7 +35,6 @@ func (c *postgresCredentialClient) get(ctx context.Context, key client.ObjectKey
 	return true, nil
 }
 
-// createOwned sets a controller owner reference on obj then creates it in the cluster.
 func (c *postgresCredentialClient) createOwned(ctx context.Context, owner, obj client.Object) error {
 	_ = controllerutil.SetControllerReference(owner, obj, c.scheme)
 	return c.inner.Create(ctx, obj)
@@ -62,10 +60,6 @@ func (c *postgresCredentialClient) list(ctx context.Context, obj client.ObjectLi
 	return c.inner.List(ctx, obj, opts...)
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// PostgresManager — external Postgres dependency interface
-// ────────────────────────────────────────────────────────────────────────────
-
 // PostgresManager abstracts direct Postgres interactions so the reconciler can
 // be tested without a live database.
 type PostgresManager interface {
@@ -77,10 +71,8 @@ type PostgresManager interface {
 	// FindOwner returns the current PostgreSQL owner role of dbName, or an empty
 	// string if the database does not exist.
 	FindOwner(host, adminUser, adminPass, dbName string) (string, error)
-	// EnsureUserExists creates the role with a login password if it does not
-	// already exist. It is used when a credential carries no per-database
-	// permissions but still needs the role provisioned (e.g. for clusterRoles
-	// membership grants).
+	// EnsureUserExists provisions the role when a credential carries no per-database
+	// permissions but still needs the role provisioned (e.g. for clusterRoles membership grants).
 	EnsureUserExists(host, adminUser, adminPass, username, password string) error
 	// EnsureRoleMemberships grants username membership in each of roles. The
 	// roles must come from the validClusterRoles allow-list; any other value
@@ -90,6 +82,11 @@ type PostgresManager interface {
 	// dbName without changing database ownership. Safe to call concurrently
 	// with other controllers.
 	EnsureSchemaAccess(host, adminUser, adminPass, dbName, username string) error
+	// SetUserPassword unconditionally updates the password for an existing role.
+	// Use this when the Kubernetes Secret is the authoritative source and the
+	// database-side password may have drifted (e.g. after PVC reuse or forced
+	// Secret regeneration).
+	SetUserPassword(host, adminUser, adminPass, username, password string) error
 }
 
 // postgresManager is the production implementation of PostgresManager.
@@ -145,8 +142,9 @@ func (p postgresManager) EnsureDatabase(host, adminUser, adminPass, dbName strin
 	return nil
 }
 
-// EnsureUser connects to the target Postgres instance and creates the specified role
-// with the given password and permissions if it does not already exist.
+// EnsureUser connects to the target Postgres instance and ensures the specified role
+// exists with the given password and permissions. If the role already exists its
+// password is updated so that the Kubernetes Secret remains the authoritative source.
 // When tables is non-empty, privileges are granted only on those specific tables;
 // no ALTER DEFAULT PRIVILEGES is emitted in that case because PostgreSQL has no
 // mechanism to pre-grant future tables by name.
@@ -168,6 +166,12 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 		if _, err := db.Exec(createSQL); err != nil {
 			return fmt.Errorf("creating role %q: %w", username, err)
 		}
+	} else {
+		alterSQL := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s",
+			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
+		if _, err := db.Exec(alterSQL); err != nil {
+			return fmt.Errorf("updating password for role %q: %w", username, err)
+		}
 	}
 
 	if len(permissions) > 0 {
@@ -180,6 +184,21 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 		}
 		privClause := strings.Join(privs, ", ")
 		quotedUser := pq.QuoteIdentifier(username)
+
+		// Sequences only accept SELECT, UPDATE, and ALL — filter out table-only
+		// privileges (INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER) before
+		// building any sequence-targeted GRANT.
+		validSeqPerms := map[v1alpha1.DatabasePermission]bool{
+			v1alpha1.PermissionSelect: true,
+			v1alpha1.PermissionUpdate: true,
+			v1alpha1.PermissionAll:    true,
+		}
+		var seqPrivs []string
+		for _, perm := range permissions {
+			if validSeqPerms[perm] {
+				seqPrivs = append(seqPrivs, string(perm))
+			}
+		}
 
 		if len(tables) > 0 {
 			// Table-scoped grant: privileges apply only to the named tables.
@@ -197,11 +216,64 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 			if _, err := db.Exec(grantSQL); err != nil {
 				return fmt.Errorf("granting table-scoped permissions to %q: %w", username, err)
 			}
+
+			// Fix C: grant sequence-compatible privileges on sequences owned by
+			// the named tables. PostgreSQL has no equivalent of ALTER DEFAULT
+			// PRIVILEGES scoped to specific tables, so this query is re-run on
+			// every reconcile to catch sequences added by later migrations.
+			if len(seqPrivs) > 0 {
+				rows, err := db.Query(`
+SELECT d.objid::regclass::text AS seq_name
+FROM   pg_depend d
+JOIN   pg_class  c ON c.oid = d.refobjid
+WHERE  d.classid       = 'pg_class'::regclass
+  AND  d.deptype       = 'a'
+  AND  d.refclassid    = 'pg_class'::regclass
+  AND  c.relname       = ANY($1)
+  AND  c.relnamespace  = 'public'::regnamespace
+`, pq.Array(tables))
+				if err != nil {
+					return fmt.Errorf("looking up sequences for named tables: %w", err)
+				}
+				var seqNames []string
+				for rows.Next() {
+					var name string
+					if err := rows.Scan(&name); err != nil {
+						rows.Close()
+						return fmt.Errorf("scanning sequence name: %w", err)
+					}
+					seqNames = append(seqNames, name)
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return fmt.Errorf("iterating sequence rows: %w", err)
+				}
+				rows.Close()
+
+				seqPrivClause := strings.Join(seqPrivs, ", ")
+				for _, seqName := range seqNames {
+					// seqName comes from regclass::text which is already
+					// schema-qualified and quoted as needed by PostgreSQL.
+					seqGrantSQL := fmt.Sprintf("GRANT %s ON SEQUENCE %s TO %s",
+						seqPrivClause, seqName, quotedUser)
+					if _, err := db.Exec(seqGrantSQL); err != nil {
+						return fmt.Errorf("granting sequence permissions on %q to %q: %w", seqName, username, err)
+					}
+				}
+			}
 		} else {
 			// All-tables grant: privileges apply to every current and future table.
 			grantSQL := fmt.Sprintf("GRANT %s ON ALL TABLES IN SCHEMA public TO %s", privClause, quotedUser)
 			if _, err := db.Exec(grantSQL); err != nil {
 				return fmt.Errorf("granting permissions to %q: %w", username, err)
+			}
+
+			// Fix A: also grant on existing sequences. The ALTER DEFAULT
+			// PRIVILEGES below covers sequences created after this point;
+			// this covers sequences that already exist at reconcile time.
+			seqGrantSQL := fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s", quotedUser)
+			if _, err := db.Exec(seqGrantSQL); err != nil {
+				return fmt.Errorf("granting sequence permissions to %q: %w", username, err)
 			}
 
 			defaultSQL := fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT %s ON TABLES TO %s", privClause, quotedUser)
@@ -226,20 +298,6 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 					return fmt.Errorf("setting owner-scoped default table privileges for %q: %w", username, err)
 				}
 
-				// Sequences only accept SELECT, UPDATE, and ALL — filter out table-only
-				// privileges (INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER) before
-				// building the sequences grant.
-				validSeqPerms := map[v1alpha1.DatabasePermission]bool{
-					v1alpha1.PermissionSelect: true,
-					v1alpha1.PermissionUpdate: true,
-					v1alpha1.PermissionAll:    true,
-				}
-				var seqPrivs []string
-				for _, perm := range permissions {
-					if validSeqPerms[perm] {
-						seqPrivs = append(seqPrivs, string(perm))
-					}
-				}
 				if len(seqPrivs) > 0 {
 					seqPrivClause := strings.Join(seqPrivs, ", ")
 					ownerSeqSQL := fmt.Sprintf(
@@ -256,9 +314,10 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 	return nil
 }
 
-// EnsureUserExists creates the role with LOGIN PASSWORD if it does not already
-// exist. It connects to the maintenance database because role creation is
-// cluster-wide and does not require any particular target database.
+// EnsureUserExists ensures the role exists with the given password. If the role
+// already exists its password is updated so that the Kubernetes Secret remains
+// the authoritative source. It connects to the maintenance database because role
+// operations are cluster-wide and do not require any particular target database.
 func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, password string) error {
 	db, err := openPostgres(host, adminUser, adminPass, "postgres")
 	if err != nil {
@@ -270,14 +329,37 @@ func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, 
 	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", username).Scan(&exists); err != nil {
 		return fmt.Errorf("checking if role exists: %w", err)
 	}
-	if exists {
+
+	if !exists {
+		createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s",
+			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
+		if _, err := db.Exec(createSQL); err != nil {
+			return fmt.Errorf("creating role %q: %w", username, err)
+		}
 		return nil
 	}
 
-	createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s",
+	alterSQL := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s",
 		pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
-	if _, err := db.Exec(createSQL); err != nil {
-		return fmt.Errorf("creating role %q: %w", username, err)
+	if _, err := db.Exec(alterSQL); err != nil {
+		return fmt.Errorf("updating password for role %q: %w", username, err)
+	}
+	return nil
+}
+
+// SetUserPassword unconditionally updates the password for username using
+// ALTER ROLE. It connects as adminUser to the maintenance database.
+func (p postgresManager) SetUserPassword(host, adminUser, adminPass, username, password string) error {
+	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	if err != nil {
+		return fmt.Errorf("connecting to Postgres: %w", err)
+	}
+	defer db.Close()
+
+	sql := fmt.Sprintf("ALTER ROLE %s PASSWORD %s",
+		pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
+	if _, err := db.Exec(sql); err != nil {
+		return fmt.Errorf("setting password for role %q: %w", username, err)
 	}
 	return nil
 }

@@ -169,6 +169,24 @@ func (b postgresDatabaseBuilder) desiredStatefulSet(pgdb *v1alpha1.PostgresDatab
 								InitialDelaySeconds: 15,
 								PeriodSeconds:       10,
 							},
+							// postStart syncs the admin password from $POSTGRES_PASSWORD into
+							// pg_authid on every pod start. It connects via Unix socket using
+							// pg_hba.conf's "local all all trust" rule, so no password is needed
+							// to issue the ALTER USER — making the Kubernetes Secret authoritative
+							// even when the pod mounts an existing PVC with stale credentials.
+							// Kubernetes requires this hook to exit before the container can be
+							// marked Ready, so the operator will never attempt a TCP connection
+							// until after the ALTER USER has executed.
+							Lifecycle: &corev1.Lifecycle{
+								PostStart: &corev1.LifecycleHandler{
+									Exec: &corev1.ExecAction{
+										Command: []string{
+											"/bin/sh", "-c",
+											"timeout 60 sh -c 'until pg_isready -U postgres; do sleep 1; done' && psql -U postgres -c \"ALTER USER postgres PASSWORD '$POSTGRES_PASSWORD'\"",
+										},
+									},
+								},
+							},
 						},
 					},
 				},
