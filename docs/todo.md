@@ -39,35 +39,70 @@ The remaining assumptions were checked against the implementation:
 - [Job lookup](../internal/operator/controller/postgresmigrationset_client.go)
   filters by migration-set name, without verifying the owner UID. The Job key
   contains artifact digest and target revision but omits the database binding.
+- The controller resolves artifact tags on every reconcile, so a changed
+  registry digest can request another Job without a resource change. The runner
+  already rejects changes to SQL recorded as applied in the database ledger;
+  a new Job does not authorize replaying or replacing applied migrations.
 - [The SQL store](../internal/migrations/store/store.go) uses a pooled `*sql.DB`
   for session-scoped lock/unlock and migration operations. The existing fake
   store tests establish call order, not a retained-session guarantee.
 
 ## 1. Specify claim storage and controller recovery
 
-- [ ] Resolve the [open protocol details](migrations-design.md#details-to-settle-before-implementation),
-  including controller orphan cleanup, target replacement, and bootstrap of
-  existing resources.
-- [ ] Specify the canonical target encoding, Lease name, and immutable resource
-  namespace/name annotations. The design requires no candidate tracking or UID
-  confirmation on the Lease.
-- [ ] Define controller grace/recheck timing, outstanding-work checks,
-  conditional deletion, missing-claim repair, and cleanup/scheduling coordination.
-- [ ] Define operation-status and retry fields; settle rollback authorization and
-  artifact refresh policy before changing their existing behavior.
+- [x] Describe the agreed semantics and an initial status shape in the
+  [design](migrations-design.md#implementation-readiness). Implementation and
+  protocol verification remain below.
+- [x] Specify the target encoding, Lease name, and immutable owner annotations
+  in the [admission design](migrations-design.md#admission-time-reservation).
+- [x] Settle target identity and initial-deployment scope in the
+  [ownership design](migrations-design.md#responsibility-and-ownership): instance
+  namespace/name plus logical database name; fresh development clusters require
+  no bootstrap of pre-existing migration resources or Jobs.
+- [x] Settle [claim storage and access](migrations-design.md#claim-storage-and-access):
+  operator namespace, protected by standard namespace RBAC, with a namespaced
+  Lease role for the operator service account.
+- [x] Settle [webhook TLS and rollout](migrations-design.md#webhook-tls-and-deployment-ordering):
+  cert-manager SelfSigned Issuer and Certificate, mounted TLS Secret, CA injection
+  on the webhook configuration, and readiness checks with admission failing closed.
+- [x] Agree the [controller lifecycle requirements](migrations-design.md#controller-lifecycle-and-orphan-cleanup):
+  controller-owned orphan cleanup, outstanding-work checks, conditional release,
+  missing-claim recovery, and coordination with scheduling. Implementation and
+  verification remain below.
+- [x] Settle [explicit retries](migrations-design.md#explicit-retries): timestamped
+  `db-operator.benjamin-wright.github.com/retryAt` annotation, compared as an
+  opaque token and acknowledged in `status.lastHandledRetryAt`.
+- [x] Settle [rollback authorization](migrations-design.md#forward-and-rollback-authorization):
+  the same resource-update authorization and operator-managed migration role
+  apply to forward migration and rollback, with no additional approval flag.
+- [x] Draft the [operation-status shape](migrations-design.md#proposed-operation-status):
+  spec remains the latest request; retain the current/latest attempt and last
+  successful attempt, with Job references and retry-token attribution.
+- [x] Settle [artifact resolution and integrity](migrations-design.md#mutable-artifact-references):
+  resolve for an attempt requested by the resource, including explicit retry
+  after failure, and retain that digest through recovery. Registry changes alone
+  do not request work; the database ledger keeps applied migration SQL immutable.
 
 ## 2. Implement admission and controller claim lifecycle
 
+- [ ] Implement the shared claim encoding/naming helper and annotation constants
+  defined in the design for use by admission and controller recovery.
 - [ ] Add validating admission for migration-set creates and updates, including
   immutable database bindings and an atomic Lease reservation before acceptance.
-- [ ] Implement Create/Get admission: derive the Lease location from the target,
-  verify resource namespace/name, handle `AlreadyExists` races, and reject
-  competing addresses. Retries and same-name recreation require no Lease updates.
+- [ ] Implement Create/Get admission: derive the Lease name from the target and
+  store it in the configured operator namespace; verify resource namespace/name,
+  handle `AlreadyExists` races, and reject competing addresses. Retries and
+  same-name recreation require no Lease updates.
 - [ ] Implement controller orphan detection and removal with claim watches and
-  follow-up reconciliation, including when the resource never persisted.
+  follow-up reconciliation, including when the resource never persisted. Choose
+  and document grace/recheck intervals; check outstanding execution, including
+  previous resource UIDs, and use conditional Lease deletion.
 - [ ] Gate migration scheduling on the current target-to-address association.
   Handle missing or invalid claims through controller recovery and preserve
   resource-UID attribution for Jobs, status, and cleanup.
+- [ ] Implement and verify coordination between cleanup, missing-claim repair,
+  and scheduling. A prior ownership check must not authorize a new Job after
+  claim release or reassignment. Cover delayed persistence and lost responses;
+  grace periods and conditional Lease deletion alone do not resolve these races.
 - [ ] Add deletion/finalizer handling and safe claim release after outstanding
   execution finishes. Preserve database contents and migration history.
 
@@ -75,12 +110,19 @@ The remaining assumptions were checked against the implementation:
 
 - [ ] Register the webhook server and handlers in
   [cmd/db-operator](../cmd/db-operator/main.go).
-- [ ] Add Helm webhook configuration, Service, certificate provisioning, and
-  installation/upgrade ordering. Verify `failurePolicy: Fail`,
+- [ ] Supply the operator namespace consistently to admission and claim recovery;
+  restrict Lease watches to that namespace and preserve ownership across operator
+  instance selectors and restarts.
+- [ ] Extend `charts/db-operator/templates/operator/` with the webhook Service,
+  namespaced SelfSigned Issuer and Certificate, TLS Secret mount, and
+  `ValidatingWebhookConfiguration` annotated with `cert-manager.io/inject-ca-from`.
+  Configure serving-certificate reload and verify `failurePolicy: Fail`,
   `sideEffects: NoneOnDryRun`, and rule scope from the design.
-- [ ] Add narrowly scoped Lease permissions and any admission-related RBAC;
-  extend the existing `charts/db-operator/templates/operator/` resources and
-  preserve ownership across operator instance selectors and restarts.
+- [ ] Add the namespaced Lease Role and RoleBinding for the operator service
+  account, granting get/list/watch/create/delete without a cluster-wide claim
+  permission or custom claim-protection webhook.
+- [ ] Document the cert-manager prerequisite and installation readiness checks;
+  retain claims and webhook protection during upgrades and certificate renewal.
 - [ ] Update the integration environment to exercise real API admission and
   cleanup, rather than relying solely on direct reconciler calls.
 
@@ -89,11 +131,32 @@ The remaining assumptions were checked against the implementation:
 - [ ] Replace the current Job-existence-driven decision in
   [the controller](../internal/operator/controller/postgresmigrationset_controller.go)
   with the execution/completion contract in the design.
-- [ ] Include the database binding in execution identity; distinguish resolved,
-  running, and successfully applied operations in status.
+- [ ] Implement the proposed operation record and last-successful record, with
+  captured inputs, retry tokens, resolved digests, Job names/UIDs, and outcomes.
+  Scope attempts to the resource UID and immutable
+  database binding; keep status bounded rather than storing an attempt history.
+- [ ] Persist the operation snapshot, resolved digest, chosen Job name, and
+  retry acknowledgement before Job creation, using conditional status writes.
+  Reuse the stored Job name on uncertain create outcomes and verify known Job
+  and owner UIDs; no separate operation ID is needed.
+- [ ] Derive current conditions from the latest desired state and attempt
+  outcome; keep spec observation distinct from successful completion. Surface
+  uncertain execution as recovery work, never as success or an automatic retry.
+- [ ] Replace flat `observedArtifact`, `activeJob`, and `currentRevision` fields
+  with operation fields and `lastSuccessfulOperation.targetRevision`; regenerate
+  the CRDs and update printer columns and consumers. Do not present the last
+  successful target as a live database revision after partial failure.
+- [ ] Resolve artifacts only when preparing an attempt requested by creation,
+  changed artifact reference or target revision, or explicit retry after failure.
+  Persist the resolved digest and reuse it during ordinary reconciliation and
+  recovery; do not use registry changes as execution triggers.
 - [ ] Record a finished Job against its original operation; process the latest
   desired state after in-flight work completes. Returning to an earlier target
   after a rollback must not reuse an old successful Job as current completion.
+- [ ] Implement the retry annotation and `lastHandledRetryAt` acknowledgement.
+  Observe annotation-only updates, persist the association between token and
+  attempt, and recover Job/status write failures without losing or duplicating
+  a retry. Preserve pause and in-flight-work ordering.
 - [ ] Verify the Job's controller owner UID when associating it with a migration
   set; keep detection of older in-flight work separate from success attribution.
 - [ ] Retain success and failure outcomes after Job cleanup. Recover uncertain
@@ -117,6 +180,12 @@ The remaining assumptions were checked against the implementation:
   reuse the claim without updating it; ordinary owner updates succeed and
   binding changes are rejected before reserving another target.
 - [ ] Dry runs create no reservation. Webhook failure prevents real admission.
+- [ ] Tenant users can submit migration sets in their own namespaces but cannot
+  create, edit, or delete claims in the operator namespace. The operator's claim
+  Role permits the required lifecycle operations only in its namespace.
+- [ ] A fresh installation becomes ready with cert-manager issuance and CA
+  injection. Upgrades and certificate renewal preserve claims, reload serving
+  certificates, and resume admission with no fail-open window.
 - [ ] The controller discovers and removes orphan claims after later admission
   rejection, storage failure, or uncertain responses, even with no resource event
   and across controller restarts. Pending creates receive the documented grace
@@ -129,14 +198,36 @@ The remaining assumptions were checked against the implementation:
 - [ ] Controller restarts retain live claims. Same-name recreation passes
   admission but cannot accidentally inherit previous-UID Jobs or status.
   Deletion during execution does not release the claim early.
-- [ ] Missing claims, target replacement, and pre-existing duplicate resources
-  follow the chosen bootstrap/recovery procedure without overlapping execution.
+- [ ] Recreating a `PostgresDatabase` at the same namespace/name preserves the
+  target key for the same logical database. Resource UID and restored data do
+  not introduce a different ownership key.
 - [ ] Successful and failed Job cleanup, status updates, and controller restarts
   do not request new migrations. Explicit retry follows its settled contract.
+- [ ] Republishing a tag without a new execution request causes no tag refresh
+  or new Job, including during ordinary reconciliation and controller restarts.
+  An explicit retry after failure may resolve the new digest; recovery of that
+  attempt remains pinned to its recorded digest.
+- [ ] An explicitly requested attempt with unchanged applied migration hashes
+  and an already-reached target executes no migration SQL. Changed or missing
+  applied SQL fails integrity checks, including when supplied through a new
+  artifact or retry; adding a later revision preserves the existing history.
+- [ ] A fresh retry token permits one additional attempt after failure; repeated
+  events with the handled token and annotation removal do not request another.
+  Lost responses and restarts preserve the attempt. Paused resources defer
+  handling, active Jobs finish first, and successful desired operations are not
+  rerun by a retry request.
 - [ ] Apply revision 1, roll back to 0, then request 1 again while the original
   success Job is retained: SQL is reapplied and completion describes the new run.
+  Forward migration and rollback use the same operator-managed credentials and
+  resource-update authorization, without a rollback-specific approval step.
 - [ ] Desired-state changes during execution report the completed operation
   accurately, then reconcile the latest request. Pausing retains ownership.
+- [ ] A Job TTL edit advances observed generation without new execution; a retry
+  annotation can create a new attempt without a generation change. Delayed Job
+  events cannot overwrite the result of another attempt or resource UID.
+- [ ] After a partially committed failure, retain the previous successful
+  operation and the failed attempt separately. Conditions report failure or
+  recovery accurately, even when an older successful target matches the spec.
 - [ ] Standalone db-operator usage passes without wasm-platform being deployed.
 
 ## 6. Align shipped documentation
