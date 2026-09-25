@@ -114,15 +114,16 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 	// ── Bump targetRevision → rollback Job ───────────────────────────────────
 	Context("bumping targetRevision triggers a new Job", Ordered, func() {
 		var (
-			ns     *corev1.Namespace
-			pgdb   *v1alpha1.PostgresDatabase
-			pgms   *v1alpha1.PostgresMigrationSet
-			dbLook types.NamespacedName
-			msLook types.NamespacedName
+			ns              *corev1.Namespace
+			pgdb            *v1alpha1.PostgresDatabase
+			pgms            *v1alpha1.PostgresMigrationSet
+			dbLook          types.NamespacedName
+			msLook          types.NamespacedName
+			adminSecretLook types.NamespacedName
 		)
 
 		BeforeAll(func() {
-			ns, pgdb, dbLook, _ = NewDatabase("pgms-bump-db")
+			ns, pgdb, dbLook, adminSecretLook = NewDatabase("pgms-bump-db")
 			WaitForDatabase(dbLook)
 
 			artifact := PushMigrationArtifact("pgms-bump", "v1", map[string]string{
@@ -142,6 +143,13 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 		})
 
 		It("should run a new Job when targetRevision is rolled back to 0", func() {
+			db, cleanup := ConnectToDatabaseNamed(dbLook, adminSecretLook, "testdb")
+			DeferCleanup(cleanup)
+
+			var tableExists bool
+			Expect(db.QueryRow("SELECT to_regclass('public.test_table') IS NOT NULL").Scan(&tableExists)).To(Succeed())
+			Expect(tableExists).To(BeTrue(), "the initial migration should create the table")
+
 			var fetched v1alpha1.PostgresMigrationSet
 			Expect(K8sClient.Get(Ctx, msLook, &fetched)).To(Succeed())
 			fetched.Spec.TargetRevision = 0
@@ -161,7 +169,10 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 
 			var fetched2 v1alpha1.PostgresMigrationSet
 			Expect(K8sClient.Get(Ctx, msLook, &fetched2)).To(Succeed())
-			Expect(*fetched2.Status.CurrentRevision).To(Equal(int64(0)))
+			Expect(fetched2.Status.CurrentRevision).To(HaveValue(Equal(int64(0))))
+
+			Expect(db.QueryRow("SELECT to_regclass('public.test_table') IS NOT NULL").Scan(&tableExists)).To(Succeed())
+			Expect(tableExists).To(BeFalse(), "the rollback should remove the table")
 		})
 	})
 

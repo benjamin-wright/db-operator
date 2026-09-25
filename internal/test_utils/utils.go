@@ -492,11 +492,16 @@ func buildMigrationTarGz(files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// WaitForMigrationSet polls until the PostgresMigrationSet reaches the given phase.
+// WaitForMigrationSet polls until the current spec reaches the given phase.
 func WaitForMigrationSet(lookup types.NamespacedName, phase v1alpha1.MigrationSetPhase) {
 	Eventually(func(g Gomega) {
 		var fetched v1alpha1.PostgresMigrationSet
 		g.Expect(K8sClient.Get(Ctx, lookup, &fetched)).To(Succeed())
+		g.Expect(fetched.Status.ObservedGeneration).To(Equal(fetched.Generation),
+			"migration status must reflect the current spec")
 		g.Expect(fetched.Status.Phase).To(Equal(phase))
+		if phase == v1alpha1.MigrationSetPhaseReady {
+			g.Expect(fetched.Status.CurrentRevision).To(HaveValue(Equal(fetched.Spec.TargetRevision)))
+		}
 	}, Timeout, Interval).Should(Succeed())
 }
