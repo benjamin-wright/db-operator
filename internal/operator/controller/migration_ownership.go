@@ -16,6 +16,10 @@ func transferApplicationObjects(db postgresExecutor, username string) error {
  FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
  WHERE c.relkind IN ('r','p','v','m','f','S') AND n.nspname !~ '^pg_' AND n.nspname NOT IN ('information_schema','__dbop_control')
  AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e')
+ -- SERIAL and IDENTITY sequences change owner with their table; direct changes are forbidden.
+ AND (c.relkind <> 'S' OR NOT EXISTS(
+ SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.objsubid=0
+ AND d.refclassid='pg_class'::regclass AND d.refobjsubid>0 AND d.deptype IN ('a','i')))
  UNION ALL
  SELECT CASE p.prokind WHEN 'p' THEN 'PROCEDURE' WHEN 'a' THEN 'AGGREGATE' ELSE 'FUNCTION' END, quote_ident(n.nspname)||'.'||quote_ident(p.proname)||'('||pg_get_function_identity_arguments(p.oid)||')'
  FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace

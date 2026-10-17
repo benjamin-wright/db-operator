@@ -7,11 +7,13 @@ import (
 
 	nats "github.com/nats-io/nats.go"
 
+	"github.com/benjamin-wright/db-operator/internal/natsconfig"
 	. "github.com/benjamin-wright/db-operator/internal/test_utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -321,6 +323,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 		var (
 			ns            *corev1.Namespace
 			natsCluster   *v1alpha1.NatsCluster
+			acct          *v1alpha1.NatsAccount
 			clusterLookup types.NamespacedName
 			secretLookup  types.NamespacedName
 		)
@@ -328,7 +331,7 @@ var _ = Describe("NatsAccountReconciler", func() {
 		BeforeAll(func() {
 			ns, natsCluster, clusterLookup = NewNatsCluster("conn-cluster")
 
-			acct := &v1alpha1.NatsAccount{
+			acct = &v1alpha1.NatsAccount{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "conn-acct",
 					Namespace: ns.Name,
@@ -376,6 +379,62 @@ var _ = Describe("NatsAccountReconciler", func() {
 			Expect(nc.Publish("test.subject", []byte("hello nats"))).To(Succeed())
 
 			Eventually(received, 5*time.Second, Interval).Should(Receive(Equal([]byte("hello nats"))))
+		})
+
+		It("should rotate broker authentication when only the credential Secret changes", func() {
+			for _, regenerate := range []bool{false, true} {
+				var previous corev1.Secret
+				Expect(K8sClient.Get(Ctx, secretLookup, &previous)).To(Succeed())
+				if regenerate {
+					By("deleting the credential Secret so its owner generates a new password")
+					Expect(K8sClient.Delete(Ctx, &previous)).To(Succeed())
+				} else {
+					By("patching the existing credential Secret without changing the account")
+					updated := previous.DeepCopy()
+					updated.Data["NATS_PASSWORD"] = []byte(string(previous.Data["NATS_PASSWORD"]) + "-rotated")
+					Expect(K8sClient.Patch(Ctx, updated, client.MergeFrom(&previous))).To(Succeed())
+				}
+
+				var current corev1.Secret
+				Eventually(func(g Gomega) {
+					g.Expect(K8sClient.Get(Ctx, secretLookup, &current)).To(Succeed())
+					g.Expect(current.Data["NATS_PASSWORD"]).NotTo(BeEmpty())
+					g.Expect(current.Data["NATS_PASSWORD"]).NotTo(Equal(previous.Data["NATS_PASSWORD"]))
+					if regenerate {
+						g.Expect(current.UID).NotTo(Equal(previous.UID))
+					} else {
+						g.Expect(current.UID).To(Equal(previous.UID))
+					}
+				}, Timeout, Interval).Should(Succeed())
+
+				expectedConfig := natsconfig.Build(false, []natsconfig.AccountCredentials{{
+					Account:   *acct,
+					Passwords: map[string]string{string(current.Data["NATS_USERNAME"]): string(current.Data["NATS_PASSWORD"])},
+				}})
+				Eventually(func(g Gomega) {
+					var deployment appsv1.Deployment
+					g.Expect(K8sClient.Get(Ctx, clusterLookup, &deployment)).To(Succeed())
+					g.Expect(deployment.Spec.Template.Annotations["checksum/config"]).To(Equal(natsconfig.Checksum(expectedConfig)))
+					g.Expect(deployment.Status.ObservedGeneration).To(Equal(deployment.Generation))
+					g.Expect(deployment.Status.UpdatedReplicas).To(Equal(*deployment.Spec.Replicas))
+					g.Expect(deployment.Status.ReadyReplicas).To(Equal(*deployment.Spec.Replicas))
+					g.Expect(deployment.Status.Replicas).To(Equal(*deployment.Spec.Replicas))
+				}, Timeout, Interval).Should(Succeed())
+
+				By("accepting the new password and rejecting the old password on fresh connections")
+				func() {
+					nc, close := ConnectToNats(clusterLookup, secretLookup, nats.NoReconnect())
+					defer close()
+					Expect(nc.Flush()).To(Succeed())
+					old, err := nats.Connect(nc.ConnectedUrl(),
+						nats.UserInfo(string(previous.Data["NATS_USERNAME"]), string(previous.Data["NATS_PASSWORD"])),
+						nats.NoReconnect(), nats.Timeout(5*time.Second))
+					if old != nil {
+						old.Close()
+					}
+					Expect(err).To(MatchError(nats.ErrAuthorization))
+				}()
+			}
 		})
 	})
 

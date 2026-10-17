@@ -117,9 +117,22 @@ var _ = Describe("PostgresMigrationSet durable protocol", func() {
 		Expect(err).NotTo(HaveOccurred())
 		admin, closeAdmin := ConnectToDatabaseNamed(dbKey, adminKey, "journal")
 		defer closeAdmin()
-		_, err = admin.Exec("CREATE TABLE retained_legacy (value text); ALTER TABLE retained_legacy OWNER TO __dbop_migrations; GRANT ALL ON SCHEMA public TO __dbop_migrations; GRANT ALL ON retained_legacy TO __dbop_migrations")
+		_, err = admin.Exec(`
+CREATE SEQUENCE retained_sequence START 101;
+CREATE TABLE retained_legacy (
+ id SERIAL PRIMARY KEY,
+ identity_id bigint GENERATED ALWAYS AS IDENTITY,
+ sequence_id bigint NOT NULL DEFAULT nextval('retained_sequence'),
+ value text
+);
+ALTER TABLE retained_legacy OWNER TO __dbop_migrations;
+ALTER SEQUENCE retained_sequence OWNER TO __dbop_migrations;
+GRANT ALL ON SCHEMA public TO __dbop_migrations;
+GRANT ALL ON retained_legacy TO __dbop_migrations;
+INSERT INTO retained_legacy(value) VALUES ('retained');`)
 		Expect(err).NotTo(HaveOccurred())
-		PushMigrationArtifact("journal", "current", map[string]string{"0001-init-apply.sql": initMigrations, "0001-init-rollback.sql": rollbackMigrations})
+		journalInit := initMigrations + " INSERT INTO retained_legacy(value) VALUES ('migrated');"
+		PushMigrationArtifact("journal", "current", map[string]string{"0001-init-apply.sql": journalInit, "0001-init-rollback.sql": rollbackMigrations})
 		ms := newMigrationSet(ns.Name, "journal", db.Name, "journal", MigrationRegistry+"/journal:current", 1)
 		ms.Spec.Paused = true
 		Expect(K8sClient.Create(Ctx, ms)).To(Succeed())
@@ -141,12 +154,30 @@ var _ = Describe("PostgresMigrationSet durable protocol", func() {
 		var legacyAllowed bool
 		Expect(admin.QueryRow("SELECT has_table_privilege('__dbop_migrations','retained_legacy','SELECT') OR has_schema_privilege('__dbop_migrations','public','CREATE')").Scan(&legacyAllowed)).To(Succeed())
 		Expect(legacyAllowed).To(BeFalse(), "converting a database must revoke the old shared migration identity")
+		assertRetainedObjects := func(expectedRows int) {
+			var owned bool
+			var objects int
+			Expect(admin.QueryRow(`
+SELECT bool_and(c.relowner=d.datdba), count(*)
+FROM pg_class c CROSS JOIN pg_database d
+WHERE d.datname=current_database() AND c.relnamespace='public'::regnamespace
+AND c.relname IN ('retained_legacy','retained_legacy_id_seq','retained_legacy_identity_id_seq','retained_sequence')`).Scan(&owned, &objects)).To(Succeed())
+			Expect(objects).To(Equal(4))
+			Expect(owned).To(BeTrue(), "the table, its SERIAL and IDENTITY sequences, and the standalone sequence must share the migration owner")
+			var rows, serialID, identityID, sequenceID int
+			Expect(admin.QueryRow("SELECT count(*), max(id), max(identity_id), max(sequence_id) FROM retained_legacy").Scan(&rows, &serialID, &identityID, &sequenceID)).To(Succeed())
+			Expect(rows).To(Equal(expectedRows))
+			Expect(serialID).To(Equal(expectedRows))
+			Expect(identityID).To(Equal(expectedRows))
+			Expect(sequenceID).To(Equal(100 + expectedRows))
+		}
+		assertRetainedObjects(2)
 		Eventually(func(g Gomega) {
 			var jobs batchv1.JobList
 			g.Expect(K8sClient.List(Ctx, &jobs, client.InNamespace(ns.Name), client.MatchingLabels{"db-operator.benjamin-wright.github.com/migration-set": ms.Name})).To(Succeed())
 			g.Expect(jobs.Items).To(BeEmpty())
 		}, Timeout, Interval).Should(Succeed())
-		PushMigrationArtifact("journal", "current", map[string]string{"0001-init-apply.sql": initMigrations, "0001-init-rollback.sql": rollbackMigrations, "0002-add-apply.sql": "ALTER TABLE test_table ADD COLUMN extra text", "0002-add-rollback.sql": "ALTER TABLE test_table DROP COLUMN extra"})
+		PushMigrationArtifact("journal", "current", map[string]string{"0001-init-apply.sql": journalInit, "0001-init-rollback.sql": rollbackMigrations, "0002-add-apply.sql": "ALTER TABLE test_table ADD COLUMN extra text", "0002-add-rollback.sql": "ALTER TABLE test_table DROP COLUMN extra"})
 		Expect(K8sClient.Get(Ctx, key, ms)).To(Succeed())
 		before = ms.DeepCopy()
 		ms.Annotations = map[string]string{"db-operator.benjamin-wright.github.com/retryAt": "ack-success"}
@@ -182,9 +213,10 @@ var _ = Describe("PostgresMigrationSet durable protocol", func() {
 		}, Timeout, Interval).Should(Succeed())
 		Expect(K8sClient.Delete(Ctx, ms)).To(Succeed())
 		Eventually(func() bool { return apierrors.IsNotFound(K8sClient.Get(Ctx, key, &api.PostgresMigrationSet{})) }, Timeout, Interval).Should(BeTrue())
-		replacement := newMigrationSet(ns.Name, "new-owner", db.Name, "journal", ms.Spec.Artifact, 0)
-		replacement.Spec.Paused = true
+		replacement := newMigrationSet(ns.Name, "new-owner", db.Name, "journal", ms.Spec.Artifact, 1)
 		Eventually(func() error { return K8sClient.Create(Ctx, replacement) }, 2*time.Minute, Interval).Should(Succeed(), "an orphan target claim must be released after SQL fencing")
+		WaitForMigrationSet(client.ObjectKeyFromObject(replacement), api.MigrationSetPhaseReady)
+		assertRetainedObjects(3)
 		Expect(K8sClient.Delete(Ctx, replacement)).To(Succeed())
 	})
 	It("imports legacy Ready only after read-only ledger verification", func() {

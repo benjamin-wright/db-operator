@@ -44,6 +44,7 @@ type NatsClusterReconciler struct {
 // +kubebuilder:rbac:groups=db-operator.benjamin-wright.github.com,resources=natsaccounts,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile handles create/update/delete events for NatsCluster resources.
@@ -357,9 +358,8 @@ func (r *NatsClusterReconciler) setNatsClusterPhase(
 }
 
 // SetupWithManager registers the NatsClusterReconciler with the controller manager.
-// It watches NatsAccount CRs and enqueues the referenced NatsCluster for reconciliation
-// whenever an account is created, updated, or deleted — ensuring the server config
-// is regenerated promptly.
+// It watches accounts and their credential Secrets so server authentication follows
+// both policy changes and password rotation.
 func (r *NatsClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.client = natsClusterClient{inner: mgr.GetClient()}
 	r.builder = natsClusterBuilder{instanceName: r.InstanceName, scheme: mgr.GetScheme()}
@@ -368,6 +368,7 @@ func (r *NatsClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForSecret)).
 		Watches(
 			&v1alpha1.NatsAccount{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
@@ -381,4 +382,28 @@ func (r *NatsClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}),
 		).
 		Complete(r)
+}
+
+func (r *NatsClusterReconciler) clustersForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	var accounts v1alpha1.NatsAccountList
+	if err := r.client.list(ctx, &accounts, client.InNamespace(obj.GetNamespace())); err != nil {
+		log.FromContext(ctx).Error(err, "listing NatsAccounts for credential Secret")
+		return nil
+	}
+	clusters := make(map[types.NamespacedName]struct{})
+	var requests []reconcile.Request
+	for _, account := range accounts.Items {
+		for _, user := range account.Spec.Users {
+			if user.SecretName != obj.GetName() {
+				continue
+			}
+			key := types.NamespacedName{Namespace: account.Namespace, Name: account.Spec.ClusterRef}
+			if _, queued := clusters[key]; !queued {
+				clusters[key] = struct{}{}
+				requests = append(requests, reconcile.Request{NamespacedName: key})
+			}
+			break
+		}
+	}
+	return requests
 }

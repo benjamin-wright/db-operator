@@ -30,6 +30,7 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
 - `NatsAccount` CRD — declares one NATS account within a referenced `NatsCluster`; multiple accounts on a single cluster are created by deploying multiple `NatsAccount` CRs
   - Each account is identified by the CR's `metadata.name`, which becomes the NATS account name in the server configuration
   - `users` — list of NATS users; the operator generates a password for each user and writes credentials to the named Kubernetes Secret in the same namespace
+  - Updating a referenced Secret's `NATS_PASSWORD` rotates broker authentication. Deleting an operator-owned credential Secret regenerates it with a new password. After convergence, fresh connections accept the new password and reject the old one.
   - `exports` — list of subjects (streams or services) this account exposes to other accounts; a `tokenRequired: true` export is private and requires an activation token
   - `imports` — list of subjects (streams or services) this account brings in from another account (referenced by its `NatsAccount` CR name); an optional `localSubject` remaps the imported subject in the local account namespace
 - Status conditions and a phase field are maintained on all seven CRDs; migration sets additionally distinguish running execution
