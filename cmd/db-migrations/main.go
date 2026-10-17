@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -20,6 +22,7 @@ func main() {
 	var target *int64
 	var migrationsDir string
 	var artifactRef string
+	var verifyOnly bool
 
 	flag.Func("target", "Target migration revision to apply/rollback to (optional; omit to apply all)", func(s string) error {
 		v, err := strconv.ParseInt(s, 10, 64)
@@ -31,6 +34,7 @@ func main() {
 	})
 	flag.StringVar(&migrationsDir, "migrations-dir", "/migrations", "Directory containing migration SQL files")
 	flag.StringVar(&artifactRef, "artifact", "", "OCI reference of a migrations artifact to fetch; overrides --migrations-dir when set")
+	flag.BoolVar(&verifyOnly, "verify-only", false, "Verify ledger hashes and exact target without executing migration SQL")
 	flag.Parse()
 
 	targetStr := "<unset>"
@@ -62,14 +66,10 @@ func main() {
 	pgDatabase := envOrDefault("PGDATABASE", "postgres")
 	fmt.Printf("Connecting to PostgreSQL: host=%s port=%s user=%s dbname=%s\n", pgHost, pgPort, pgUser, pgDatabase)
 
-	dsn := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		pgHost,
-		pgPort,
-		pgUser,
-		envOrDefault("PGPASSWORD", "postgres"),
-		pgDatabase,
-	)
+	connection := &url.URL{Scheme: "postgres", User: url.UserPassword(pgUser, envOrDefault("PGPASSWORD", "postgres")), Host: net.JoinHostPort(pgHost, pgPort), Path: "/" + pgDatabase}
+	params := url.Values{"sslmode": {"disable"}, "connect_timeout": {"10"}}
+	connection.RawQuery = params.Encode()
+	dsn := connection.String()
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -94,9 +94,16 @@ func main() {
 	}
 
 	s := store.New(db)
+	s.RequireAuthority(os.Getenv("MIGRATION_CLAIM_UID"))
+	s.RequireOperation(os.Getenv("MIGRATION_OPERATION"))
+	s.ReadOnly(verifyOnly)
 
 	fmt.Println("Running migrations...")
-	if err := runner.Run(s, migrations, target); err != nil {
+	run := runner.Run
+	if verifyOnly {
+		run = runner.Verify
+	}
+	if err := run(s, migrations, target); err != nil {
 		fatal(fmt.Sprintf("Error running migrations: %v", err))
 	}
 

@@ -27,6 +27,7 @@ type PostgresMigrationSetSpec struct {
 	// namespace whose instance hosts the logical database to migrate.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="migration database binding is immutable"
 	DatabaseRef string `json:"databaseRef"`
 
 	// Database is the logical PostgreSQL database name to apply migrations
@@ -34,6 +35,7 @@ type PostgresMigrationSetSpec struct {
 	// not already exist.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="migration database binding is immutable"
 	Database string `json:"database"`
 
 	// Artifact is an OCI registry reference (e.g. registry.example.com/migrations:v3
@@ -61,8 +63,38 @@ type PostgresMigrationSetSpec struct {
 	Paused bool `json:"paused,omitempty"`
 }
 
+// MigrationOperation is the durable execution record for one immutable request.
+// A missing Job with a recorded UID is unknown, never an instruction to replay.
+type MigrationOperation struct {
+	// VerificationOnly compares a legacy ledger without executing migration SQL.
+	VerificationOnly bool   `json:"verificationOnly,omitempty"`
+	Generation       int64  `json:"generation"`
+	Artifact         string `json:"artifact"`
+	TargetRevision   int64  `json:"targetRevision"`
+	RetryAt          string `json:"retryAt,omitempty"`
+	ResolvedArtifact string `json:"resolvedArtifact,omitempty"`
+	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Unknown
+	Phase      string                `json:"phase"`
+	JobRef     MigrationJobReference `json:"jobRef"`
+	StartedAt  *metav1.Time          `json:"startedAt,omitempty"`
+	FinishedAt *metav1.Time          `json:"finishedAt,omitempty"`
+	Reason     string                `json:"reason,omitempty"`
+	Message    string                `json:"message,omitempty"`
+}
+
+type MigrationJobReference struct {
+	Name string `json:"name"`
+	UID  string `json:"uid,omitempty"`
+}
+
 // PostgresMigrationSetStatus defines the observed state of a PostgresMigrationSet.
 type PostgresMigrationSetStatus struct {
+	// Operation is the latest request, including failed and unknown outcomes.
+	Operation *MigrationOperation `json:"operation,omitempty"`
+	// LastSuccessfulOperation is historical evidence, not a claim about live schema.
+	LastSuccessfulOperation *MigrationOperation `json:"lastSuccessfulOperation,omitempty"`
+	LastHandledRetryAt      string              `json:"lastHandledRetryAt,omitempty"`
+
 	// Phase is the current lifecycle phase of the migration set.
 	// +kubebuilder:default=Pending
 	Phase MigrationSetPhase `json:"phase,omitempty"`

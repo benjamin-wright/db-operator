@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -60,10 +61,7 @@ func (c *postgresMigrationSetClient) createOwned(ctx context.Context, owner, obj
 
 // delete removes obj from the cluster. A not-found error is treated as success.
 func (c *postgresMigrationSetClient) delete(ctx context.Context, obj client.Object) error {
-	if err := c.inner.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	return nil
+	return deleteObserved(ctx, c.inner, obj)
 }
 
 // listOwnedJobs returns all batch/v1 Jobs in the same namespace labelled as
@@ -74,7 +72,24 @@ func (c *postgresMigrationSetClient) listOwnedJobs(ctx context.Context, pgms *v1
 		client.InNamespace(pgms.Namespace),
 		client.MatchingLabels{migrationSetLabel: pgms.Name},
 	)
-	return list, err
+	if err != nil {
+		return list, err
+	}
+	for _, job := range list.Items {
+		owner := metav1.GetControllerOf(&job)
+		if owner == nil || owner.Kind != "PostgresMigrationSet" || owner.Name != pgms.Name || owner.APIVersion != v1alpha1.GroupVersion.String() {
+			return batchv1.JobList{}, fmt.Errorf("migration Job has conflicting ownership")
+		}
+	}
+	current := list.Items[:0]
+	for _, job := range list.Items {
+		owner := metav1.GetControllerOf(&job)
+		if owner.UID == pgms.UID || !isJobFinished(&job) {
+			current = append(current, job)
+		}
+	}
+	list.Items = current
+	return list, nil
 }
 
 // listPodsForJob returns all Pods associated with the named Job (using the

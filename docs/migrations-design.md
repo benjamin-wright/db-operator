@@ -1,9 +1,8 @@
 # Migration ownership and admission
 
-Status: agreed design direction; implementation and protocol verification remain
-tracked in [todo.md](todo.md). This document describes planned behavior, not a
-claim that the current operator implements it. Consumer changes, including
-wasm-platform integration, follow the db-operator work.
+This document defines the migration ownership and execution protocol. Current
+operational behavior and limitations are described in [README.md](../README.md).
+Upcoming work is tracked in [todo.md](todo.md).
 
 ## Responsibility and ownership
 
@@ -25,11 +24,12 @@ Deleting and recreating a `PostgresDatabase` at that address preserves the targe
 identity for each logical database name. Its Kubernetes UID and database contents,
 including restored data, do not contribute to the claim key.
 
-Initial deployment assumes a fresh development Kubernetes cluster. Existing
-clusters can be torn down and recreated to adopt this design. Bootstrapping
-pre-existing migration sets, resolving their duplicate bindings, and adopting
-their in-flight Jobs when admission is first enabled are out of scope. Ordinary
-controller restarts and orphan cleanup within an installation remain supported.
+Existing migration sets are imported only after uncached duplicate-target and
+Job ownership checks. Exact owned Jobs can establish their recorded operation;
+legacy Ready status with a pinned artifact and exact target can instead run a
+read-only ledger verifier when its Job has expired. Missing, conflicting or
+unverifiable evidence remains Unknown and requires explicit retry authorization.
+No import changes the target association or grants access by name alone.
 
 db-operator owns admission, migration execution, history, and credential grant
 reconciliation. Application frameworks own release sequencing and activation.
@@ -152,9 +152,8 @@ release. The Lease is a durable reservation for a resource namespace/name;
 controller restarts and missed renewals do not transfer it. There is no
 heartbeat-based expiry or leader-election takeover.
 
-The behavior in this section is agreed. Concrete grace/recheck intervals and
-the reconciliation algorithm are implementation choices that must satisfy these
-requirements, rather than additional ownership-semantics decisions.
+The orphan cleaner checks claims every ten seconds after a one-minute grace
+period. It verifies resource, Job and Pod absence before releasing ownership.
 
 Before scheduling, verify that the persisted migration set's target and address
 match the current Lease. Establish finalizer protection before execution. Use
@@ -178,8 +177,7 @@ existence and binding and accounts for outstanding migration execution,
 including work associated with previous resource UIDs, before removal. Uncertain
 reads or unresolved execution must not be treated as proof that cleanup is safe.
 
-Define a grace/recheck policy for pending creates in the implementation. Age or
-a missing-resource read cannot prove that an admitted request will never persist.
+Age or a missing-resource read cannot prove that an admitted request will never persist.
 Cleanup must therefore work with the execution guard: a late resource whose
 claim is absent or assigned to a different address must not schedule work.
 Requeue for controller recovery; any repair of a missing claim must obey the
@@ -227,11 +225,11 @@ are not evidence that new migration work was requested. Consumers must match
 completion to their requested operation and separately wait for required
 credential grants to become ready.
 
-### Proposed operation status
+### Operation status
 
 Use `spec.artifact`, `spec.targetRevision`, and the retry annotation as the latest
 request. Status needs an immutable snapshot of the attempt being processed, not
-a second desired-state object or a queue. A first implementation can use:
+a second desired-state object or a queue. The persisted record has this shape:
 
 ```yaml
 status:
@@ -286,6 +284,8 @@ accepted. Its fields are:
   subsequently removed. No separate operation UUID is needed.
 - `startedAt` and `finishedAt`: optional execution timestamps, populated only
   when known. They support diagnostics and retention, not request identity.
+- `verificationOnly`: marks a read-only ledger verification used to recover
+  legacy completion evidence without running migration SQL.
 - `reason` and `message`: optional details of the attempt's state or failure.
   Keep these with the attempt when overall conditions change to describe a
   newer desired state.
@@ -321,6 +321,14 @@ result before starting the latest request. Do not replace an uncertain attempt
 or infer its result from Job absence. Retain terminal failure/success after Job
 cleanup; a terminal record is not permission to recreate that Job.
 
+Pause or changed migration inputs withdraw a pending operation only after an
+exact Job lookup. A durably never-armed operation can be withdrawn without a
+database connection; arming first replaces that marker with a conditional
+status write. Otherwise withdrawal acquires the SQL execution lock, rechecks
+Job absence, and revokes only the matching claim and operation before recording
+`OperationWithdrawn`. An executing Job is preserved. Resume reserves a fresh
+identity, so a delayed create for the withdrawn operation cannot execute.
+
 Keep the existing top-level `observedGeneration`, `phase`, and `conditions` as
 the summary of the latest desired state. `observedGeneration` means the spec
 was evaluated, not that it was successfully applied. `Ready=True` requires a
@@ -330,14 +338,12 @@ failure. Consumers check the Ready condition's observed generation and, when
 requesting a retry, the handled token. A TTL or pause-field edit may advance
 observed generation without changing the operation's recorded generation.
 
-Replace the ambiguous flat `observedArtifact` and `activeJob` fields with
-`operation.resolvedArtifact` and `operation.jobRef`. Likewise, expose the last
-successful target as `lastSuccessfulOperation.targetRevision` instead of calling
-it `currentRevision`. The runner commits individual migration steps, so an
-attempt from 8 to 10 can fail after committing 9. Reporting the actual database
-revision after partial failure would require a separate ledger observation;
-it is not needed for the agreed contract. This is an API presentation choice,
-not a new execution policy. Update printer columns and consumers with the API.
+The flat `observedArtifact`, `activeJob` and `currentRevision` fields remain
+compatibility summaries. Consumers use `operation.resolvedArtifact`,
+`operation.jobRef` and `lastSuccessfulOperation.targetRevision` for attributed
+evidence. The runner commits individual migration steps, so an attempt from 8
+to 10 can fail after committing 9. The last successful target does not assert
+the live database revision after that partial failure.
 
 ### Explicit retries
 
@@ -355,7 +361,7 @@ metadata:
 Treat the non-empty value as an opaque request token, comparing equality with
 the last handled value rather than interpreting its time or ordering clocks.
 A different value requests one additional attempt if the current desired
-operation has failed. Repeated events with the same handled value do not request
+operation has failed or has an unknown outcome. Repeated events with the same handled value do not request
 further attempts. Removing the annotation does not request a retry or clear its
 acknowledgement. Callers use a fresh value for each intentional retry.
 
@@ -387,7 +393,7 @@ both directions.
 A tag such as `registry.example.com/migrations:dev` can resolve to different
 digests over time even though `spec.artifact` is unchanged. Resolve the tag when
 preparing a requested attempt: initially, after a change to the artifact
-reference or target revision, or for an explicit retry of a failed operation.
+reference or target revision, or for an explicit retry of a failed or unknown operation.
 An explicit retry may therefore pick up a republished tag. Persist the resolved
 digest with the attempt and pass that pinned reference to its Job.
 
@@ -410,18 +416,9 @@ SQL. An artifact adding revision 11 can advance to 11 while preserving the
 recorded history. Explicit rollback continues to use the agreed target-revision
 semantics.
 
-The existing runner already enforces these integrity checks. The controller's
-current resolution-on-every-reconcile behavior must change to follow resource
-requests as described above; artifact digests must not independently trigger
-retries.
-
-## Implementation readiness
-
-The ownership, retry, rollback, and artifact semantics are specified above. The
-proposed operation-status shape expresses those decisions without introducing
-another execution policy. Field naming and grouping can be refined during
-implementation; controller coordination, recovery, and acceptance coverage
-remain work tracked in [todo.md](todo.md).
+The runner enforces these integrity checks under the same SQL session lock as
+execution. The controller reuses the journaled digest during recovery; registry
+content changes alone do not trigger retries.
 
 ## References
 

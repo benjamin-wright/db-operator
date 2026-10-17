@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -46,10 +49,7 @@ func (c *postgresCredentialClient) update(ctx context.Context, obj client.Object
 
 // delete removes obj from the cluster. A not-found error is treated as success.
 func (c *postgresCredentialClient) delete(ctx context.Context, obj client.Object) error {
-	if err := c.inner.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	return nil
+	return deleteObserved(ctx, c.inner, obj)
 }
 
 func (c *postgresCredentialClient) updateStatus(ctx context.Context, obj client.Object) error {
@@ -63,6 +63,9 @@ func (c *postgresCredentialClient) list(ctx context.Context, obj client.ObjectLi
 // PostgresManager abstracts direct Postgres interactions so the reconciler can
 // be tested without a live database.
 type PostgresManager interface {
+	AcquireUserOwnership(host, adminUser, adminPass, username, uid string, generation int64, allowLegacy bool, validate func() error) (UserOwnership, error)
+	ResetUserPolicy(host, adminUser, adminPass, username string) error
+	EnableUser(host, adminUser, adminPass, username string) error
 	EnsureDatabase(host, adminUser, adminPass, dbName string) error
 	EnsureUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission, tables []string) error
 	DropUser(host, adminUser, adminPass, dbName, username string) error
@@ -90,7 +93,10 @@ type PostgresManager interface {
 }
 
 // postgresManager is the production implementation of PostgresManager.
-type postgresManager struct{}
+type postgresManager struct {
+	ownership     *userOwnership
+	boundSessions map[string]*sql.Conn
+}
 
 // validPermissions is the exhaustive set of SQL privilege keywords the manager
 // may embed in DDL statements. Every permission is checked against this set
@@ -121,7 +127,7 @@ var validClusterRoles = map[v1alpha1.PredefinedRole]struct{}{
 // EnsureDatabase connects to the maintenance database and creates the specified
 // logical database if it does not already exist.
 func (p postgresManager) EnsureDatabase(host, adminUser, adminPass, dbName string) error {
-	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	db, err := p.open(host, adminUser, adminPass, "postgres")
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres: %w", err)
 	}
@@ -149,31 +155,24 @@ func (p postgresManager) EnsureDatabase(host, adminUser, adminPass, dbName strin
 // no ALTER DEFAULT PRIVILEGES is emitted in that case because PostgreSQL has no
 // mechanism to pre-grant future tables by name.
 func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username, password string, permissions []v1alpha1.DatabasePermission, tables []string) error {
-	db, err := openPostgres(host, adminUser, adminPass, dbName)
+	if err := p.EnsureUserExists(host, adminUser, adminPass, username, password); err != nil {
+		return err
+	}
+	db, err := p.open(host, adminUser, adminPass, dbName)
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres: %w", err)
 	}
 	defer db.Close()
 
-	var exists bool
-	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", username).Scan(&exists); err != nil {
-		return fmt.Errorf("checking if role exists: %w", err)
+	if err := restrictPublicPrivileges(db, adminUser); err != nil {
+		return err
 	}
-
-	if !exists {
-		createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s",
-			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
-		if _, err := db.Exec(createSQL); err != nil {
-			return fmt.Errorf("creating role %q: %w", username, err)
-		}
-	} else {
-		alterSQL := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s",
-			pq.QuoteIdentifier(username), pq.QuoteLiteral(password))
-		if _, err := db.Exec(alterSQL); err != nil {
-			return fmt.Errorf("updating password for role %q: %w", username, err)
-		}
+	if _, err := db.Exec("REVOKE CREATE ON SCHEMA public FROM PUBLIC"); err != nil {
+		return err
 	}
-
+	if _, err := db.Exec("GRANT USAGE ON SCHEMA public TO " + pq.QuoteIdentifier(username)); err != nil {
+		return err
+	}
 	if len(permissions) > 0 {
 		privs := make([]string, len(permissions))
 		for i, p := range permissions {
@@ -195,6 +194,9 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 		}
 		var seqPrivs []string
 		for _, perm := range permissions {
+			if perm == v1alpha1.PermissionInsert {
+				seqPrivs = append(seqPrivs, "USAGE")
+			}
 			if validSeqPerms[perm] {
 				seqPrivs = append(seqPrivs, string(perm))
 			}
@@ -226,8 +228,9 @@ func (p postgresManager) EnsureUser(host, adminUser, adminPass, dbName, username
 SELECT d.objid::regclass::text AS seq_name
 FROM   pg_depend d
 JOIN   pg_class  c ON c.oid = d.refobjid
+JOIN   pg_class seq ON seq.oid = d.objid AND seq.relkind = 'S'
 WHERE  d.classid       = 'pg_class'::regclass
-  AND  d.deptype       = 'a'
+  AND  d.deptype       IN ('a', 'i')
   AND  d.refclassid    = 'pg_class'::regclass
   AND  c.relname       = ANY($1)
   AND  c.relnamespace  = 'public'::regnamespace
@@ -271,9 +274,14 @@ WHERE  d.classid       = 'pg_class'::regclass
 			// Fix A: also grant on existing sequences. The ALTER DEFAULT
 			// PRIVILEGES below covers sequences created after this point;
 			// this covers sequences that already exist at reconcile time.
-			seqGrantSQL := fmt.Sprintf("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s", quotedUser)
-			if _, err := db.Exec(seqGrantSQL); err != nil {
-				return fmt.Errorf("granting sequence permissions to %q: %w", username, err)
+			if len(seqPrivs) > 0 {
+				seqGrantSQL := fmt.Sprintf("GRANT %s ON ALL SEQUENCES IN SCHEMA public TO %s", strings.Join(seqPrivs, ", "), quotedUser)
+				if _, err := db.Exec(seqGrantSQL); err != nil {
+					return fmt.Errorf("granting sequence permissions: %w", err)
+				}
+				if _, err := db.Exec(fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT %s ON SEQUENCES TO %s", strings.Join(seqPrivs, ", "), quotedUser)); err != nil {
+					return err
+				}
 			}
 
 			defaultSQL := fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT %s ON TABLES TO %s", privClause, quotedUser)
@@ -319,7 +327,7 @@ WHERE  d.classid       = 'pg_class'::regclass
 // the authoritative source. It connects to the maintenance database because role
 // operations are cluster-wide and do not require any particular target database.
 func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, password string) error {
-	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	db, err := p.open(host, adminUser, adminPass, "postgres")
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres: %w", err)
 	}
@@ -350,7 +358,7 @@ func (p postgresManager) EnsureUserExists(host, adminUser, adminPass, username, 
 // SetUserPassword unconditionally updates the password for username using
 // ALTER ROLE. It connects as adminUser to the maintenance database.
 func (p postgresManager) SetUserPassword(host, adminUser, adminPass, username, password string) error {
-	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	db, err := p.open(host, adminUser, adminPass, "postgres")
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres: %w", err)
 	}
@@ -378,7 +386,7 @@ func (p postgresManager) EnsureRoleMemberships(host, adminUser, adminPass, usern
 		}
 	}
 
-	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	db, err := p.open(host, adminUser, adminPass, "postgres")
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres: %w", err)
 	}
@@ -399,7 +407,7 @@ func (p postgresManager) EnsureRoleMemberships(host, adminUser, adminPass, usern
 // EnsureSchemaAccess grants username full access on the public schema of dbName
 // without changing database ownership.
 func (p postgresManager) EnsureSchemaAccess(host, adminUser, adminPass, dbName, username string) error {
-	db, err := openPostgres(host, adminUser, adminPass, dbName)
+	db, err := p.open(host, adminUser, adminPass, dbName)
 	if err != nil {
 		return fmt.Errorf("connecting to database %q: %w", dbName, err)
 	}
@@ -432,7 +440,7 @@ func (p postgresManager) EnsureSchemaAccess(host, adminUser, adminPass, dbName, 
 // owner. The previous owner's entries are left in place because they are inert
 // once the role no longer creates objects.
 func (p postgresManager) EnsureOwner(host, adminUser, adminPass, dbName, username string) error {
-	maintenanceDB, err := openPostgres(host, adminUser, adminPass, "postgres")
+	maintenanceDB, err := p.open(host, adminUser, adminPass, "postgres")
 	if err != nil {
 		return fmt.Errorf("connecting to maintenance database: %w", err)
 	}
@@ -453,12 +461,15 @@ func (p postgresManager) EnsureOwner(host, adminUser, adminPass, dbName, usernam
 		}
 	}
 
-	db, err := openPostgres(host, adminUser, adminPass, dbName)
+	db, err := p.open(host, adminUser, adminPass, dbName)
 	if err != nil {
 		return fmt.Errorf("connecting to database %q: %w", dbName, err)
 	}
 	defer db.Close()
 
+	if err := transferApplicationObjects(db, username); err != nil {
+		return fmt.Errorf("transferring migration object ownership: %w", err)
+	}
 	quotedUser := pq.QuoteIdentifier(username)
 	schemaGrants := []string{
 		fmt.Sprintf("GRANT ALL ON SCHEMA public TO %s", quotedUser),
@@ -471,20 +482,22 @@ func (p postgresManager) EnsureOwner(host, adminUser, adminPass, dbName, usernam
 		}
 	}
 
+	if err := restrictPublicPrivileges(db, adminUser); err != nil {
+		return err
+	}
 	if previousOwner != "" && previousOwner != username {
 		if err := replayDefaultPrivileges(db, previousOwner, username); err != nil {
 			return fmt.Errorf("replaying default privileges from %q to %q: %w", previousOwner, username, err)
 		}
 	}
-
-	return nil
+	return revokeLegacyMigrationAccess(db, dbName, username)
 }
 
 // replayDefaultPrivileges copies every TABLES/SEQUENCES default-privilege entry
 // attached to previousOwner in the public schema and re-emits it under
 // newOwner. Other object types (FUNCTIONS, TYPES, SCHEMAS) are skipped because
 // EnsureUser never produces them.
-func replayDefaultPrivileges(db *sql.DB, previousOwner, newOwner string) error {
+func replayDefaultPrivileges(db postgresExecutor, previousOwner, newOwner string) error {
 	rows, err := db.Query(`
 		SELECT grantee::regrole::text, privilege_type, dacl.defaclobjtype
 		FROM pg_catalog.pg_default_acl dacl,
@@ -501,12 +514,13 @@ func replayDefaultPrivileges(db *sql.DB, previousOwner, newOwner string) error {
 	objectTypeKeyword := map[string]string{"r": "TABLES", "S": "SEQUENCES"}
 	quotedNewOwner := pq.QuoteIdentifier(newOwner)
 
+	var statements []string
 	for rows.Next() {
 		var grantee, privilege, objType string
 		if err := rows.Scan(&grantee, &privilege, &objType); err != nil {
 			return fmt.Errorf("scanning pg_default_acl row: %w", err)
 		}
-		if grantee == "" || grantee == newOwner {
+		if grantee == "" || grantee == newOwner || grantee == previousOwner {
 			continue
 		}
 		keyword, ok := objectTypeKeyword[objType]
@@ -517,17 +531,26 @@ func replayDefaultPrivileges(db *sql.DB, previousOwner, newOwner string) error {
 		stmt := fmt.Sprintf(
 			"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public GRANT %s ON %s TO %s",
 			quotedNewOwner, privilege, keyword, pq.QuoteIdentifier(grantee))
-		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("re-granting default %s on %s to %q: %w", privilege, keyword, grantee, err)
+		statements = append(statements, stmt)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			return fmt.Errorf("re-granting default privileges: %w", err)
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // FindOwner returns the current PostgreSQL owner of dbName, or an empty string
 // if the database does not exist.
 func (p postgresManager) FindOwner(host, adminUser, adminPass, dbName string) (string, error) {
-	db, err := openPostgres(host, adminUser, adminPass, "postgres")
+	db, err := p.open(host, adminUser, adminPass, "postgres")
 	if err != nil {
 		return "", fmt.Errorf("connecting to Postgres: %w", err)
 	}
@@ -559,50 +582,16 @@ func (p postgresManager) FindOwner(host, adminUser, adminPass, dbName string) (s
 //     pg_default_acl entries that reference the role as grantor or grantee.
 //  4. DROP ROLE IF EXISTS removes the cluster-level role.
 func (p postgresManager) DropUser(host, adminUser, adminPass, dbName, username string) error {
-	quotedUser := pq.QuoteIdentifier(username)
-	quotedAdmin := pq.QuoteIdentifier(adminUser)
-
-	// Steps 1 & 4 use the maintenance database so that cluster-level operations
-	// (REASSIGN OWNED for databases/tablespaces and DROP ROLE) can execute
-	// outside the target database.
-	mainDB, err := openPostgres(host, adminUser, adminPass, "postgres")
-	if err != nil {
-		return fmt.Errorf("connecting to Postgres: %w", err)
+	if err := p.ResetUserPolicy(host, adminUser, adminPass, username); err != nil {
+		return err
 	}
-	defer mainDB.Close()
-
-	// Reassign any cluster-level objects (e.g. the database itself) owned by
-	// this role. If the role does not own the database, this is a no-op for
-	// database ownership — other users' ownership is not affected.
-	if _, err := mainDB.Exec(fmt.Sprintf("REASSIGN OWNED BY %s TO %s", quotedUser, quotedAdmin)); err != nil {
-		_ = err // Non-fatal: role may not own any cluster-level objects or may not exist.
-	}
-
-	// Steps 2 & 3 run inside the target database.
-	db, err := openPostgres(host, adminUser, adminPass, dbName)
+	db, err := p.open(host, adminUser, adminPass, "postgres")
 	if err != nil {
-		return fmt.Errorf("connecting to Postgres: %w", err)
+		return err
 	}
 	defer db.Close()
-
-	// Transfer any per-database objects (tables, sequences, etc.) owned by the role.
-	if _, err := db.Exec(fmt.Sprintf("REASSIGN OWNED BY %s TO %s", quotedUser, quotedAdmin)); err != nil {
-		_ = err // Non-fatal: role may not own any objects or may not exist.
-	}
-
-	// Remove all remaining per-database privilege grants and pg_default_acl
-	// entries (including owner-scoped ones) referencing this role.
-	if _, err := db.Exec(fmt.Sprintf("DROP OWNED BY %s", quotedUser)); err != nil {
-		_ = err // Non-fatal: role may not exist or have no remaining objects.
-	}
-
-	// Drop the cluster-wide role. This now succeeds because all dependencies
-	// in this database have been cleared above.
-	if _, err := mainDB.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %s", quotedUser)); err != nil {
-		return fmt.Errorf("dropping role %q: %w", username, err)
-	}
-
-	return nil
+	_, err = db.Exec("DROP ROLE IF EXISTS " + pq.QuoteIdentifier(username))
+	return err
 }
 
 // isTableNotFoundError reports whether err originated from PostgreSQL error code
@@ -618,8 +607,10 @@ func isTableNotFoundError(err error) bool {
 
 // openPostgres opens a verified connection to a Postgres instance.
 func openPostgres(host, user, password, dbName string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
-		host, postgresPort, user, password, dbName)
+	connection := &url.URL{Scheme: "postgres", User: url.UserPassword(user, password), Host: net.JoinHostPort(host, strconv.Itoa(postgresPort)), Path: "/" + dbName}
+	params := url.Values{"sslmode": {"disable"}, "connect_timeout": {"5"}, "statement_timeout": {"10000"}, "lock_timeout": {"5000"}}
+	connection.RawQuery = params.Encode()
+	dsn := connection.String()
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {

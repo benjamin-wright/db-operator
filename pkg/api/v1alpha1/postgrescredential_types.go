@@ -83,6 +83,7 @@ type PostgresCredentialSpec struct {
 	// that this credential targets.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="credential binding is immutable"
 	DatabaseRef string `json:"databaseRef"`
 
 	// Username is the PostgreSQL role/user to create inside the target database.
@@ -90,6 +91,7 @@ type PostgresCredentialSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="credential binding is immutable"
 	Username string `json:"username"`
 
 	// SecretName is the name of the Kubernetes Secret that will be created (or
@@ -97,6 +99,7 @@ type PostgresCredentialSpec struct {
 	// namespace as the PostgresCredential.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="credential binding is immutable"
 	SecretName string `json:"secretName"`
 
 	// Permissions is the list of per-database privilege entries for this credential.
@@ -133,6 +136,7 @@ type PostgresCredentialStatus struct {
 
 	// SecretName is the name of the Kubernetes Secret that was created for this credential.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="credential binding is immutable"
 	SecretName string `json:"secretName,omitempty"`
 }
 

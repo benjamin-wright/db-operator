@@ -31,7 +31,7 @@ help: ## Display this help.
 ##@ Development
 
 # controller-gen is invoked via go run so no local install is required.
-CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
 
 .PHONY: generate
 generate: ## Generate DeepCopy methods and CRD manifests via controller-gen.
@@ -44,38 +44,49 @@ fmt: ## Run go fmt against code.
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	go vet ./...
+	GOWORK=off go vet -mod=readonly ./...
+	GOWORK=off go vet -mod=readonly -tags=integration ./...
+
+.PHONY: check-generated
+check-generated: ## Verify generated DeepCopy methods and CRDs without changing the checkout.
+	python3 tools/check_generated.py
+
+.PHONY: lint
+lint: vet ## Check Go formatting and the Helm chart.
+	python3 tools/check_format.py
+	helm lint charts/db-operator
 
 .PHONY: test
-test: fmt vet ## Run unit tests.
-	go test ./... -v
+test: ## Run uncached unit tests without changing source files.
+	GOWORK=off go test -mod=readonly -count=1 -timeout=5m ./... -v
 
 # GINKGO invokes the Ginkgo CLI via go run, pinned to the version in go.mod.
-GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
+GINKGO ?= go run -mod=readonly github.com/onsi/ginkgo/v2/ginkgo
+GINKGO_FLAGS ?= --procs=2 --compilers=2 --seed=1 --timeout=20m --fail-on-empty --keep-going -v --silence-skips
 
 .PHONY: integration-test
-integration-test: fmt vet ## Run all integration tests.
-	$(GINKGO) -p -v --tags=integration ./internal/migrations/... ./internal/operator/controller/
+integration-test: ## Run all integration suites with bounded parallelism.
+	GOWORK=off $(GINKGO) $(GINKGO_FLAGS) --tags=integration ./internal/migrations/... ./internal/operator/controller/
 
 .PHONY: integration-test-migrations
 integration-test-migrations: ## Run migration integration tests.
-	$(GINKGO) -p -v --silence-skips --tags=integration ./internal/migrations/...
+	GOWORK=off $(GINKGO) $(GINKGO_FLAGS) --tags=integration ./internal/migrations/...
 
 .PHONY: integration-test-postgres
 integration-test-postgres: ## Run Postgres controller integration tests.
-	$(GINKGO) -p -v --silence-skips --tags=integration --focus="Postgres" ./internal/operator/controller/
+	GOWORK=off $(GINKGO) $(GINKGO_FLAGS) --tags=integration --focus="Postgres(Database|Credential)" ./internal/operator/controller/
 
 .PHONY: integration-test-redis
 integration-test-redis: ## Run Redis controller integration tests.
-	$(GINKGO) -p -v --silence-skips --tags=integration --focus="Redis" ./internal/operator/controller/
+	GOWORK=off $(GINKGO) $(GINKGO_FLAGS) --tags=integration --focus="Redis" ./internal/operator/controller/
 
 .PHONY: integration-test-nats
 integration-test-nats: ## Run NATS controller integration tests.
-	$(GINKGO) -p -v --silence-skips --tags=integration --focus="Nats" ./internal/operator/controller/
+	GOWORK=off $(GINKGO) $(GINKGO_FLAGS) --tags=integration --focus="Nats" ./internal/operator/controller/
 
 .PHONY: integration-test-migration-sets
 integration-test-migration-sets: ## Run PostgresMigrationSet controller integration tests.
-	$(GINKGO) -p -v --silence-skips --tags=integration --focus="PostgresMigrationSet" ./internal/operator/controller/
+	GOWORK=off $(GINKGO) $(GINKGO_FLAGS) --tags=integration --focus="PostgresMigrationSet" ./internal/operator/controller/
 
 ##@ Cluster
 

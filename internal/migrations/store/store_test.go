@@ -46,6 +46,27 @@ var _ = Describe("Store", func() {
 			}
 		})
 
+		It("keeps all migration work on the lock-owning backend and rejects revoked authority", func() {
+			_, err := db.Exec("CREATE SCHEMA IF NOT EXISTS __dbop_control; CREATE TABLE IF NOT EXISTS __dbop_control.migration_authority(singleton BOOLEAN PRIMARY KEY,claim_uid TEXT,operation_name TEXT); INSERT INTO __dbop_control.migration_authority VALUES(TRUE,'claim-one','operation-one') ON CONFLICT(singleton) DO UPDATE SET claim_uid=EXCLUDED.claim_uid")
+			Expect(err).NotTo(HaveOccurred())
+			s := store.New(db)
+			s.RequireAuthority("claim-one")
+			s.RequireOperation("operation-one")
+			Expect(s.Lock()).To(Succeed())
+			defer func() { _ = s.Unlock() }()
+			Expect(s.EnsureTable()).To(Succeed())
+			Expect(s.Apply("001", "session", "CREATE TEMP TABLE pinned_session AS SELECT pg_backend_pid() AS pid", "a", "b")).To(Succeed())
+			Expect(s.Apply("002", "same-session", "DO $$ BEGIN IF (SELECT pid FROM pinned_session) <> pg_backend_pid() THEN RAISE EXCEPTION 'session changed'; END IF; END $$", "c", "d")).To(Succeed())
+			Expect(s.Unlock()).To(Succeed())
+			revoked := store.New(db)
+			superseded := store.New(db)
+			superseded.RequireAuthority("claim-one")
+			superseded.RequireOperation("operation-old")
+			Expect(superseded.Lock()).NotTo(Succeed())
+			revoked.RequireAuthority("claim-other")
+			Expect(revoked.Lock()).NotTo(Succeed())
+		})
+
 		It("should create and idempotently ensure the migrations table", func() {
 			s := store.New(db)
 			Expect(s.EnsureTable()).To(Succeed())

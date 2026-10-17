@@ -2,7 +2,10 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +31,7 @@ const (
 type PostgresCredentialReconciler struct {
 	InstanceName string
 	client       postgresCredentialClient
+	reader       client.Reader
 	pgDB         PostgresManager
 }
 
@@ -131,6 +135,28 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 		return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
 	}
 
+	if secretFound {
+		owner := metav1.GetControllerOf(&existingSecret)
+		if owner == nil || owner.UID != pgcred.UID || owner.Name != pgcred.Name || owner.Kind != "PostgresCredential" || owner.APIVersion != v1alpha1.GroupVersion.String() {
+			return ctrl.Result{}, fmt.Errorf("credential Secret has conflicting ownership")
+		}
+	}
+	var credentials v1alpha1.PostgresCredentialList
+	if err := r.client.list(ctx, &credentials, client.InNamespace(pgcred.Namespace)); err != nil {
+		return ctrl.Result{}, err
+	}
+	for _, other := range credentials.Items {
+		if other.UID != pgcred.UID && other.Spec.DatabaseRef == pgcred.Spec.DatabaseRef && other.Spec.Username == pgcred.Spec.Username {
+			return ctrl.Result{}, fmt.Errorf("credential role has a conflicting owner")
+		}
+	}
+
+	ownership, err := r.pgDB.AcquireUserOwnership(host, adminUser, adminPass, pgcred.Spec.Username, string(pgcred.UID), pgcred.Generation, secretFound && string(existingSecret.Data["PGUSER"]) == pgcred.Spec.Username, credentialFence(ctx, r.reader, pgcred, credSecretKey, &existingSecret, secretFound, false))
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	defer ownership.Close()
+	manager := ownership.Manager()
 	password := string(existingSecret.Data["PGPASSWORD"])
 	if !secretFound || password == "" {
 		password, err = generatePassword(24)
@@ -140,12 +166,33 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 		}
 	}
 
+	policyBytes, err := json.Marshal(struct {
+		Spec          v1alpha1.PostgresCredentialSpec
+		Password      string
+		UID           string
+		Generation    int64
+		SecretUID     string
+		SecretVersion string
+	}{pgcred.Spec, password, string(pgcred.UID), pgcred.Generation, string(existingSecret.UID), existingSecret.ResourceVersion})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	policyDigest := fmt.Sprintf("%x", sha256.Sum256(policyBytes))
+	previous := meta.FindStatusCondition(pgcred.Status.Conditions, "PolicyEnforced")
+	changed := previous == nil || previous.Status != metav1.ConditionTrue || previous.Message != policyDigest
+	if changed {
+		meta.SetStatusCondition(&pgcred.Status.Conditions, metav1.Condition{Type: "PolicyEnforced", Status: metav1.ConditionFalse, Reason: "ReplacingPolicy", Message: "Credential policy replacement is pending", ObservedGeneration: pgcred.Generation})
+		if err := manager.ResetUserPolicy(host, adminUser, adminPass, pgcred.Spec.Username); err != nil {
+			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending, "PolicyRevocationPending", "Previous privileges or sessions have not been revoked"), err
+		}
+	}
+
 	// EnsureUserExists is only needed for clusterRoles-only credentials —
 	// EnsureUser inside the Permissions loop creates the role otherwise.
 	// Both functions update the password when the role already exists, keeping
 	// the Kubernetes Secret as the authoritative credential source.
 	if len(pgcred.Spec.Permissions) == 0 {
-		if err := r.pgDB.EnsureUserExists(host, adminUser, adminPass, pgcred.Spec.Username, password); err != nil {
+		if err := manager.EnsureUserExists(host, adminUser, adminPass, pgcred.Spec.Username, password); err != nil {
 			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 				"UserCreationFailed", err.Error()), err
 		}
@@ -153,11 +200,11 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 
 	for _, entry := range pgcred.Spec.Permissions {
 		for _, dbName := range entry.Databases {
-			if err := r.pgDB.EnsureDatabase(host, adminUser, adminPass, dbName); err != nil {
+			if err := manager.EnsureDatabase(host, adminUser, adminPass, dbName); err != nil {
 				return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 					"DatabaseCreationFailed", err.Error()), err
 			}
-			if err := r.pgDB.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions, entry.Tables); err != nil {
+			if err := manager.EnsureUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username, password, entry.Permissions, entry.Tables); err != nil {
 				if isTableNotFoundError(err) {
 					return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhasePending,
 						"WaitingForTable", err.Error()), err
@@ -169,7 +216,7 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 	}
 
 	if len(pgcred.Spec.ClusterRoles) > 0 {
-		if err := r.pgDB.EnsureRoleMemberships(host, adminUser, adminPass, pgcred.Spec.Username, pgcred.Spec.ClusterRoles); err != nil {
+		if err := manager.EnsureRoleMemberships(host, adminUser, adminPass, pgcred.Spec.Username, pgcred.Spec.ClusterRoles); err != nil {
 			return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseFailed,
 				"ClusterRoleGrantFailed", err.Error()), err
 		}
@@ -201,6 +248,10 @@ func (r *PostgresCredentialReconciler) reconcileCredential(ctx context.Context, 
 		}
 	}
 
+	if err := manager.EnableUser(host, adminUser, adminPass, pgcred.Spec.Username); err != nil {
+		return ctrl.Result{}, err
+	}
+	meta.SetStatusCondition(&pgcred.Status.Conditions, metav1.Condition{Type: "PolicyEnforced", Status: metav1.ConditionTrue, Reason: "EffectivePolicyV1", Message: policyDigest, ObservedGeneration: pgcred.Generation})
 	pgcred.Status.SecretName = pgcred.Spec.SecretName
 	return r.setCredentialPhase(pgcred, v1alpha1.CredentialPhaseReady,
 		"CredentialReady", "Postgres user and credential Secret are ready"), nil
@@ -217,48 +268,49 @@ func (r *PostgresCredentialReconciler) reconcileDelete(ctx context.Context, pgcr
 
 	logger.Info("running credential finalizer cleanup")
 
-	// Attempt to drop the Postgres user. We need the target database to still
-	// exist and be reachable. If the database is already gone, we skip the
-	// drop gracefully — the user will have been removed with the database.
 	var pgdb v1alpha1.PostgresDatabase
-	dbKey := types.NamespacedName{Name: pgcred.Spec.DatabaseRef, Namespace: pgcred.Namespace}
-	if pgdbFound, _ := r.client.get(ctx, dbKey, &pgdb); pgdbFound && pgdb.Status.Phase == v1alpha1.DatabasePhaseReady && pgdb.Status.SecretName != "" {
-		var adminSecret corev1.Secret
-		adminSecretKey := types.NamespacedName{Name: pgdb.Status.SecretName, Namespace: pgdb.Namespace}
-		if adminFound, _ := r.client.get(ctx, adminSecretKey, &adminSecret); adminFound {
-			adminUser := string(adminSecret.Data["PGUSER"])
-			adminPass := string(adminSecret.Data["PGPASSWORD"])
-			host := postgresHost(&pgdb)
-
-			if len(pgcred.Spec.Permissions) == 0 {
-				// clusterRoles-only credential: no per-database work to clear.
-				// Drop the role using the maintenance database so DROP OWNED has
-				// somewhere valid to run against.
-				if err := r.pgDB.DropUser(host, adminUser, adminPass, "postgres", pgcred.Spec.Username); err != nil {
-					logger.Error(err, "failed to drop Postgres user during cleanup", "username", pgcred.Spec.Username)
-				}
-			}
-
-			for _, entry := range pgcred.Spec.Permissions {
-				for _, dbName := range entry.Databases {
-					if err := r.pgDB.DropUser(host, adminUser, adminPass, dbName, pgcred.Spec.Username); err != nil {
-						logger.Error(err, "failed to drop Postgres user during cleanup", "username", pgcred.Spec.Username, "database", dbName)
-						// Continue with finalizer removal — the database may be going away too.
-					}
-				}
-			}
+	found, err := r.client.get(ctx, types.NamespacedName{Name: pgcred.Spec.DatabaseRef, Namespace: pgcred.Namespace}, &pgdb)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !found || pgdb.Status.Phase != v1alpha1.DatabasePhaseReady || pgdb.Status.SecretName == "" {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("cannot verify backend credential revocation while database is unavailable")
+	}
+	var adminSecret corev1.Secret
+	found, err = r.client.get(ctx, types.NamespacedName{Name: pgdb.Status.SecretName, Namespace: pgdb.Namespace}, &adminSecret)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !found {
+		return ctrl.Result{}, fmt.Errorf("cannot verify backend credential revocation without admin credentials")
+	}
+	var secret corev1.Secret
+	found, err = r.client.get(ctx, types.NamespacedName{Name: pgcred.Spec.SecretName, Namespace: pgcred.Namespace}, &secret)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if found {
+		owner := metav1.GetControllerOf(&secret)
+		if owner == nil || owner.UID != pgcred.UID || owner.Kind != "PostgresCredential" || owner.Name != pgcred.Name || owner.APIVersion != v1alpha1.GroupVersion.String() {
+			return ctrl.Result{}, fmt.Errorf("credential Secret has conflicting ownership")
 		}
 	}
-
-	// Delete the credential Secret if it exists.
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgcred.Spec.SecretName,
-			Namespace: pgcred.Namespace,
-		},
+	ownership, err := r.pgDB.AcquireUserOwnership(postgresHost(&pgdb), string(adminSecret.Data["PGUSER"]), string(adminSecret.Data["PGPASSWORD"]), pgcred.Spec.Username, string(pgcred.UID), pgcred.Generation, found && string(secret.Data["PGUSER"]) == pgcred.Spec.Username, credentialFence(ctx, r.reader, pgcred, client.ObjectKey{Namespace: pgcred.Namespace, Name: pgcred.Spec.SecretName}, &secret, found, true))
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	if err := r.client.delete(ctx, secret); err != nil {
-		return ctrl.Result{}, fmt.Errorf("deleting credential Secret: %w", err)
+	defer ownership.Close()
+	manager := ownership.Manager()
+	if err := manager.DropUser(postgresHost(&pgdb), string(adminSecret.Data["PGUSER"]), string(adminSecret.Data["PGPASSWORD"]), "postgres", pgcred.Spec.Username); err != nil {
+		return ctrl.Result{}, fmt.Errorf("revoking credential before deletion: %w", err)
+	}
+	if found {
+		if err := r.client.delete(ctx, &secret); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	if err := ownership.Forget(); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Remove the finalizer so the CR can be garbage-collected.
@@ -341,6 +393,7 @@ func labelsForCredential(pgcred *v1alpha1.PostgresCredential, instanceName strin
 // SetupWithManager registers the PostgresCredentialReconciler with the controller manager.
 func (r *PostgresCredentialReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.client = postgresCredentialClient{inner: mgr.GetClient(), scheme: mgr.GetScheme()}
+	r.reader = mgr.GetAPIReader()
 	r.pgDB = postgresManager{}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PostgresCredential{}).

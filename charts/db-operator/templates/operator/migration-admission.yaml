@@ -1,0 +1,89 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "db-operator.fullname" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "db-operator.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ include "db-operator.fullname" . }}-webhook-tls
+  dnsNames:
+    - {{ include "db-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+  issuerRef:
+    kind: Issuer
+    name: {{ include "db-operator.fullname" . }}-selfsigned
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "db-operator.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    {{- include "db-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 443
+      targetPort: webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "db-operator.fullname" . }}-migrations
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "db-operator.fullname" . }}-webhook
+webhooks:
+  - name: migrations.db-operator.benjamin-wright.github.com
+    admissionReviewVersions: [v1]
+    sideEffects: NoneOnDryRun
+    failurePolicy: Fail
+    timeoutSeconds: 10
+    objectSelector:
+      matchExpressions:
+        - key: db-operator.benjamin-wright.github.com/operator-instance
+          {{- if .Values.instanceName }}
+          operator: In
+          values: [{{ .Values.instanceName | quote }}]
+          {{- else }}
+          operator: DoesNotExist
+          {{- end }}
+    clientConfig:
+      service:
+        name: {{ include "db-operator.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-postgresmigrationset
+    rules:
+      - apiGroups: [db-operator.benjamin-wright.github.com]
+        apiVersions: [v1alpha1]
+        resources: [postgresmigrationsets]
+        operations: [CREATE, UPDATE]
+        scope: Namespaced
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "db-operator.fullname" . }}-migration-claims
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "db-operator.fullname" . }}-migration-claims
+  namespace: {{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "db-operator.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "db-operator.fullname" . }}-migration-claims

@@ -226,3 +226,36 @@ func hashFile(path string) (string, error) {
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
+
+// Verify checks a legacy success against the exact artifact and target without
+// creating a ledger or executing migration SQL. A nonempty plan is not proof.
+func Verify(s MigrationStore, migrations []discovery.Migration, target *int64) error {
+	if target == nil {
+		return fmt.Errorf("legacy verification requires an exact target")
+	}
+	if err := s.Lock(); err != nil {
+		return err
+	}
+	defer s.Unlock()
+	applied, err := s.Applied()
+	if err != nil {
+		return err
+	}
+	steps, err := plan(migrations, applied, target)
+	if err != nil {
+		return err
+	}
+	if len(steps) != 0 {
+		return fmt.Errorf("legacy migration ledger does not match the requested target")
+	}
+	expected := 0
+	for _, m := range migrations {
+		if m.NumericID <= *target {
+			expected++
+		}
+	}
+	if len(applied) != expected {
+		return fmt.Errorf("legacy migration ledger is incomplete")
+	}
+	return nil
+}

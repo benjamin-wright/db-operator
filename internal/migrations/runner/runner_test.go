@@ -301,3 +301,43 @@ func TestRun_UnlockCalledOnApplyError(t *testing.T) {
 	Expect(Run(fs, migrations, nil)).To(MatchError(ContainSubstring("simulated apply failure")))
 	Expect(fs.events).To(ContainElement("Unlock"), "Unlock should be called even when Apply fails")
 }
+
+func TestVerifyLegacyLedgerNeverExecutesSQL(t *testing.T) {
+	RegisterTestingT(t)
+	migrations := setupMigrationFiles(t, []string{"001", "002"}, []string{"first", "second"})
+	cases := []struct {
+		name    string
+		records []store.Record
+		target  *int64
+		valid   bool
+	}{
+		{"exact", appliedRecords(t, migrations), targetPtr(2), true},
+		{"missing-tail", appliedRecords(t, migrations[:1]), targetPtr(2), false},
+		{"missing-middle", appliedRecords(t, migrations[1:]), targetPtr(2), false},
+		{"wrong-target", appliedRecords(t, migrations), targetPtr(1), false},
+		{"missing-target", appliedRecords(t, migrations), nil, false},
+		{"pristine", nil, targetPtr(0), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fakeStore{records: tc.records}
+			err := Verify(fs, migrations, tc.target)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%t err=%v", tc.valid, err)
+			}
+			if len(fs.calls) > 0 {
+				t.Fatal("verification executed SQL")
+			}
+			for _, event := range fs.events {
+				if event == "EnsureTable" {
+					t.Fatal("verification created ledger")
+				}
+			}
+		})
+	}
+	records := appliedRecords(t, migrations)
+	records[0].ApplyHash = "modified"
+	if err := Verify(&fakeStore{records: records}, migrations, targetPtr(2)); err == nil {
+		t.Fatal("accepted modified migration")
+	}
+}

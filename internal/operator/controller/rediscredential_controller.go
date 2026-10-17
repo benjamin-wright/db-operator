@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +29,7 @@ const (
 type RedisCredentialReconciler struct {
 	InstanceName string
 	client       redisCredentialClient
+	reader       client.Reader
 	redisMgr     RedisManager
 }
 
@@ -128,6 +130,12 @@ func (r *RedisCredentialReconciler) reconcileRedisCredential(ctx context.Context
 		return ctrl.Result{}, fmt.Errorf("fetching credential Secret: %w", err)
 	}
 
+	if secretFound {
+		owner := metav1.GetControllerOf(&existingSecret)
+		if owner == nil || owner.UID != rcred.UID || owner.Name != rcred.Name || owner.Kind != "RedisCredential" || owner.APIVersion != v1alpha1.GroupVersion.String() {
+			return ctrl.Result{}, fmt.Errorf("Redis credential Secret has conflicting ownership")
+		}
+	}
 	var password string
 	if secretFound {
 		password = string(existingSecret.Data["REDIS_PASSWORD"])
@@ -139,8 +147,7 @@ func (r *RedisCredentialReconciler) reconcileRedisCredential(ctx context.Context
 		}
 	}
 
-	if err := r.redisMgr.EnsureACLUser(ctx, host, adminPass, rcred.Spec.Username, password,
-		rcred.Spec.KeyPatterns, rcred.Spec.ACLCategories, rcred.Spec.Commands); err != nil {
+	if err := r.redisMgr.EnsureCredential(ctx, host, adminPass, rcred, password, redisPolicyDigest(rcred, password, &existingSecret), secretFound && string(existingSecret.Data["REDIS_USERNAME"]) == rcred.Spec.Username, redisCredentialFence(ctx, r.reader, rcred, credSecretKey, &existingSecret, secretFound, false)); err != nil {
 		return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseFailed,
 			"UserCreationFailed", err.Error()), err
 	}
@@ -162,8 +169,10 @@ func (r *RedisCredentialReconciler) reconcileRedisCredential(ctx context.Context
 		if err := r.client.createOwned(ctx, rcred, secret); err != nil {
 			return ctrl.Result{}, fmt.Errorf("creating credential Secret: %w", err)
 		}
+		existingSecret = *secret
 	}
 
+	meta.SetStatusCondition(&rcred.Status.Conditions, metav1.Condition{Type: "PolicyEnforced", Status: metav1.ConditionTrue, Reason: "EffectivePolicyV1", Message: redisPolicyDigest(rcred, password, &existingSecret), ObservedGeneration: rcred.Generation})
 	rcred.Status.SecretName = rcred.Spec.SecretName
 	return r.setPhase(rcred, v1alpha1.RedisCredentialPhaseReady,
 		"CredentialReady", "Redis ACL user and credential Secret are ready"), nil
@@ -179,32 +188,40 @@ func (r *RedisCredentialReconciler) reconcileDelete(ctx context.Context, rcred *
 
 	logger.Info("running Redis credential finalizer cleanup")
 
-	// Attempt to drop the ACL user. If the database is already gone, skip gracefully.
 	var rdb v1alpha1.RedisDatabase
-	dbKey := types.NamespacedName{Name: rcred.Spec.DatabaseRef, Namespace: rcred.Namespace}
-	if rdbFound, _ := r.client.get(ctx, dbKey, &rdb); rdbFound &&
-		rdb.Status.Phase == v1alpha1.RedisDatabasePhaseReady &&
-		rdb.Status.SecretName != "" {
-		var adminSecret corev1.Secret
-		adminSecretKey := types.NamespacedName{Name: rdb.Status.SecretName, Namespace: rdb.Namespace}
-		if adminFound, _ := r.client.get(ctx, adminSecretKey, &adminSecret); adminFound {
-			adminPass := string(adminSecret.Data["REDIS_PASSWORD"])
-			host := redisHost(&rdb)
-			if err := r.redisMgr.DropACLUser(ctx, host, adminPass, rcred.Spec.Username); err != nil {
-				logger.Error(err, "failed to drop Redis ACL user during cleanup", "username", rcred.Spec.Username)
-				// Continue — the database may be going away too.
-			}
+	found, err := r.client.get(ctx, types.NamespacedName{Name: rcred.Spec.DatabaseRef, Namespace: rcred.Namespace}, &rdb)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !found || rdb.Status.Phase != v1alpha1.RedisDatabasePhaseReady || rdb.Status.SecretName == "" {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("Redis must be available to verify revocation")
+	}
+	var admin corev1.Secret
+	found, err = r.client.get(ctx, types.NamespacedName{Name: rdb.Status.SecretName, Namespace: rdb.Namespace}, &admin)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !found {
+		return ctrl.Result{}, fmt.Errorf("Redis admin credentials are required for revocation")
+	}
+	var secret corev1.Secret
+	found, err = r.client.get(ctx, types.NamespacedName{Name: rcred.Spec.SecretName, Namespace: rcred.Namespace}, &secret)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if found {
+		owner := metav1.GetControllerOf(&secret)
+		if owner == nil || owner.UID != rcred.UID || owner.Name != rcred.Name || owner.Kind != "RedisCredential" || owner.APIVersion != v1alpha1.GroupVersion.String() {
+			return ctrl.Result{}, fmt.Errorf("Redis credential Secret has conflicting ownership")
 		}
 	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rcred.Spec.SecretName,
-			Namespace: rcred.Namespace,
-		},
+	if err := r.redisMgr.DropCredential(ctx, redisHost(&rdb), string(admin.Data["REDIS_PASSWORD"]), rcred, found && string(secret.Data["REDIS_USERNAME"]) == rcred.Spec.Username, redisCredentialFence(ctx, r.reader, rcred, client.ObjectKey{Namespace: rcred.Namespace, Name: rcred.Spec.SecretName}, &secret, found, true)); err != nil {
+		return ctrl.Result{}, err
 	}
-	if err := r.client.delete(ctx, secret); err != nil {
-		return ctrl.Result{}, fmt.Errorf("deleting credential Secret: %w", err)
+	if found {
+		if err := r.client.delete(ctx, &secret); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	controllerutil.RemoveFinalizer(rcred, redisCredentialFinalizerName)
@@ -244,6 +261,9 @@ func (r *RedisCredentialReconciler) setPhase(
 	if phase == v1alpha1.RedisCredentialPhasePending {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}
 	}
+	if phase == v1alpha1.RedisCredentialPhaseReady {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}
+	}
 
 	return ctrl.Result{}
 }
@@ -268,6 +288,7 @@ func labelsForRedisCredential(rcred *v1alpha1.RedisCredential, instanceName stri
 // SetupWithManager registers the RedisCredentialReconciler with the controller manager.
 func (r *RedisCredentialReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.client = redisCredentialClient{inner: mgr.GetClient(), scheme: mgr.GetScheme()}
+	r.reader = mgr.GetAPIReader()
 	r.redisMgr = redisManager{}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.RedisCredential{}).

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -42,7 +43,9 @@ func main() {
 	var migrationImage string
 	var serviceAccountName string
 	var jobRegistryHost string
+	var claimNamespace string
 
+	flag.StringVar(&claimNamespace, "claim-namespace", os.Getenv("POD_NAMESPACE"), "Namespace holding durable migration claims")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -107,7 +110,11 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	if err := controller.RegisterMigrationAdmission(mgr, claimNamespace); err != nil {
+		setupLog.Error(err, "unable to register migration admission")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", mgr.GetWebhookServer().StartedChecker()); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
@@ -155,10 +162,12 @@ func main() {
 	}
 
 	if err := (&controller.PostgresMigrationSetReconciler{
-		InstanceName:       instanceName,
-		MigrationImage:     migrationImage,
-		ServiceAccountName: serviceAccountName,
-		JobRegistryHost:    jobRegistryHost,
+		ClaimNamespace:           claimNamespace,
+		InstanceName:             instanceName,
+		MigrationImage:           migrationImage,
+		MigrationImagePullPolicy: corev1.PullPolicy(os.Getenv("MIGRATION_IMAGE_PULL_POLICY")),
+		ServiceAccountName:       serviceAccountName,
+		JobRegistryHost:          jobRegistryHost,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PostgresMigrationSet")
 		os.Exit(1)

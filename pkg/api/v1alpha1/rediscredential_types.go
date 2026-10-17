@@ -52,6 +52,7 @@ type RedisCredentialSpec struct {
 	// that this credential targets.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Redis credential binding is immutable"
 	DatabaseRef string `json:"databaseRef"`
 
 	// Username is the Redis ACL user to create inside the target instance.
@@ -59,6 +60,7 @@ type RedisCredentialSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Redis credential binding is immutable"
 	Username string `json:"username"`
 
 	// SecretName is the name of the Kubernetes Secret that will be created (or
@@ -66,6 +68,7 @@ type RedisCredentialSpec struct {
 	// namespace as the RedisCredential.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Redis credential binding is immutable"
 	SecretName string `json:"secretName"`
 
 	// KeyPatterns is the list of Redis key patterns the user can access (e.g. "user:*", "cache:*").
@@ -95,6 +98,7 @@ type RedisCredentialStatus struct {
 
 	// SecretName is the name of the Kubernetes Secret that was created for this credential.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Redis credential binding is immutable"
 	SecretName string `json:"secretName,omitempty"`
 }
 

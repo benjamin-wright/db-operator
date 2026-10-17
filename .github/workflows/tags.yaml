@@ -108,6 +108,7 @@ jobs:
   helm-chart:
     runs-on: ubuntu-latest
     environment: production
+    needs: merge-image
     steps:
       - uses: actions/checkout@v4
       - name: Login to Docker Hub

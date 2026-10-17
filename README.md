@@ -18,29 +18,40 @@ All CRDs are in API group `db-operator.benjamin-wright.github.com/v1alpha1`.
 
 ## Deploying the Operator
 
-Install with Helm. The chart ships the CRDs and the operator deployment together.
+Install cert-manager first and wait for its controller, webhook and CA injector
+to be ready. The db-operator chart creates its own issuer and serving certificate
+for migration admission. Install a pinned release with Helm:
 
 ```sh
-helm install db-operator oci://ghcr.io/benjamin-wright/db-operator/db-operator \
-  --namespace db-operator \
-  --create-namespace
-```
-
-To use a specific version:
-
-```sh
-helm install db-operator oci://ghcr.io/benjamin-wright/db-operator/db-operator \
+DB_OPERATOR_VERSION=v1.2.0
+helm upgrade --install db-operator oci://registry-1.docker.io/benwright/db-operator-chart \
   --namespace db-operator \
   --create-namespace \
-  --version 0.1.0
+  --version "$DB_OPERATOR_VERSION" \
+  --wait --timeout 5m
+kubectl wait --for=condition=Ready certificate/db-operator-webhook \
+  --namespace db-operator --timeout=120s
+kubectl wait --for=jsonpath='{.webhooks[0].clientConfig.caBundle}' \
+  validatingwebhookconfiguration/db-operator-migrations --timeout=120s
 ```
 
-To upgrade an existing installation:
+The chart installs seven CRDs and matching operator, migration-runner and optional
+MCP image versions. Apply migration sets only after the certificate, webhook
+endpoints and injected CA bundle are ready.
+
+Helm does not upgrade existing CRDs. For an upgrade, apply the selected release's
+CRDs before upgrading the deployment, then repeat the readiness checks above:
 
 ```sh
-helm upgrade db-operator oci://ghcr.io/benjamin-wright/db-operator/db-operator \
-  --namespace db-operator
+helm show crds oci://registry-1.docker.io/benwright/db-operator-chart \
+  --version "$DB_OPERATOR_VERSION" | kubectl apply -f -
+helm upgrade db-operator oci://registry-1.docker.io/benwright/db-operator-chart \
+  --namespace db-operator --version "$DB_OPERATOR_VERSION" \
+  --wait --timeout 5m
 ```
+
+Keep CRDs, migration claims and retained data in place during upgrades. Migration
+admission fails closed while its webhook is unavailable.
 
 ## Chart Values
 
@@ -173,27 +184,10 @@ spec:
 
 When `tables` is set, the operator runs `GRANT SELECT ON TABLE orders, products TO readonly` — no other tables are accessible. Note that `ALTER DEFAULT PRIVILEGES` is **not** applied for table-scoped entries; tables created after the credential is provisioned will not be auto-granted. If any listed table does not exist when the credential is reconciled, the credential transitions to `Pending` with reason `WaitingForTable` and retries automatically once the table appears.
 
-To make a credential the **owner** of a database — enabling DDL operations such as `CREATE TABLE` — set `spec.databaseOwner: true`:
-
-```yaml
-apiVersion: db-operator.benjamin-wright.github.com/v1alpha1
-kind: PostgresCredential
-metadata:
-  name: migrations-creds
-  namespace: default
-spec:
-  databaseRef: my-postgres
-  username: migrations
-  secretName: migrations-postgres-secret
-  databaseOwner: true
-  permissions:
-    - databases:
-        - myapp
-      permissions:
-        - ALL
-```
-
-The operator makes the credential's role the `OWNER` of every database listed in `permissions[*].databases` and grants it `ALL` privileges on the public schema, allowing it to run `CREATE TABLE`, `ALTER TABLE`, and similar DDL. At most one credential per `(databaseRef, database)` pair may set `databaseOwner: true`; a second credential attempting ownership of the same database transitions to `Failed` with reason `OwnerConflict`. When a non-owner credential is reconciled against a database that already has an owner, the operator automatically sets `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` so that tables created by the owner after the non-owner credential was provisioned are still accessible.
+Use `PostgresMigrationSet` for schema changes. Application credentials receive
+table and sequence privileges; `ALL` does not grant database ownership or schema
+creation. The operator provisions a separate migration account with schema and
+object permissions for forward migrations and rollback.
 
 For credentials that need blanket access spanning all current and future tables — including those created later by other roles such as a migrations user that is not the database owner — use `clusterRoles` to grant a PostgreSQL predefined role via membership:
 
@@ -215,19 +209,19 @@ Membership in `pg_read_all_data` is a cluster-wide grant resolved at access time
 
 #### Migrations
 
-Planned ownership and admission behavior is defined in the
-[migration design](docs/migrations-design.md), with implementation work tracked
-in the [migration plan](docs/todo.md). Admission-time ownership reservations are
-not yet implemented in this checkout.
+Migration admission atomically reserves each database target and rejects
+conflicting owners. The [migration design](docs/migrations-design.md) describes
+the ownership protocol; [capability enforcement and migration ownership](#capability-enforcement-and-migration-ownership)
+below documents its operational behavior and recovery requirements.
 
-Schema migrations are applied via `PostgresMigrationSet`. The CR points at a `PostgresDatabase`, names a logical database, and references an OCI artifact containing versioned SQL files. The operator resolves the reference to a digest, runs a `db-migrations` Job against the target database using an internal owner role (`__dbop_migrations`, provisioned per `PostgresDatabase`), and re-reconciles every matching `PostgresCredential` on success so they pick up grants for any newly created tables.
+Schema migrations are applied via `PostgresMigrationSet`. The CR points at a `PostgresDatabase`, names a logical database, and references an OCI artifact containing versioned SQL files. The operator resolves the reference to a digest, journals the operation, runs a fenced `db-migrations` Job using a per-database migration account, and re-reconciles every matching `PostgresCredential` on success so they pick up grants for any newly created tables.
 
 Build and push an artifact with the [`oras` CLI](https://oras.land/):
 
 ```sh
 oras push registry.example.com/myapp/migrations:v1 \
   --artifact-type application/vnd.db-operator.migrations.v1.tar+gzip \
-  ./migrations.tar.gz
+  ./migrations.tar.gz:application/vnd.db-operator.migrations.v1.tar+gzip
 ```
 
 The artifact must contain exactly one layer of media type `application/vnd.db-operator.migrations.v1.tar+gzip`. Inside the tarball, each migration is a pair of files named `<id>-<name>-apply.sql` and `<id>-<name>-rollback.sql` where `<id>` is a numeric revision (leading zeros allowed but not significant: `0001` and `1` collide).
@@ -247,9 +241,19 @@ spec:
   paused: false                   # optional; when true, the operator will not launch new Jobs
 ```
 
-The operator launches a `Job` whose Pod runs `db-migrations` with `--artifact <digest>` and `--target <revision>`. Lowering `targetRevision` triggers a rollback Job. Re-pushing the same tag with new content re-runs the Job once the resolved digest changes. Editing a previously-applied SQL file is a hard error surfaced as a Failed Job.
+The operator launches a `Job` whose Pod runs `db-migrations` with the recorded
+digest and target. Lowering `targetRevision` requests rollback, including to zero.
+An unchanged request keeps its pinned artifact and outcome even if its registry
+tag changes. Change the artifact reference or target to request new work; use a
+fresh retry annotation to retry a failed or unknown request. An in-flight attempt
+finishes before the latest request is considered. Missing or modified SQL for an
+already-applied migration fails integrity verification.
 
-Status fields of interest: `phase` (`Pending`/`Running`/`Ready`/`Failed`), `currentRevision`, `observedArtifact` (digest-pinned reference), and `activeJob`.
+Inspect `status.operation` for the captured request, pinned digest, Job identity
+and outcome, and the `Ready` condition for convergence to the current request.
+`status.lastSuccessfulOperation` records historical success; it does not assert
+the database state after a later partial failure. The flat `currentRevision`,
+`observedArtifact` and `activeJob` fields are compatibility summaries.
 
 ### Redis
 
@@ -397,3 +401,72 @@ envFrom:
 ## Contributing
 
 See [docs/contribution.md](docs/contribution.md) for development setup, make targets, and coding standards.
+
+Releases use version tags such as `v1.2.0` from a committed, validated source tree.
+The [tag workflow](.github/workflows/tags.yaml) builds `db-operator`,
+`db-migrations` and `db-mcp` for Linux amd64 and arm64, publishes their combined
+image manifests, then publishes the chart with that tag as its version and
+appVersion. Consumers should pin the completed release; the source chart's
+placeholder version is overridden during packaging.
+
+## Capability enforcement and migration ownership
+
+PostgreSQL credential policy replacement disables login, terminates existing
+sessions, removes role memberships, direct grants and default privileges, then
+applies the complete new policy. Login is enabled only after replacement
+succeeds. Deletion retains its finalizer until sessions and backend privileges
+are revoked. A backend ownership record binds each role to its credential UID;
+existing roles require a verified matching credential Secret for import.
+Uncached credential UID, generation and Secret-version checks run inside the
+backend mutation lock or transaction, preventing delayed reconciles from
+restoring deleted access or an old password.
+`PolicyEnforced=True` identifies this behavior to clients. PUBLIC table, column,
+sequence and routine grants and their creator defaults are revoked in managed
+application schemas, so they cannot bypass declared capabilities. This includes
+arbitrary execution of SECURITY DEFINER functions.
+
+Redis policy replacement resets passwords, selectors, commands, channels and
+key patterns, including wildcard patterns. Ownership records are authenticated
+with the trusted admin credential; ordinary key writers cannot forge authority.
+Bounded uncached checks establish a unique live credential UID and exact Secret
+version, repairing missing, invalid or replayed records. Replacement revokes
+access and terminates old sessions before conditionally enabling the new policy;
+a failed `WATCH` leaves access disabled. Backend or ownership failures hold the
+deletion finalizer. Redis administrative and ACL capabilities remain privileged.
+
+Migration admission requires cert-manager. The chart provisions its own
+namespaced issuer, webhook certificate and Service, and a fail-closed validating
+webhook. Admission atomically reserves one Lease in the operator namespace for
+`(namespace, databaseRef, database)`. Dry runs only validate. Claims have no TTL
+or owner reference; all instances managing one target must share a claim
+namespace. The operator uses uncached ownership reads for claims and cleanup.
+
+`status.operation` records a request's artifact, target, retry token, pinned
+digest, generation, Job name/UID and terminal outcome. `lastSuccessfulOperation`
+is historical evidence, not the current schema after a later partial failure.
+The old flat status fields remain a derived compatibility projection. Completed
+Job retention and unrelated spec changes never replay a request. A changed
+nonempty `db-operator.benjamin-wright.github.com/retryAt` token authorizes retry
+of a failed or unknown request; retrying a successful request only acknowledges
+the token. Tags are resolved once per new request. In-flight work finishes using
+its original immutable request before the latest desired request is considered.
+
+A per-database migration account replaces shared migration credentials. The
+runner retains one database session for its advisory lock and every migration
+transaction. The Job's claim UID and operation name must match an admin-owned
+SQL authority row under that lock. A delayed attempt cannot execute after a newer
+operation is armed, even when both use the same claim. Claim arming and release
+also take a target guard in the maintenance database; a delayed Job cannot regain
+authority after release.
+
+The orphan cleaner rechecks claims every ten seconds after a one-minute grace
+period, verifies resource, Job and Pod absence across resource incarnations,
+then disarms SQL authority and deletes the exact Lease UID/resource version.
+Unavailable database administration blocks cleanup rather than asserting
+revocation. A reservation whose backend was never created also waits for that
+backend or administrator-verified recovery; age alone cannot prove SQL safety.
+Existing objects may import matching claims after duplicate-target and Job
+ownership checks. Legacy Ready with an exact pinned artifact and target
+is verified using a read-only ledger Job when the original Job has expired.
+Unverifiable or conflicting evidence becomes Unknown and requires explicit
+ledger inspection and retry authorization.

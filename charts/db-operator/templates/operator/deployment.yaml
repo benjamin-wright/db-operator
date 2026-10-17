@@ -31,7 +31,17 @@ spec:
             {{- if .Values.serviceAccountName }}
             - --service-account-name={{ .Values.serviceAccountName }}
             {{- end }}
+          volumeMounts:
+            - name: webhook-tls
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
           env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MIGRATION_IMAGE_PULL_POLICY
+              value: {{ .Values.migrationImage.pullPolicy | quote }}
             - name: MIGRATION_IMAGE
               value: {{ include "db-operator.migrationImage" . | quote }}
             {{- if .Values.jobRegistryHost }}
@@ -59,6 +69,9 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           ports:
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
             - name: metrics
               containerPort: 8080
               protocol: TCP
@@ -69,3 +82,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: webhook-tls
+          secret:
+            secretName: {{ include "db-operator.fullname" . }}-webhook-tls

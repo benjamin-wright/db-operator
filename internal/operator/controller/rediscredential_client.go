@@ -2,10 +2,14 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -45,10 +49,7 @@ func (c *redisCredentialClient) update(ctx context.Context, obj client.Object) e
 
 // delete removes obj from the cluster. A not-found error is treated as success.
 func (c *redisCredentialClient) delete(ctx context.Context, obj client.Object) error {
-	if err := c.inner.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	return nil
+	return deleteObserved(ctx, c.inner, obj)
 }
 
 func (c *redisCredentialClient) updateStatus(ctx context.Context, obj client.Object) error {
@@ -62,48 +63,104 @@ func (c *redisCredentialClient) updateStatus(ctx context.Context, obj client.Obj
 // RedisManager abstracts direct Redis interactions so the reconciler can be
 // tested without a live Redis instance.
 type RedisManager interface {
-	EnsureACLUser(ctx context.Context, host, adminPass, username, password string, keyPatterns []string, aclCategories []v1alpha1.RedisACLCategory, commands []string) error
-	DropACLUser(ctx context.Context, host, adminPass, username string) error
+	EnsureCredential(ctx context.Context, host, adminPass string, credential *v1alpha1.RedisCredential, password, policy string, legacy bool, validate func() error) error
+	DropCredential(ctx context.Context, host, adminPass string, credential *v1alpha1.RedisCredential, legacy bool, validate func() error) error
 }
 
-// redisManager is the production implementation of RedisManager.
 type redisManager struct{}
 
-// EnsureACLUser connects to Redis and creates (or updates) an ACL user with the
-// given password, key patterns, ACL categories, and individual commands.
-func (r redisManager) EnsureACLUser(ctx context.Context, host, adminPass, username, password string, keyPatterns []string, aclCategories []v1alpha1.RedisACLCategory, commands []string) error {
-	rdb := openRedis(host, adminPass)
-	defer rdb.Close()
-
-	args := []interface{}{"ACL", "SETUSER", username, "on", ">" + password, "resetkeys", "nocommands"}
-
-	for _, p := range keyPatterns {
-		args = append(args, "~"+p)
-	}
-	for _, cat := range aclCategories {
-		args = append(args, "+@"+string(cat))
-	}
-	for _, cmd := range commands {
-		args = append(args, "+"+cmd)
-	}
-
-	if err := rdb.Do(ctx, args...).Err(); err != nil {
-		return fmt.Errorf("creating Redis ACL user %q: %w", username, err)
-	}
-
-	return nil
+func redisOwnerKey(username string) string {
+	sum := sha256.Sum256([]byte(username))
+	return fmt.Sprintf("__dbop_control:credential:%x", sum)
 }
 
-// DropACLUser connects to Redis and removes the ACL user.
-func (r redisManager) DropACLUser(ctx context.Context, host, adminPass, username string) error {
+// A watched ownership record and MULTI/EXEC bind policy replacement to one UID
+// and monotonic desired generation. The reset removes old passwords, selectors,
+// command categories and channel patterns as well as key patterns.
+func (r redisManager) EnsureCredential(ctx context.Context, host, adminPass string, credential *v1alpha1.RedisCredential, password, policy string, legacy bool, validate func() error) error {
+	if credential.Spec.Username == "default" || credential.UID == "" {
+		return fmt.Errorf("reserved or unowned Redis credential")
+	}
+	previous := meta.FindStatusCondition(credential.Status.Conditions, "PolicyEnforced")
+	changed := previous == nil || previous.Status != metav1.ConditionTrue || previous.Message != policy
+	args := []any{"ACL", "SETUSER", credential.Spec.Username, "reset", "on", ">" + password}
+	for _, pattern := range credential.Spec.KeyPatterns {
+		if strings.HasPrefix(pattern, "__dbop_control") {
+			return fmt.Errorf("reserved Redis key prefix")
+		}
+		args = append(args, "~"+pattern)
+	}
+	for _, category := range credential.Spec.ACLCategories {
+		args = append(args, "+@"+string(category))
+	}
+	for _, command := range credential.Spec.Commands {
+		args = append(args, "+"+command)
+	}
 	rdb := openRedis(host, adminPass)
 	defer rdb.Close()
+	key := redisOwnerKey(credential.Spec.Username)
+	return rdb.Watch(ctx, func(tx *goredis.Tx) error {
+		state, authenticated, err := readRedisOwner(ctx, tx, key, credential.Spec.Username, adminPass)
+		if err != nil {
+			return err
+		}
+		if validate == nil {
+			return fmt.Errorf("credential mutation fence is required")
+		}
+		if err := validate(); err != nil {
+			return err
+		}
+		if err := validateRedisOwner(ctx, tx, credential, state, authenticated, legacy); err != nil {
+			return err
+		}
+		if changed {
+			if err := revokeRedisCredential(ctx, tx, credential.Spec.Username); err != nil {
+				return err
+			}
+		}
+		state = map[string]string{"uid": string(credential.UID), "generation": fmt.Sprint(credential.Generation), "policy": policy}
+		state["signature"] = redisOwnerSignature(adminPass, credential.Spec.Username, state)
+		_, err = tx.TxPipelined(ctx, func(pipe goredis.Pipeliner) error {
+			pipe.Do(ctx, args...)
+			pipe.Del(ctx, key)
+			pipe.HSet(ctx, key, state)
+			return nil
+		})
+		return err
+	}, key)
+}
 
-	if err := rdb.Do(ctx, "ACL", "DELUSER", username).Err(); err != nil {
-		return fmt.Errorf("dropping Redis ACL user %q: %w", username, err)
+func (r redisManager) DropCredential(ctx context.Context, host, adminPass string, credential *v1alpha1.RedisCredential, legacy bool, validate func() error) error {
+	if credential.Spec.Username == "default" || credential.UID == "" {
+		return fmt.Errorf("reserved or unowned Redis credential")
 	}
-
-	return nil
+	rdb := openRedis(host, adminPass)
+	defer rdb.Close()
+	key := redisOwnerKey(credential.Spec.Username)
+	return rdb.Watch(ctx, func(tx *goredis.Tx) error {
+		state, authenticated, err := readRedisOwner(ctx, tx, key, credential.Spec.Username, adminPass)
+		if err != nil {
+			return err
+		}
+		if validate == nil {
+			return fmt.Errorf("credential mutation fence is required")
+		}
+		if err := validate(); err != nil {
+			return err
+		}
+		if err := validateRedisOwner(ctx, tx, credential, state, authenticated, legacy); err != nil {
+			return err
+		}
+		if err := revokeRedisCredential(ctx, tx, credential.Spec.Username); err != nil {
+			return err
+		}
+		_, err = tx.TxPipelined(ctx, func(pipe goredis.Pipeliner) error {
+			pipe.Do(ctx, "ACL", "DELUSER", credential.Spec.Username)
+			pipe.Del(ctx, key)
+			return nil
+		})
+		return err
+	}, key)
 }
 
 // openRedis opens a Redis client authenticated as the default admin user.

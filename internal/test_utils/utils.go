@@ -404,11 +404,18 @@ func ConnectToRedisDatabase(dbLookup types.NamespacedName, secretLookup types.Na
 // MigrationRegistry is the in-cluster address of the local k3d registry.
 // This is the address stored in PostgresMigrationSet CRs and used by migration
 // job pods running inside the cluster.
-const MigrationRegistry = "db-operator-registry.localhost:5000"
+var MigrationRegistry = registryAddress("DB_OPERATOR_REGISTRY", "db-operator-registry.localhost:5000")
 
 // migrationRegistryPush is the host-side forwarded port used to push artifacts
 // from the test runner (running on the host) into the registry.
-const migrationRegistryPush = "db-operator-registry.localhost:5001"
+var migrationRegistryPush = registryAddress("DB_OPERATOR_REGISTRY_PUSH", "db-operator-registry.localhost:5001")
+
+func registryAddress(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
 
 // PushMigrationArtifact builds a tar+gzip of SQL files and pushes it as an
 // ORAS artifact to the local registry under repo:tag. Returns the full

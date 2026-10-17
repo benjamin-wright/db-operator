@@ -2,6 +2,7 @@ package controller
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,16 +26,19 @@ const (
 	// migrationSetLabel is the label key used on migration Jobs to associate
 	// them with a specific PostgresMigrationSet. The client uses this label
 	// to list all Jobs owned by a given migration set without a field index.
-	migrationSetLabel = "db-operator.benjamin-wright.github.com/migration-set"
+	migrationOperationLabel  = "db-operator.benjamin-wright.github.com/operation"
+	migrationClaimAnnotation = "db-operator.benjamin-wright.github.com/claim-uid"
+	migrationSetLabel        = "db-operator.benjamin-wright.github.com/migration-set"
 )
 
 // postgresMigrationSetBuilder constructs the desired Kubernetes Job for a
 // PostgresMigrationSet instance.
 type postgresMigrationSetBuilder struct {
-	migrationImage     string
-	serviceAccountName string
-	jobRegistryHost    string
-	scheme             *runtime.Scheme
+	migrationImage           string
+	migrationImagePullPolicy corev1.PullPolicy
+	serviceAccountName       string
+	jobRegistryHost          string
+	scheme                   *runtime.Scheme
 }
 
 // migrationKey returns a short, deterministic identifier derived from the
@@ -47,22 +51,40 @@ func migrationKey(observedArtifact string, targetRevision int64) string {
 	return fmt.Sprintf("%x", h.Sum(nil))[:12]
 }
 
+func migrationRequestKey(pgms *v1alpha1.PostgresMigrationSet) string {
+	data, _ := json.Marshal([]any{pgms.UID, pgms.Generation, pgms.Spec.DatabaseRef, pgms.Spec.Database, pgms.Status.ObservedArtifact, pgms.Spec.TargetRevision})
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:12])
+}
+
+func migrationCredentialName(pgms *v1alpha1.PostgresMigrationSet) string {
+	sum := sha256.Sum256([]byte(string(pgms.UID)))
+	return fmt.Sprintf("dbop-migrations-%x", sum[:16])
+}
+
+func migrationDatabaseRole(pgms *v1alpha1.PostgresMigrationSet) string {
+	data, _ := json.Marshal([]string{pgms.Namespace, pgms.Spec.DatabaseRef, pgms.Spec.Database})
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("__dbop_m_%x", sum[:16])
+}
+
 // desiredJob builds the migration Job for pgms. The caller must have already
 // written a resolved digest reference into pgms.Status.ObservedArtifact before
 // calling this method.
 func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigrationSet) *batchv1.Job {
-	key := migrationKey(pgms.Status.ObservedArtifact, pgms.Spec.TargetRevision)
-	artifact := b.jobArtifact(pgms.Status.ObservedArtifact)
+	key := migrationRequestKey(pgms)
+	artifact := b.jobArtifact(pgms.Status.Operation.ResolvedArtifact)
 	backoffLimit := int32(0)
-	secretName := pgms.Spec.DatabaseRef + "-migrations-internal"
+	secretName := migrationCredentialName(pgms)
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: pgms.Name + "-",
-			Namespace:    pgms.Namespace,
+			Name:      pgms.Status.Operation.JobRef.Name,
+			Namespace: pgms.Namespace,
 			Labels: map[string]string{
-				migrationSetLabel: pgms.Name,
-				migrationKeyLabel: key,
+				migrationSetLabel:       pgms.Name,
+				migrationKeyLabel:       key,
+				migrationOperationLabel: pgms.Status.Operation.JobRef.Name,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -70,8 +92,9 @@ func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigration
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						migrationSetLabel: pgms.Name,
-						migrationKeyLabel: key,
+						migrationSetLabel:       pgms.Name,
+						migrationKeyLabel:       key,
+						migrationOperationLabel: pgms.Status.Operation.JobRef.Name,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -79,13 +102,16 @@ func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigration
 					ServiceAccountName: b.serviceAccountName,
 					Containers: []corev1.Container{
 						{
-							Name:  "migrations",
-							Image: b.migrationImage,
+							Name:            "migrations",
+							Image:           b.migrationImage,
+							ImagePullPolicy: b.migrationImagePullPolicy,
 							Args: []string{
 								"--artifact", artifact,
-								"--target", strconv.FormatInt(pgms.Spec.TargetRevision, 10),
+								"--target", strconv.FormatInt(pgms.Status.Operation.TargetRevision, 10),
 							},
 							Env: []corev1.EnvVar{
+								{Name: "MIGRATION_CLAIM_UID", Value: pgms.Annotations[migrationClaimAnnotation]},
+								{Name: "MIGRATION_OPERATION", Value: pgms.Status.Operation.JobRef.Name},
 								{
 									Name: "PGUSER",
 									ValueFrom: &corev1.EnvVarSource{
@@ -122,6 +148,9 @@ func (b postgresMigrationSetBuilder) desiredJob(pgms *v1alpha1.PostgresMigration
 				},
 			},
 		},
+	}
+	if pgms.Status.Operation.VerificationOnly {
+		job.Spec.Template.Spec.Containers[0].Args = append(job.Spec.Template.Spec.Containers[0].Args, "--verify-only")
 	}
 	_ = controllerutil.SetControllerReference(pgms, job, b.scheme)
 	return job

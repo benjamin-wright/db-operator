@@ -152,8 +152,9 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 
 			var fetched v1alpha1.PostgresMigrationSet
 			Expect(K8sClient.Get(Ctx, msLook, &fetched)).To(Succeed())
+			before := fetched.DeepCopy()
 			fetched.Spec.TargetRevision = 0
-			Expect(K8sClient.Update(Ctx, &fetched)).To(Succeed())
+			Expect(K8sClient.Patch(Ctx, &fetched, client.MergeFrom(before))).To(Succeed())
 
 			// The reconciler should create a new Job for the rollback.
 			Eventually(func(g Gomega) {
@@ -342,8 +343,9 @@ var _ = Describe("PostgresMigrationSetReconciler", func() {
 			// Change desired state while the first job is still in-flight.
 			var fetched v1alpha1.PostgresMigrationSet
 			Expect(K8sClient.Get(Ctx, msLook, &fetched)).To(Succeed())
+			before := fetched.DeepCopy()
 			fetched.Spec.TargetRevision = 0
-			Expect(K8sClient.Update(Ctx, &fetched)).To(Succeed())
+			Expect(K8sClient.Patch(Ctx, &fetched, client.MergeFrom(before))).To(Succeed())
 
 			// The controller must not create a second Job while the first is running.
 			Consistently(func(g Gomega) {
