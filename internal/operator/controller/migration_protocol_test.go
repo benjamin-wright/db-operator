@@ -8,6 +8,7 @@ import (
 
 	v1alpha1 "github.com/benjamin-wright/db-operator/pkg/api/v1alpha1"
 	. "github.com/onsi/gomega"
+	admissionv1 "k8s.io/api/admission/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 func protocolClient(t *testing.T, objects ...client.Object) (client.Client, *runtime.Scheme) {
@@ -73,6 +75,84 @@ func TestMigrationClaimAtomicReservationAndDryRun(t *testing.T) {
 	}
 	_, err = claims.ensure(ctx, owner, false)
 	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func TestTerminatingMigrationAdmissionDoesNotReserveClaim(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	ms := protocolMigration()
+	ms.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	ms.Finalizers = []string{"db-operator.benjamin-wright.github.com/migration-execution"}
+	api, _ := protocolClient(t, ms)
+	validator := &migrationValidator{claims: &migrationClaims{client: api, reader: api, namespace: "operator"}}
+	next := ms.DeepCopy()
+	next.Finalizers = nil
+	_, err := validator.ValidateUpdate(ctx, ms, next)
+	g.Expect(err).NotTo(HaveOccurred())
+	var leases coordinationv1.LeaseList
+	g.Expect(api.List(ctx, &leases)).To(Succeed())
+	g.Expect(leases.Items).To(BeEmpty())
+	next.Spec.Database = "different"
+	_, err = validator.ValidateUpdate(ctx, ms, next)
+	g.Expect(err).To(MatchError("migration database binding is immutable"))
+	_, err = validator.claims.ensure(ctx, ms, false)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(api.List(ctx, &leases)).To(Succeed())
+	g.Expect(leases.Items).To(BeEmpty())
+}
+
+func TestDelayedMigrationAdmissionRejectsTerminatingOrReplacedOwner(t *testing.T) {
+	for _, terminating := range []bool{false, true} {
+		t.Run(map[bool]string{false: "replaced", true: "terminating"}[terminating], func(t *testing.T) {
+			g := NewWithT(t)
+			stale := protocolMigration()
+			live := stale.DeepCopy()
+			if terminating {
+				live.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+				live.Finalizers = []string{"db-operator.benjamin-wright.github.com/migration-execution"}
+			} else {
+				live.UID = "replacement"
+			}
+			api, _ := protocolClient(t, live)
+			validator := &migrationValidator{claims: &migrationClaims{client: api, reader: api, namespace: "operator"}}
+			ctx := admission.NewContextWithRequest(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{}})
+			_, err := validator.ValidateUpdate(ctx, stale, stale.DeepCopy())
+			g.Expect(err).To(MatchError("migration claim owner is terminating or replaced"))
+			var leases coordinationv1.LeaseList
+			g.Expect(api.List(ctx, &leases)).To(Succeed())
+			g.Expect(leases.Items).To(BeEmpty())
+		})
+	}
+}
+
+func TestMigrationCleanupRequiresInactiveJobsAndPodsAcrossIncarnations(t *testing.T) {
+	for _, phase := range []corev1.PodPhase{corev1.PodPending, corev1.PodRunning, corev1.PodUnknown, corev1.PodSucceeded, corev1.PodFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			g := NewWithT(t)
+			ms := protocolMigration()
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "old-pod", Namespace: ms.Namespace, Labels: map[string]string{migrationSetLabel: ms.Name}, OwnerReferences: []metav1.OwnerReference{{UID: "old-job"}}}, Status: corev1.PodStatus{Phase: phase}}
+			api, _ := protocolClient(t, pod)
+			claims := &migrationClaims{client: api, reader: api, namespace: "operator"}
+			inactive, err := claims.inactive(context.Background(), ms)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(inactive).To(Equal(phase == corev1.PodSucceeded || phase == corev1.PodFailed))
+		})
+	}
+	for _, finished := range []bool{false, true} {
+		t.Run(map[bool]string{false: "active job", true: "completed job"}[finished], func(t *testing.T) {
+			g := NewWithT(t)
+			ms := protocolMigration()
+			job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "old-job", Namespace: ms.Namespace, Labels: map[string]string{migrationSetLabel: ms.Name}, OwnerReferences: []metav1.OwnerReference{{UID: "old-migration"}}}}
+			if finished {
+				job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+			}
+			api, _ := protocolClient(t, job)
+			claims := &migrationClaims{client: api, reader: api, namespace: "operator"}
+			inactive, err := claims.inactive(context.Background(), ms)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(inactive).To(Equal(finished))
+		})
+	}
 }
 
 func TestMigrationJournalSurvivesRetentionAndMetadataChanges(t *testing.T) {

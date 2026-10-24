@@ -50,6 +50,7 @@ A Kubernetes operator that provisions and manages self-contained PostgreSQL, Red
   - The runner holds one dedicated SQL session for its advisory lock and every migration transaction, and verifies its claim UID and operation name against an admin-owned authority row under that lock.
   - `Ready` requires exact successful execution inputs. Legacy Ready whose Job expired may be recovered by read-only ledger/hash verification. Unverifiable evidence is Unknown, never automatic replay.
   - Orphan cleanup verifies absence of the resource and active Jobs/Pods across incarnations, disarms SQL authority under the same lock, then deletes the exact claim UID/resource version. Unavailable backend administration holds cleanup.
+  - Normal deletion waits for inactive Jobs/Pods across incarnations, disarms SQL authority and revokes its migration role before releasing its claim and completing deletion. A successor can immediately claim the retained database; terminating updates do not reserve a new claim.
   - `jobTTL` defaults to one hour and controls completed Job retention only. `lastSuccessfulOperation` is historical proof and does not assert the schema after a subsequent partial failure.
 
 ## Interfaces

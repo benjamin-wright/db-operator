@@ -459,7 +459,12 @@ operation is armed, even when both use the same claim. Claim arming and release
 also take a target guard in the maintenance database; a delayed Job cannot regain
 authority after release.
 
-The orphan cleaner rechecks claims every ten seconds after a one-minute grace
+Normal migration-set deletion waits for inactive Jobs and Pods, disarms SQL
+authority, revokes its migration role and releases its claim before completing.
+Retained database contents can then be bound by another migration set immediately.
+Terminating updates do not reserve a new claim.
+
+The orphan cleaner rechecks abandoned claims every ten seconds after a one-minute grace
 period, verifies resource, Job and Pod absence across resource incarnations,
 then disarms SQL authority and deletes the exact Lease UID/resource version.
 Unavailable database administration blocks cleanup rather than asserting

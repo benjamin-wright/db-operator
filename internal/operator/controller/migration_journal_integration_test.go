@@ -214,7 +214,7 @@ AND c.relname IN ('retained_legacy','retained_legacy_id_seq','retained_legacy_id
 		Expect(K8sClient.Delete(Ctx, ms)).To(Succeed())
 		Eventually(func() bool { return apierrors.IsNotFound(K8sClient.Get(Ctx, key, &api.PostgresMigrationSet{})) }, Timeout, Interval).Should(BeTrue())
 		replacement := newMigrationSet(ns.Name, "new-owner", db.Name, "journal", ms.Spec.Artifact, 1)
-		Eventually(func() error { return K8sClient.Create(Ctx, replacement) }, 2*time.Minute, Interval).Should(Succeed(), "an orphan target claim must be released after SQL fencing")
+		Expect(K8sClient.Create(Ctx, replacement)).To(Succeed(), "normal deletion releases the target before removing its finalizer")
 		WaitForMigrationSet(client.ObjectKeyFromObject(replacement), api.MigrationSetPhaseReady)
 		assertRetainedObjects(3)
 		Expect(K8sClient.Delete(Ctx, replacement)).To(Succeed())

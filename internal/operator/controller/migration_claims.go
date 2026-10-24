@@ -38,6 +38,9 @@ func (c *migrationClaims) ensure(ctx context.Context, pgms *v1alpha1.PostgresMig
 	if c == nil || c.namespace == "" {
 		return nil, fmt.Errorf("migration claim namespace is not configured")
 	}
+	if !pgms.DeletionTimestamp.IsZero() {
+		return nil, fmt.Errorf("terminating migration cannot reserve a claim")
+	}
 	name, target := migrationTarget(pgms)
 	// This read also makes upgrading existing objects fail closed on duplicates.
 	var existing v1alpha1.PostgresMigrationSetList
@@ -45,6 +48,9 @@ func (c *migrationClaims) ensure(ctx context.Context, pgms *v1alpha1.PostgresMig
 		return nil, err
 	}
 	for _, other := range existing.Items {
+		if other.Name == pgms.Name && (!other.DeletionTimestamp.IsZero() || (pgms.UID != "" && other.UID != pgms.UID)) {
+			return nil, fmt.Errorf("migration claim owner is terminating or replaced")
+		}
 		if other.Name != pgms.Name && other.Spec.DatabaseRef == pgms.Spec.DatabaseRef && other.Spec.Database == pgms.Spec.Database {
 			return nil, fmt.Errorf("migration target is already bound to %s/%s", other.Namespace, other.Name)
 		}
@@ -67,13 +73,21 @@ func (c *migrationClaims) ensure(ctx context.Context, pgms *v1alpha1.PostgresMig
 	if err != nil {
 		return nil, err
 	}
-	if claim.Annotations[migrationSetLabel] != pgms.Name || claim.Annotations[claimNamespaceAnnotation] != pgms.Namespace || claim.Annotations[claimTargetAnnotation] != target || len(claim.OwnerReferences) != 0 || !claim.DeletionTimestamp.IsZero() {
-		return nil, fmt.Errorf("migration target claim ownership conflicts")
+	if err := validateMigrationClaim(pgms, &claim); err != nil {
+		return nil, err
 	}
 	return &claim, nil
 }
 
-// A claim has no TTL and is not renewable: only proven absence releases it.
+func validateMigrationClaim(pgms *v1alpha1.PostgresMigrationSet, claim *coordinationv1.Lease) error {
+	name, target := migrationTarget(pgms)
+	if claim.Name != name || claim.Annotations[migrationSetLabel] != pgms.Name || claim.Annotations[claimNamespaceAnnotation] != pgms.Namespace || claim.Annotations[claimTargetAnnotation] != target || len(claim.OwnerReferences) != 0 || !claim.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("migration target claim ownership conflicts")
+	}
+	return nil
+}
+
+// Orphan claims have no TTL: cleanup must prove that their owner is absent.
 // The database advisory lock below serializes release with both arming and SQL.
 type migrationClaimReaper struct {
 	claims     *migrationClaims
@@ -151,8 +165,12 @@ func (r *migrationClaimReaper) absent(ctx context.Context, pgms *v1alpha1.Postgr
 	} else if !apierrors.IsNotFound(err) {
 		return false, err
 	}
+	return r.claims.inactive(ctx, pgms)
+}
+
+func (c *migrationClaims) inactive(ctx context.Context, pgms *v1alpha1.PostgresMigrationSet) (bool, error) {
 	var jobs batchv1.JobList
-	if err := r.claims.reader.List(ctx, &jobs, client.InNamespace(pgms.Namespace), client.MatchingLabels{migrationSetLabel: pgms.Name}); err != nil {
+	if err := c.reader.List(ctx, &jobs, client.InNamespace(pgms.Namespace), client.MatchingLabels{migrationSetLabel: pgms.Name}); err != nil {
 		return false, err
 	}
 	for _, job := range jobs.Items {
@@ -161,7 +179,7 @@ func (r *migrationClaimReaper) absent(ctx context.Context, pgms *v1alpha1.Postgr
 		}
 	}
 	var pods corev1.PodList
-	if err := r.claims.reader.List(ctx, &pods, client.InNamespace(pgms.Namespace), client.MatchingLabels{migrationSetLabel: pgms.Name}); err != nil {
+	if err := c.reader.List(ctx, &pods, client.InNamespace(pgms.Namespace), client.MatchingLabels{migrationSetLabel: pgms.Name}); err != nil {
 		return false, err
 	}
 	for _, pod := range pods.Items {

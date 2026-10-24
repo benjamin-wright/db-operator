@@ -24,6 +24,9 @@ func (v *migrationValidator) ValidateUpdate(ctx context.Context, old, next *v1al
 	if old.Spec.DatabaseRef != next.Spec.DatabaseRef || old.Spec.Database != next.Spec.Database {
 		return nil, fmt.Errorf("migration database binding is immutable")
 	}
+	if !next.DeletionTimestamp.IsZero() {
+		return nil, nil
+	}
 	return v.ValidateCreate(ctx, next)
 }
 func (v *migrationValidator) ValidateDelete(context.Context, *v1alpha1.PostgresMigrationSet) (admission.Warnings, error) {

@@ -562,8 +562,10 @@ func (r *PostgresMigrationSetReconciler) revokeMigrationIdentity(ctx context.Con
 	if !found {
 		return fmt.Errorf("migration cleanup requires admin credentials")
 	}
-	claim, err := r.claims.ensure(ctx, migration, false)
-	if err != nil {
+	name, _ := migrationTarget(migration)
+	claimKey := client.ObjectKey{Namespace: r.claims.namespace, Name: name}
+	var expected coordinationv1.Lease
+	if err := r.claims.reader.Get(ctx, claimKey, &expected); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return r.withMigrationFence(ctx, migration, func(session migrationFenceSession) error {
@@ -571,17 +573,47 @@ func (r *PostgresMigrationSetReconciler) revokeMigrationIdentity(ctx context.Con
 		if err := r.claims.reader.Get(ctx, client.ObjectKeyFromObject(migration), &live); err != nil {
 			return err
 		}
-		var current coordinationv1.Lease
-		if err := r.claims.reader.Get(ctx, client.ObjectKeyFromObject(claim), &current); err != nil {
-			return err
-		}
-		if live.UID != migration.UID || live.DeletionTimestamp.IsZero() || current.UID != claim.UID || !current.DeletionTimestamp.IsZero() {
+		if live.UID != migration.UID || live.DeletionTimestamp.IsZero() {
 			return fmt.Errorf("migration cleanup ownership changed")
 		}
-		if err := session.disarm(ctx, string(claim.UID)); err != nil {
+		var claim coordinationv1.Lease
+		err := r.claims.reader.Get(ctx, claimKey, &claim)
+		missing := apierrors.IsNotFound(err)
+		if err != nil && !missing {
 			return err
 		}
-		return session.manager.dropMigrationUser(migration.Spec.Database, migrationDatabaseRole(migration), string(secret.Data["PGUSER"]))
+		if !missing {
+			if claim.UID != expected.UID {
+				return fmt.Errorf("migration cleanup claim changed")
+			}
+			if err := validateMigrationClaim(migration, &claim); err != nil {
+				return err
+			}
+		}
+		inactive, err := r.claims.inactive(ctx, migration)
+		if err != nil {
+			return err
+		}
+		if !inactive {
+			return fmt.Errorf("migration cleanup requires inactive Jobs and Pods")
+		}
+		if !missing {
+			if err := session.disarm(ctx, string(claim.UID)); err != nil {
+				return err
+			}
+		}
+		if err := session.manager.dropMigrationUser(migration.Spec.Database, migrationDatabaseRole(migration), string(secret.Data["PGUSER"])); err != nil {
+			return err
+		}
+		if missing {
+			return nil
+		}
+		uid, rv := claim.UID, claim.ResourceVersion
+		err = r.claims.client.Delete(ctx, &claim, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
 	})
 }
 
